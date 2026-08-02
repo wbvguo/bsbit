@@ -1,0 +1,6 @@
+[submodule "external/htslib"]
+	path = external/htslib
+	url = https://github.com/samtools/htslib.git
+[submodule "external/libsais"]
+	path = external/libsais
+	url = https://github.com/IlyaGrebnov/libsais.git

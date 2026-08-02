@@ -1,0 +1,43 @@
+# Rust and native build products
+/target/
+/build/
+/dist/
+/site/
+/artifacts/
+/coverage/
+/.venv-docs/
+/tests/fuzz/target/
+/tests/fuzz/artifacts/
+/tests/fuzz/corpus/
+**/CMakeFiles/
+**/cmake-build-*/
+**/*.o
+**/*.a
+
+# Profiling and test output
+perf.data*
+*.profraw
+*.profdata
+*.lcov
+flamegraph*.svg
+*.log
+
+# Agent-owned worktrees and shared/user local workspace.
+# Product code, tests, and CI must not read these paths.
+/agent/
+/workspace/
+
+# Local planning notes
+/TODO.md
+
+# Editor, language-tool, and operating-system state
+.vscode/
+.idea/
+.codex/
+.agents/
+**/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+.DS_Store
+Thumbs.db

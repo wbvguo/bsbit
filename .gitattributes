@@ -1,0 +1,26 @@
+# Project-owned source and documentation use LF on every checkout.
+/crates/** text eol=lf
+/scripts/** text eol=lf
+/tests/** text eol=lf
+/docs/** text eol=lf
+/.github/** text eol=lf
+/docs/**/*.png -text -diff -eol
+/docs/**/*.jpg -text -diff -eol
+/docs/**/*.jpeg -text -diff -eol
+/docs/**/*.gif -text -diff -eol
+/docs/**/*.webp -text -diff -eol
+/docs/**/*.ico -text -diff -eol
+/external/licenses/** text eol=lf
+/*.md text eol=lf
+/*.toml text eol=lf
+/*.lock text eol=lf
+/mkdocs.yml text eol=lf
+/LICENSE-APACHE text eol=lf
+/LICENSE-MIT text eol=lf
+/.gitattributes text eol=lf
+/.gitignore text eol=lf
+/.gitmodules text eol=lf
+
+# Submodule contents retain their upstream attributes. This repository owns
+# only the external-directory guide, license inventory, and submodule pointers.
+/external/README.md text eol=lf diff

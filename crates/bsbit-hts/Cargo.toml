@@ -1,0 +1,24 @@
+[package]
+name = "bsbit-hts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Sequencing-format models, codecs, and isolated HTSlib adapters for bsbit"
+autobins = false
+autobenches = false
+links = "bsbit_htslib_shim"
+
+[dependencies]
+bsbit-core = { path = "../bsbit-core" }
+bsbit-io = { path = "../bsbit-io" }
+
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

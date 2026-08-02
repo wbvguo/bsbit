@@ -1,0 +1,19 @@
+[package]
+name = "bsbit-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Identity-safe local-file creation and publication for bsbit"
+autobins = false
+autobenches = false
+
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
