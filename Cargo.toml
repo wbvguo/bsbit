@@ -2,6 +2,7 @@
 members = [
     "crates/bsbit-core",
     "crates/bsbit-hts",
+    "crates/bsbit-index",
     "crates/bsbit-io",
 ]
 resolver = "3"

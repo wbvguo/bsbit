@@ -1,0 +1,30 @@
+[package]
+name = "bsbit-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Reference catalogs, FM-index storage, and builders for bsbit"
+autobins = false
+autobenches = false
+
+[features]
+default = []
+combined-index = ["dep:libc"]
+index-construction = ["combined-index"]
+
+[dependencies]
+bsbit-core = { path = "../bsbit-core" }
+bsbit-io = { path = "../bsbit-io" }
+libc = { version = "=0.2.189", optional = true }
+sha2 = { version = "=0.11.0", default-features = false }
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
