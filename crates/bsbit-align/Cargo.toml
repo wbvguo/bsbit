@@ -1,0 +1,23 @@
+[package]
+name = "bsbit-align"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Complete read-to-reference alignment, pairing, and MAPQ policy for bsbit"
+autobins = false
+autobenches = false
+
+[dependencies]
+bsbit-core = { path = "../bsbit-core" }
+bsbit-index = { path = "../bsbit-index", default-features = false, features = ["combined-index"] }
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

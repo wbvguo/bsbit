@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/bsbit-align",
     "crates/bsbit-core",
     "crates/bsbit-hts",
     "crates/bsbit-index",
