@@ -1,0 +1,17 @@
+[package]
+name = "bsbit-combine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Bounded-memory methylation matrix assembly for bsbit bedMethyl outputs"
+autobins = false
+autobenches = false
+
+[dependencies]
+bsbit-hts = { path = "../bsbit-hts" }
+bsbit-io = { path = "../bsbit-io" }
+
+[lints]
+workspace = true
