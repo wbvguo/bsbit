@@ -1,0 +1,18 @@
+[package]
+name = "bsbit-call"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Bit-parallel methylation, SNP, and joint calling for bsbit BAM files"
+autobins = false
+autobenches = false
+
+[dependencies]
+bsbit-core = { path = "../bsbit-core" }
+bsbit-hts = { path = "../bsbit-hts" }
+bsbit-io = { path = "../bsbit-io" }
+
+[lints]
+workspace = true
