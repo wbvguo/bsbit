@@ -2,6 +2,7 @@
 members = [
     "crates/bsbit-align",
     "crates/bsbit-call",
+    "crates/bsbit-cli",
     "crates/bsbit-combine",
     "crates/bsbit-core",
     "crates/bsbit-hts",

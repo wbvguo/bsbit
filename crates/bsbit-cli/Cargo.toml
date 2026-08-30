@@ -1,0 +1,34 @@
+[package]
+name = "bsbit-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Command-line parsing and cross-crate orchestration for bsbit"
+autobins = false
+autobenches = false
+
+[dependencies]
+bsbit-align = { path = "../bsbit-align" }
+bsbit-call = { path = "../bsbit-call" }
+bsbit-combine = { path = "../bsbit-combine" }
+bsbit-core = { path = "../bsbit-core" }
+bsbit-hts = { path = "../bsbit-hts" }
+bsbit-index = { path = "../bsbit-index", default-features = false, features = ["index-construction"] }
+bsbit-io = { path = "../bsbit-io" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "=0.2.189"
+
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[[bin]]
+name = "bsbit"
+path = "src/main.rs"
