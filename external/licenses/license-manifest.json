@@ -1,0 +1,207 @@
+{
+  "schema": "bsbit-third-party-licenses-v2",
+  "components": [
+    {
+      "kind": "native",
+      "name": "htslib",
+      "version": "1.24",
+      "revision": "4b705e4fada8ee2b6b15746f725ee8ac51631803",
+      "declared_license": "MIT AND BSD-3-Clause",
+      "selected_license": "MIT AND BSD-3-Clause",
+      "artifacts": [
+        "binary",
+        "source"
+      ],
+      "license_file": {
+        "source": "external/htslib/LICENSE",
+        "output": "third-party/htslib-1.24-LICENSE",
+        "sha256": "62a9257fa98697f92cf0fee949d59c8afa150b61be210b1f34f5a1bdc6aeb6dd"
+      }
+    },
+    {
+      "kind": "native",
+      "name": "htscodecs",
+      "version": "1.6.7",
+      "revision": "b9fc194f772e45bb0a1f44b08cbf8697a1384bae",
+      "declared_license": "BSD-3-Clause AND LicenseRef-Public-Domain AND CC0-1.0",
+      "selected_license": "BSD-3-Clause AND LicenseRef-Public-Domain AND CC0-1.0",
+      "artifacts": [
+        "binary",
+        "source"
+      ],
+      "license_file": {
+        "source": "external/htslib/htscodecs/LICENSE.md",
+        "output": "third-party/htscodecs-1.6.7-LICENSE.md",
+        "sha256": "d17f1bae81abcca5928c2ee0adbc7d4429cc5ad8649d195e011a69f1c3b6b2ad"
+      }
+    },
+    {
+      "kind": "native",
+      "name": "libsais",
+      "version": "2.10.4",
+      "revision": "ce90878d784b5ff7d019300535675e4a2e22aae0",
+      "declared_license": "Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary",
+        "source"
+      ],
+      "license_file": {
+        "source": "external/libsais/LICENSE",
+        "output": "third-party/libsais-2.10.4-LICENSE",
+        "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+      }
+    },
+    {
+      "kind": "rust-toolchain",
+      "name": "rust-standard-library",
+      "version": "1.94.0",
+      "revision": "4a4ef493e3a1488c6e321570238084b38948f6db",
+      "declared_license": "Apache-2.0 OR MIT, plus documented exceptions",
+      "selected_license": "Apache-2.0 plus documented exceptions",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "rust-sysroot/share/doc/rust/COPYRIGHT-library.html",
+        "output": "third-party/rust-1.94.0-COPYRIGHT-library.html",
+        "sha256": "af70aaabed1b73e872f14f9130db37e09f3f4d73a5f7c598b9173697a5d2729f"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "block-buffer",
+      "version": "0.12.1",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "cfg-if",
+      "version": "1.0.4",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "cpufeatures",
+      "version": "0.3.0",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "crypto-common",
+      "version": "0.2.2",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "digest",
+      "version": "0.11.3",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "hybrid-array",
+      "version": "0.4.14",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "libc",
+      "version": "0.2.189",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "sha2",
+      "version": "0.11.0",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    },
+    {
+      "kind": "rust-registry",
+      "name": "typenum",
+      "version": "1.20.1",
+      "declared_license": "MIT OR Apache-2.0",
+      "selected_license": "Apache-2.0",
+      "artifacts": [
+        "binary"
+      ],
+      "license_file": {
+        "source": "LICENSE-APACHE",
+        "output": "LICENSE-APACHE",
+        "sha256": "a9040321c3712d8fd0b09cf52b17445de04a23a10165049ae187cd39e5c86be5"
+      }
+    }
+  ]
+}

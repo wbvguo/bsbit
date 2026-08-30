@@ -1,0 +1,4 @@
+[dependency-groups]
+docs = [
+    "mkdocs-material==9.7.7",
+]
