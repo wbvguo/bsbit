@@ -322,10 +322,10 @@ A full 5M `perf` run attributes 29.73% of sampled task-clock to batched d5
 placement DP, 14.66% to batched d3 DP, 12.74% to flexible-candidate
 verification orchestration, and 18.26% to the three leading FM-index
 search/locate functions. Within the d5 symbol, 97.4% of samples are in the DP
-inner loop, versus 0.7% setup and 1.8% frontier extraction. The next credible
-targets are therefore cross-read d5 tail batching and a wider sampled-SA/LF
-locate wavefront; input normalization and BAM construction are not current
-bottlenecks.
+inner loop, versus 0.7% setup and 1.8% frontier extraction. At that point the
+next credible targets were cross-read d5 tail batching and a wider sampled-SA/LF
+locate wavefront; input normalization and BAM construction were not current
+bottlenecks. Both targets were subsequently measured as described below.
 
 Two output-equivalent experiments were rejected: a four-candidate dual-vector
 d5 kernel increased 1M user CPU by 11.0% because of register pressure, and
@@ -351,6 +351,32 @@ variant increased user CPU by 10.06%. All ten candidates were therefore
 reverted; no follow-up code was retained. Raw A-B-B-A time sidecars, hashes,
 output equivalence, and the d4 candidate profile are retained in the
 `431970c/follow-up-1m/` benchmark subdirectory.
+
+Further d5 scheduling and data-path experiments were also rejected after
+byte-equality checks:
+
+| Candidate | Decisive scale | Wall change | User CPU change | Result |
+|---|---:|---:|---:|---|
+| same-read cross-contig tail batching (four versions) | 1M | up to +4.00% | +1.87% to +4.67% | reject |
+| independent-query cross-read tail batching | 1M | +1.47% / +3.10% | +2.59% / +2.97% | reject |
+| 128-bit legacy-SSE singleton d5 | 1M | +10.65% | +10.14% | reject |
+| 128-bit VEX-XMM singleton d5, clean repeat | 1M | +4.10% | +0.72% | reject |
+| `vpshufb`/`vpmovmskb` batch substitution masks | 5M, two opposite orders | +0.99% | +0.74% | reject |
+
+The cross-read pair kernel was 22.64%–37.82% faster than two singleton calls
+in isolation, but the real workload spent only 0.04% of task-clock in it.
+The shuffle-mask candidate appeared favorable across two 1M blocks (combined
+-0.95% wall and -1.44% user CPU), then failed both 5M orderings; eight 5M runs
+combined to +0.99% wall, +0.74% user CPU, and +0.84% total CPU. This is why
+screening results were not promoted to a performance claim.
+
+These results close scheduling-only tail batching, narrower SIMD state, and
+substitution-mask preparation as near-term directions. A further material
+gain now requires either a proof that safely eliminates d5 audits without
+changing repeat-pressure MAPQ, or a different placement-DP formulation that
+first beats the current same-query batch kernel in isolation. Raw evidence is
+retained in `431970c/cross-contig-tail-1m/`, `431970c/cross-read-tail-1m/`,
+`431970c/single-d5-width-1m/`, and `431970c/d5-substitution-mask/`.
 
 ## Reproduction protocol
 
