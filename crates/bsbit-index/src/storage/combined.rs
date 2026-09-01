@@ -132,6 +132,7 @@ impl CombinedIndexSaStride {
         self.value() as u64
     }
 
+    #[cfg(feature = "index-construction")]
     pub(crate) const fn metadata_minor(self) -> u16 {
         match self {
             Self::Eight => META_EXTENSION_MINOR_SA8,
