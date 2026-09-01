@@ -61,8 +61,12 @@ audits it against the wider six-round, 4,096-hit candidate frontier. A
 different-origin replacement or new rescue requires a unique completed result
 at MAPQ 20 or above. A lower-confidence conflict retains the default
 representative as ambiguous at MAPQ 0, and an uncertified new rescue remains
-unmapped. For paired input sensitive mode adds bounded failed-pair, repeat,
-mate-rescue, and endpoint evidence before final classification. Resource caps
+unmapped. Verification remains distance five for weak, unmapped, and
+distance-three incumbents. A Q20-or-better incumbent at distance two or less
+uses a distance-three audit, which covers every alternative that can change
+its origin or Q20 edit separation. For paired input sensitive mode adds bounded
+failed-pair, repeat, mate-rescue, and endpoint evidence before final
+classification. Resource caps
 may conservatively retain ambiguity or leave a read or pair unmapped; they
 never turn an incomplete frontier into an unsupported unique claim. Simulator
 truth, read names, known coordinates, and peer-aligner output are unavailable

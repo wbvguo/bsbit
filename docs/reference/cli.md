@@ -110,9 +110,11 @@ data row starts with the schema identifier `bsbit-alignment-metrics-v1`.
 Default and `--sensitive` are the only public search modes for either layout.
 Single-end sensitive preserves the default result as an incumbent, completes
 the six-round, 4,096-hit bounded seed frontier as a confidence audit, and does
-not invoke pair-only rescue. A different-origin replacement or new rescue must
-be unique at Q20 or above; a lower-confidence conflict retains the incumbent at
-Q0. Both modes emit
+not invoke pair-only rescue. Its verifier retains d5 for weak, distance-three,
+and unmapped incumbents, while a Q20-or-better result at distance two or less
+uses the sufficient d3 audit boundary. A different-origin replacement or new
+rescue must be unique at Q20 or above; a lower-confidence conflict retains the
+incumbent at Q0. Both modes emit
 one primary record for each input read unless paired input uses
 `--mapped-only`. The BAM `@PG` line binds the exact reference semantic digest
 and alignment mode. The output still needs coordinate sorting, duplicate

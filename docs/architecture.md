@@ -238,8 +238,13 @@ layouts publish BAM through the same create-only output contract.
 Single-end default mode may classify a verified initial frontier immediately
 and continues only unresolved work. Single-end sensitive mode first preserves
 that exact default result as its incumbent, then replays intervals admitted by
-the shared 4,096-hit sensitive bound, completes the six-round adaptive seed
-schedule, and verifies the accumulated candidates through distance 5. A
+the shared 4,096-hit sensitive bound and completes the six-round adaptive seed
+schedule. Low-confidence, unmapped, and distance-three incumbents verify that
+frontier through distance 5. A MAPQ-20-or-better incumbent at edit distance two
+or less verifies through distance 3: any placement that can tie it, beat it, or
+reduce its Q20 edit separation is already inside that boundary. Search-level
+repeat pressure from the completed frontier remains available without
+enumerating distance-four/five placements for this already-strong class. A
 different-origin replacement or new rescue is accepted only when the completed
 frontier is unique at MAPQ 20 or above. Lower-confidence conflicts retain the
 default representative, classify it as ambiguous, and emit MAPQ 0; an

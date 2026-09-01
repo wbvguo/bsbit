@@ -96,8 +96,10 @@ The BAM is written in input order. Inspect it immediately, then follow the
 Both layouts expose default and sensitive search. For single-end input,
 default keeps the existing early-resolution d3/d5 path and `--sensitive`
 audits that result against the wider bounded candidate frontier with the Q20
-replacement/rescue gate described above. The paired-end path additionally
-records one of these stable strategies:
+replacement/rescue gate described above. Strong incumbents (Q20 or above and
+edit distance at most two) use the sufficient d3 audit boundary; weaker,
+distance-three, and unmapped results retain d5 verification. The paired-end
+path additionally records one of these stable strategies:
 
 | Mode | Stable strategy | Main behavior |
 |---|---|---|

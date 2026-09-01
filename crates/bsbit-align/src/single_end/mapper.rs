@@ -182,10 +182,13 @@ impl SingleBatchAligner {
     /// Maps a batch with the selected single-end candidate-search policy.
     ///
     /// Sensitive mode first obtains the default result and then completes the
-    /// bounded seed frontier as a confidence audit. A different-origin result
-    /// or a new rescue must be unique at Q20 or above; lower-confidence
-    /// conflicts retain the default representative at Q0. It does not apply
-    /// paired-only mate rescue, template geometry, or adapter-pair recovery.
+    /// bounded seed frontier as a confidence audit. Q20 incumbents at edit
+    /// distance two or better need verification only through distance three;
+    /// weaker results retain the full distance-five verification boundary. A
+    /// different-origin result or a new rescue must be unique at Q20 or above;
+    /// lower-confidence conflicts retain the default representative at Q0. It
+    /// does not apply paired-only mate rescue, template geometry, or
+    /// adapter-pair recovery.
     ///
     /// # Errors
     ///
@@ -610,12 +613,14 @@ impl SingleBatchAligner {
             &mut read_workspace.candidate_nominals,
             &mut unused_workspace.candidate_nominals,
         )?;
+        let audit_distance_limit =
+            Self::sensitive_audit_distance_limit(incumbent, maximum_edit_distance);
         metrics.located_rows = completion_search.located[0];
         let (_, observed) = read_workspace.verify_candidates_with_budget(
             reference,
             read,
             metrics,
-            maximum_edit_distance,
+            audit_distance_limit,
         )?;
         let completed = Self::finish_result(
             read_workspace,
@@ -623,7 +628,7 @@ impl SingleBatchAligner {
             SingleResultEvidence {
                 read_length: read.len(),
                 metrics: observed,
-                verified_distance_limit: maximum_edit_distance,
+                verified_distance_limit: audit_distance_limit,
                 first_seed,
                 search: &completion_search,
                 lane: 0,
@@ -808,12 +813,14 @@ impl SingleBatchAligner {
         )?;
         let mut completed = [SingleAlignmentResult::unmapped(0, 0); 2];
         for lane in 0..2 {
+            let audit_distance_limit =
+                Self::sensitive_audit_distance_limit(incumbents[lane], maximum_edit_distance);
             metrics[lane].located_rows = completion_search.located[lane];
             let (_, observed) = workspaces[lane].verify_candidates_with_budget(
                 reference,
                 reads[lane],
                 metrics[lane],
-                maximum_edit_distance,
+                audit_distance_limit,
             )?;
             completed[lane] = Self::finish_result(
                 &workspaces[lane],
@@ -821,7 +828,7 @@ impl SingleBatchAligner {
                 SingleResultEvidence {
                     read_length: reads[lane].len(),
                     metrics: observed,
-                    verified_distance_limit: maximum_edit_distance
+                    verified_distance_limit: audit_distance_limit
                         .max(verified_distance_limits[lane]),
                     first_seed: first_seeds[lane],
                     search: &completion_search,
@@ -878,6 +885,25 @@ impl SingleBatchAligner {
             mapping_quality: 0,
             located_rows: completed.located_rows,
             verified_placements: completed.verified_placements,
+        }
+    }
+
+    fn sensitive_audit_distance_limit(
+        incumbent: SingleAlignmentResult,
+        maximum_edit_distance: u8,
+    ) -> u8 {
+        // A Q20 incumbent at distance two or better can only be tied, beaten,
+        // or lose its Q20 separation to another origin through distance three.
+        // Keep the full distance-five audit for weaker and distance-three
+        // incumbents, where a distance-four runner-up can still change MAPQ.
+        if incumbent
+            .placement
+            .is_some_and(|placement| placement.distance() <= 2)
+            && incumbent.mapping_quality >= SENSITIVE_REPLACEMENT_MIN_MAPQ
+        {
+            maximum_edit_distance.min(INITIAL_EDIT_DISTANCE)
+        } else {
+            maximum_edit_distance
         }
     }
 
