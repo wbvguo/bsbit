@@ -16,7 +16,8 @@ use std::time::Instant;
 use bsbit_align::library::{PairedLibraryProfile, TemplateSpan, TemplateSpanBounds};
 use bsbit_align::materialize::traceback_read_placement;
 use bsbit_align::paired_end::{
-    PAIRED_ALIGNMENT_BATCH_SIZE, PAIRED_MAX_EDIT_DISTANCE, PairedAlignmentOptions, PairedSearchMode,
+    PAIRED_ALIGNMENT_BATCH_SIZE, PAIRED_MAX_EDIT_DISTANCE, PairedAlignmentOptions,
+    PairedAlignmentWorkMetrics, PairedSearchMode,
 };
 use bsbit_align::paired_end::{PairMappingStatus, PairedBatchAligner};
 use bsbit_align::single_end::SingleSearchMode;
@@ -28,7 +29,7 @@ use bsbit_hts::{
     BsbitAlignmentMode, BsbitProgramProvenance, DecodedFastqReader, FastqRecordBatch, SamHeader,
     TextRecordLimits,
 };
-use bsbit_index::reference::ReferenceIndex;
+use bsbit_index::reference::{ReferenceIndex, ReferenceQueryDiagnostics};
 use bsbit_index::storage::combined::{
     CombinedIndexSaStride, combined_index_sa_stride_hint, load_combined_reference_catalog,
 };
@@ -38,7 +39,7 @@ use crate::command::single_end::{SingleEndCommandOptions, run_single_end};
 use crate::cpu_placement::CpuPlacement;
 use crate::record_composition::{PairedRecordComposer, build_sam_header};
 
-const SCHEMA: &str = "bsbit-alignment-metrics-v1";
+const SCHEMA: &str = "bsbit-alignment-metrics-v2";
 
 #[derive(Clone, Copy)]
 struct MetricsTimer(Option<Instant>);
@@ -289,6 +290,7 @@ struct Observation {
     writer_queue_sends: u64,
     soft_clip: SoftClipObservation,
     mate_rescue: MateRescueObservation,
+    alignment_work: PairedAlignmentWorkMetrics,
 }
 
 pub(super) fn parse(arguments: &[String]) -> Result<super::Action, crate::CliError> {
@@ -339,6 +341,7 @@ pub(crate) fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
     });
     let limits = AlignmentRecordLimits::default();
     let (reference, header, reference_load_ns) = load_alignment_reference(&options, limits)?;
+    start_query_diagnostics(&reference, options.emit_metrics);
     let (alignment_sender, alignment_receiver) = sync_channel(options.alignment_queue_batches);
     let output_bam = options.output_bam.clone();
     let bam_threads = options.bam_threads;
@@ -387,6 +390,7 @@ pub(crate) fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         .map_err(|_| invalid("BAM writer worker panicked"))?;
     let decode_ns = producer_result.map_err(invalid)?;
     let writer_observation = writer_result.map_err(invalid)?;
+    let query_diagnostics = finish_query_diagnostics(&reference, options.emit_metrics);
     consume_result?;
     if matches!(options.read_output, ReadOutputMode::Complete) {
         let input_pairs = observation.classes.total();
@@ -407,11 +411,29 @@ pub(crate) fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         &options,
         &observation,
         &writer_observation,
+        query_diagnostics,
         reference_load_ns,
         decode_ns,
         process_started.elapsed_ns(),
     );
     Ok(())
+}
+
+fn start_query_diagnostics(reference: &ReferenceIndex, emit_metrics: bool) {
+    if emit_metrics {
+        reference.enable_query_diagnostics();
+    }
+}
+
+fn finish_query_diagnostics(
+    reference: &ReferenceIndex,
+    emit_metrics: bool,
+) -> ReferenceQueryDiagnostics {
+    if emit_metrics {
+        reference.disable_and_take_query_diagnostics()
+    } else {
+        ReferenceQueryDiagnostics::default()
+    }
 }
 
 fn load_alignment_reference(
@@ -441,6 +463,7 @@ fn write_metrics(
     options: &Options,
     observation: &Observation,
     writer_observation: &WriterObservation,
+    query_diagnostics: ReferenceQueryDiagnostics,
     reference_load_ns: u128,
     decode_ns: u128,
     process_total_ns: u128,
@@ -449,7 +472,7 @@ fn write_metrics(
         return;
     }
     println!(
-        "schema\tpairs\tunique\tambiguous\tunmapped\tbam_records\tmapping_threads\tbam_threads\toutput_contract\tlibrary_profile\treference_mode\treference_load_ns\tfastq_decode_ns\tbam_write_ns\tbam_finalize_publish_ns\tprocess_total_ns\tbatch_processing_ns\tmapping_worker_total_ns\trecord_worker_total_ns\talignment_queue_batches\twriter_queue_wait_ns\twriter_queue_sends\tbam_compression_level\tmax_edit_distance\tsoft_clip_fallback\tsoft_clip_attempted_pairs\tsoft_clip_unique_pairs\tsoft_clip_ambiguous_pairs\tsoft_clip_unmapped_pairs\tsoft_clip_clipped_mates\tsoft_clip_clipped_bases\tmate_rescue\tmate_rescue_attempted_pairs\tmate_rescue_unique_pairs\tmate_rescue_ambiguous_pairs\tmate_rescue_unmapped_pairs\tsearch_mode\tmapq_policy\tmapq_zero_output\tstrategy_id\tread_output"
+        "schema\tpairs\tunique\tambiguous\tunmapped\tbam_records\tmapping_threads\tbam_threads\toutput_contract\tlibrary_profile\treference_mode\treference_load_ns\tfastq_decode_ns\tbam_write_ns\tbam_finalize_publish_ns\tprocess_total_ns\tbatch_processing_ns\tmapping_worker_total_ns\trecord_worker_total_ns\talignment_pair_passes\tsuffix_search_lanes\tsuffix_search_rank_operations\tlocate_calls\tsingleton_locate_calls\tmulti_hit_locate_calls\tlocated_rows\tlocate_lf_steps\tlocate_rank_operations\tlocate_interval_nodes\temitted_candidate_starts\tdistinct_candidate_starts\tverified_placements\tcompatible_pairs\tbest_pair_placements\talignment_queue_batches\twriter_queue_wait_ns\twriter_queue_sends\tbam_compression_level\tmax_edit_distance\tsoft_clip_fallback\tsoft_clip_attempted_pairs\tsoft_clip_unique_pairs\tsoft_clip_ambiguous_pairs\tsoft_clip_unmapped_pairs\tsoft_clip_clipped_mates\tsoft_clip_clipped_bases\tmate_rescue\tmate_rescue_attempted_pairs\tmate_rescue_unique_pairs\tmate_rescue_ambiguous_pairs\tmate_rescue_unmapped_pairs\tsearch_mode\tmapq_policy\tmapq_zero_output\tstrategy_id\tread_output"
     );
     let fields = [
         SCHEMA.to_owned(),
@@ -471,6 +494,32 @@ fn write_metrics(
         observation.batch_processing_ns.to_string(),
         observation.mapping_worker_total_ns.to_string(),
         observation.record_worker_total_ns.to_string(),
+        observation.alignment_work.pair_mapping_passes().to_string(),
+        query_diagnostics.suffix_search_lanes().to_string(),
+        query_diagnostics
+            .suffix_search_rank_operations()
+            .to_string(),
+        query_diagnostics.locate_calls().to_string(),
+        query_diagnostics.singleton_locate_calls().to_string(),
+        query_diagnostics.multi_hit_locate_calls().to_string(),
+        query_diagnostics.located_rows().to_string(),
+        query_diagnostics.locate_lf_steps().to_string(),
+        query_diagnostics.locate_rank_operations().to_string(),
+        query_diagnostics.locate_interval_nodes().to_string(),
+        observation
+            .alignment_work
+            .emitted_candidate_starts()
+            .to_string(),
+        observation
+            .alignment_work
+            .distinct_candidate_starts()
+            .to_string(),
+        observation.alignment_work.verified_placements().to_string(),
+        observation.alignment_work.compatible_pairs().to_string(),
+        observation
+            .alignment_work
+            .best_pair_placements()
+            .to_string(),
         options.alignment_queue_batches.to_string(),
         observation.writer_queue_wait_ns.to_string(),
         observation.writer_queue_sends.to_string(),
@@ -564,6 +613,9 @@ fn consume_batches(
         observation.classes.merge(processed.classes);
         observation.soft_clip.merge(processed.soft_clip);
         observation.mate_rescue.merge(processed.mate_rescue);
+        if emit_metrics {
+            observation.alignment_work.merge(processed.alignment_work);
+        }
         if processed.records.iter().any(|chunk| !chunk.is_empty()) {
             let send_started = MetricsTimer::start(emit_metrics);
             alignment_sender
@@ -583,6 +635,7 @@ struct PairedBatchOutput {
     classes: PairClassCounts,
     soft_clip: SoftClipObservation,
     mate_rescue: MateRescueObservation,
+    alignment_work: PairedAlignmentWorkMetrics,
     mapping_worker_ns: u128,
     record_worker_ns: u128,
 }
@@ -612,9 +665,14 @@ fn process_paired_batch(
                 let mut owned = Vec::new();
                 let mut mapping_worker_ns = 0_u128;
                 let mut record_worker_ns = 0_u128;
-                let mut aligner = PairedBatchAligner::with_capacity(PAIRED_ALIGNMENT_BATCH_SIZE);
+                let mut aligner = if emit_metrics {
+                    PairedBatchAligner::with_capacity_and_work_metrics(PAIRED_ALIGNMENT_BATCH_SIZE)
+                } else {
+                    PairedBatchAligner::with_capacity(PAIRED_ALIGNMENT_BATCH_SIZE)
+                };
                 let mut composer = PairedRecordComposer::new();
                 let mut pair_reads = Vec::with_capacity(PAIRED_ALIGNMENT_BATCH_SIZE);
+                let mut alignment_work = PairedAlignmentWorkMetrics::default();
                 loop {
                     let start = next.fetch_add(PAIRED_ALIGNMENT_BATCH_SIZE, Ordering::Relaxed);
                     if start >= records.len() {
@@ -649,6 +707,10 @@ fn process_paired_batch(
                             .map_err(|error| error.to_string())?;
                         mapping_worker_ns =
                             mapping_worker_ns.saturating_add(mapping_started.elapsed_ns());
+                        if emit_metrics {
+                            alignment_work.merge(aligner.last_work_metrics());
+                        }
+                        let record_started = MetricsTimer::start(emit_metrics);
                         let mut soft_clip_observation = SoftClipObservation::default();
                         for (offset, output) in mapped.into_iter().enumerate() {
                             let index = start + offset;
@@ -689,7 +751,6 @@ fn process_paired_batch(
                             }
                             let Some(selected) = output.placement() else {
                                 if matches!(read_output, ReadOutputMode::Complete) {
-                                    let record_started = MetricsTimer::start(emit_metrics);
                                     composer
                                         .push_unmapped_pair(
                                             pair.shared_name(),
@@ -704,12 +765,9 @@ fn process_paired_batch(
                                             limits,
                                         )
                                         .map_err(|error| error.to_string())?;
-                                    record_worker_ns = record_worker_ns
-                                        .saturating_add(record_started.elapsed_ns());
                                 }
                                 continue;
                             };
-                            let record_started = MetricsTimer::start(emit_metrics);
                             let mapping_quality = output.mapping_quality();
                             let retained_ranges = output.retained_query_intervals();
                             let first = selected.mate1();
@@ -790,8 +848,6 @@ fn process_paired_batch(
                                 }
                                 .map_err(|error| error.to_string())?;
                                 if pushed {
-                                    record_worker_ns = record_worker_ns
-                                        .saturating_add(record_started.elapsed_ns());
                                     continue;
                                 }
                             }
@@ -870,15 +926,12 @@ fn process_paired_batch(
                                     )
                                     .map_err(|error| error.to_string())?;
                             }
-                            record_worker_ns =
-                                record_worker_ns.saturating_add(record_started.elapsed_ns());
                         }
-                        let flush_started = MetricsTimer::start(emit_metrics);
                         composer
                             .flush_into(&mut processed, limits)
                             .map_err(|error| error.to_string())?;
                         record_worker_ns =
-                            record_worker_ns.saturating_add(flush_started.elapsed_ns());
+                            record_worker_ns.saturating_add(record_started.elapsed_ns());
                         owned.push((
                             start,
                             processed,
@@ -888,22 +941,26 @@ fn process_paired_batch(
                         ));
                     }
                 }
-                Ok((owned, mapping_worker_ns, record_worker_ns))
+                Ok((owned, mapping_worker_ns, record_worker_ns, alignment_work))
             }));
         }
         let mut chunks = Vec::new();
         let mut mapping_worker_ns = 0_u128;
         let mut record_worker_ns = 0_u128;
+        let mut alignment_work = PairedAlignmentWorkMetrics::default();
         for handle in handles {
-            let (owned, mapping_ns, record_ns) = handle
+            let (owned, mapping_ns, record_ns, worker_alignment_work) = handle
                 .join()
                 .map_err(|_| invalid("paired mapping/record worker panicked"))?
                 .map_err(invalid)?;
             chunks.extend(owned);
             mapping_worker_ns = mapping_worker_ns.saturating_add(mapping_ns);
             record_worker_ns = record_worker_ns.saturating_add(record_ns);
+            if emit_metrics {
+                alignment_work.merge(worker_alignment_work);
+            }
         }
-        Ok::<_, io::Error>((chunks, mapping_worker_ns, record_worker_ns))
+        Ok::<_, io::Error>((chunks, mapping_worker_ns, record_worker_ns, alignment_work))
     })?;
     chunks.0.sort_unstable_by_key(|(start, _, _, _, _)| *start);
     let mut output = Vec::new();
@@ -922,6 +979,7 @@ fn process_paired_batch(
         classes,
         soft_clip,
         mate_rescue,
+        alignment_work: chunks.3,
         mapping_worker_ns: chunks.1,
         record_worker_ns: chunks.2,
     })
@@ -1030,13 +1088,16 @@ fn decode_read_batches(
     sender: &std::sync::mpsc::SyncSender<FastqRecordBatch>,
     emit_metrics: bool,
 ) -> Result<u128, String> {
-    let started = MetricsTimer::start(emit_metrics);
+    let open_started = MetricsTimer::start(emit_metrics);
     let mut reader =
         DecodedFastqReader::open(path, TextRecordLimits::MAX).map_err(|error| error.to_string())?;
+    let mut decode_ns = open_started.elapsed_ns();
     loop {
+        let batch_started = MetricsTimer::start(emit_metrics);
         let batch = reader
             .next_batch(batch_records)
             .map_err(|error| error.to_string())?;
+        decode_ns = decode_ns.saturating_add(batch_started.elapsed_ns());
         if batch.is_empty() {
             break;
         }
@@ -1048,8 +1109,9 @@ fn decode_read_batches(
             break;
         }
     }
+    let close_started = MetricsTimer::start(emit_metrics);
     reader.close().map_err(|error| error.to_string())?;
-    Ok(started.elapsed_ns())
+    Ok(decode_ns.saturating_add(close_started.elapsed_ns()))
 }
 
 fn option_takes_value(flag: &str) -> bool {

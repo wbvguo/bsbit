@@ -24,11 +24,12 @@ use super::{
     CombinedTwoLaneSearchState, DIRECT_SINGLETON_PROOF, INITIAL_EDIT_DISTANCE,
     INITIAL_SEARCH_LIMITS, MAX_EDIT_DISTANCE, MAX_READ_BASES, MIN_SUFFIX_BASES,
     PAIRED_MAX_EDIT_DISTANCE, PairAlignmentMetrics, PairMappingStatus, PairWorkspace,
-    PairedAlignmentOptions, PairedAlignmentResult, PairedBatchAligner, PairedBatchResult,
-    PairedLibraryProfile, PairedPlacement, PairedSearchMode, ProjectedBase, RankedBlockSeed,
-    RankedBlockSelection, ReadAlignmentMetrics, ReadCandidate, ReadWorkspace, ReferenceIndex,
-    SEMI_GLOBAL_CLIP_PENALTY, SEMI_GLOBAL_MAX_EXACT_ANCHOR_HITS, SEMI_GLOBAL_MIN_ALIGNED_BASES,
-    SENSITIVE_MIN_EVENT_PENALTY, SENSITIVE_POSITIVE_MAPQ_REPORTING_MAX_RETAINED_HITS,
+    PairedAlignmentOptions, PairedAlignmentResult, PairedAlignmentWorkMetrics, PairedBatchAligner,
+    PairedBatchResult, PairedLibraryProfile, PairedPlacement, PairedSearchMode, ProjectedBase,
+    RankedBlockSeed, RankedBlockSelection, ReadAlignmentMetrics, ReadCandidate, ReadWorkspace,
+    ReferenceIndex, SEMI_GLOBAL_CLIP_PENALTY, SEMI_GLOBAL_MAX_EXACT_ANCHOR_HITS,
+    SEMI_GLOBAL_MIN_ALIGNED_BASES, SENSITIVE_MIN_EVENT_PENALTY,
+    SENSITIVE_POSITIVE_MAPQ_REPORTING_MAX_RETAINED_HITS,
     SENSITIVE_POSITIVE_MAPQ_REPORTING_MIN_RETAINED_HITS, SENSITIVE_PROOF_BLOCKS,
     SENSITIVE_RANKED_BLOCK_HITS, SENSITIVE_REPEAT_RECHECK_ROWS,
     SENSITIVE_SELECTIVE_UNMAPPED_RANKED_BLOCK_HITS, SENSITIVE_UNMAPPED_RANKED_BLOCK_HITS,
@@ -49,6 +50,58 @@ impl PairedBatchAligner {
             projections: Vec::with_capacity(pair_capacity),
             first_seeds: Vec::with_capacity(pair_capacity.saturating_mul(2)),
             results: Vec::with_capacity(pair_capacity),
+            collect_work_metrics: false,
+            last_work_metrics: PairedAlignmentWorkMetrics::default(),
+        }
+    }
+
+    /// Allocates reusable mapping storage and enables optional work counters.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_capacity_and_work_metrics(pair_capacity: usize) -> Self {
+        Self {
+            collect_work_metrics: true,
+            ..Self::with_capacity(pair_capacity)
+        }
+    }
+
+    /// Returns work performed by the most recent complete output mapping call.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn last_work_metrics(&self) -> PairedAlignmentWorkMetrics {
+        self.last_work_metrics
+    }
+
+    pub(super) fn observe_work_metrics(
+        &mut self,
+        results: &[PairedBatchResult],
+        directional_passes_per_pair: u64,
+    ) {
+        if !self.collect_work_metrics {
+            return;
+        }
+        for result in results {
+            let metrics = result.metrics();
+            let emitted_candidate_starts = metrics
+                .mate1
+                .emitted_candidate_starts
+                .saturating_add(metrics.mate2.emitted_candidate_starts);
+            let distinct_candidate_starts = metrics
+                .mate1
+                .distinct_candidate_starts
+                .saturating_add(metrics.mate2.distinct_candidate_starts);
+            let verified_placements = metrics
+                .mate1
+                .verified_placements
+                .saturating_add(metrics.mate2.verified_placements);
+            self.last_work_metrics.merge(PairedAlignmentWorkMetrics {
+                pair_mapping_passes: directional_passes_per_pair,
+                emitted_candidate_starts,
+                distinct_candidate_starts,
+                verified_placements,
+                compatible_pairs: metrics.compatible_pairs,
+                best_pair_placements: metrics.best_pair_placements,
+            });
         }
     }
 
@@ -116,7 +169,13 @@ impl PairedBatchAligner {
         reads: &[[&[Base]; 2]],
         options: PairedAlignmentOptions,
     ) -> Result<Vec<PairedAlignmentResult>, AlignmentError> {
+        self.last_work_metrics = PairedAlignmentWorkMetrics::default();
+        let directional_passes_per_pair = match options.library_profile {
+            PairedLibraryProfile::Directional => 1,
+            PairedLibraryProfile::NonDirectional => 2,
+        };
         let primary = self.map_pairs_combined(reference, reads, options)?.to_vec();
+        self.observe_work_metrics(&primary, directional_passes_per_pair);
         let mut adapter_results = vec![None; reads.len()];
         let mut adapter_classes = vec![None; reads.len()];
         let mut adapter_attempted = vec![false; reads.len()];
@@ -165,6 +224,7 @@ impl PairedBatchAligner {
             let remapped = self
                 .map_pairs_combined(reference, &clipped_reads, adapter_options)?
                 .to_vec();
+            self.observe_work_metrics(&remapped, directional_passes_per_pair);
             for ((offset, retained_bases), result) in clipped_metadata.iter().copied().zip(remapped)
             {
                 adapter_results[offset] = Some(AdapterFallbackResult {
@@ -214,6 +274,7 @@ impl PairedBatchAligner {
                 let stability = self
                     .map_pairs_combined(reference, &stability_reads, adapter_options)?
                     .to_vec();
+                self.observe_work_metrics(&stability, directional_passes_per_pair);
                 for (offset, stability_result) in stability_metadata.into_iter().zip(stability) {
                     let fallback = adapter_results[offset]
                         .as_mut()

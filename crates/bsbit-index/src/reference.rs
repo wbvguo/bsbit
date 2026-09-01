@@ -35,6 +35,7 @@ use core::fmt;
 use core::mem::size_of;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use bsbit_core::alphabet::Base;
 use bsbit_core::bisulfite::{
@@ -1315,6 +1316,80 @@ pub struct ReferenceIndex {
     owner: Arc<ReferenceOwner>,
 }
 
+/// Optional runtime work counters for combined-index search and locate calls.
+///
+/// These counters are disabled by default. They are intended for the aligner's
+/// explicit profiling mode and do not change query or locate results.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct ReferenceQueryDiagnostics {
+    suffix_search_lanes: u64,
+    suffix_search_rank_operations: u64,
+    locate_calls: u64,
+    singleton_locate_calls: u64,
+    multi_hit_locate_calls: u64,
+    located_rows: u64,
+    locate_lf_steps: u64,
+    locate_rank_operations: u64,
+    locate_interval_nodes: u64,
+}
+
+impl ReferenceQueryDiagnostics {
+    /// Returns projected maximal-suffix lanes submitted to the combined index.
+    #[must_use]
+    pub const fn suffix_search_lanes(self) -> u64 {
+        self.suffix_search_lanes
+    }
+
+    /// Returns physical rank-boundary operations in maximal-suffix extension.
+    #[must_use]
+    pub const fn suffix_search_rank_operations(self) -> u64 {
+        self.suffix_search_rank_operations
+    }
+
+    /// Returns complete sampled-SA interval locate calls.
+    #[must_use]
+    pub const fn locate_calls(self) -> u64 {
+        self.locate_calls
+    }
+
+    /// Returns locate calls whose input interval contained one suffix row.
+    #[must_use]
+    pub const fn singleton_locate_calls(self) -> u64 {
+        self.singleton_locate_calls
+    }
+
+    /// Returns locate calls whose input interval contained multiple suffix rows.
+    #[must_use]
+    pub const fn multi_hit_locate_calls(self) -> u64 {
+        self.multi_hit_locate_calls
+    }
+
+    /// Returns suffix rows completed by sampled-SA locate.
+    #[must_use]
+    pub const fn located_rows(self) -> u64 {
+        self.located_rows
+    }
+
+    /// Returns logical LF transitions represented by locate traversal.
+    #[must_use]
+    pub const fn locate_lf_steps(self) -> u64 {
+        self.locate_lf_steps
+    }
+
+    /// Returns physical rank-boundary operations performed by locate.
+    #[must_use]
+    pub const fn locate_rank_operations(self) -> u64 {
+        self.locate_rank_operations
+    }
+
+    /// Returns shared locate interval-tree nodes processed.
+    #[must_use]
+    pub const fn locate_interval_nodes(self) -> u64 {
+        self.locate_interval_nodes
+    }
+}
+
 /// Number of projected symbols represented by the combined image's dense lookup.
 #[cfg(feature = "combined-index")]
 pub const COMBINED_EXACT_LOOKUP_BASES: usize = 16;
@@ -1596,6 +1671,32 @@ impl CombinedIndexQuery<'_> {
                 &mut private[..patterns.len()],
             )
             .map_err(CombinedIndexQueryError::Backend)?;
+        if self.reference.owner.query_diagnostics.is_enabled() {
+            let mut suffix_search_rank_operations = 0_u64;
+            for (pattern, result) in patterns.iter().zip(&private[..patterns.len()]) {
+                let Some((interval, matched_bases)) = result else {
+                    continue;
+                };
+                let successful_extensions =
+                    matched_bases.saturating_sub(COMBINED_EXACT_LOOKUP_BASES as u64);
+                let failed_extension = u64::from(
+                    *matched_bases < u64::try_from(pattern.len()).unwrap_or(u64::MAX)
+                        && interval.len() > stop_interval_length,
+                );
+                suffix_search_rank_operations = suffix_search_rank_operations.saturating_add(
+                    successful_extensions
+                        .saturating_add(failed_extension)
+                        .saturating_mul(2),
+                );
+            }
+            self.reference
+                .owner
+                .query_diagnostics
+                .observe_suffix_search(
+                    u64::try_from(patterns.len()).unwrap_or(u64::MAX),
+                    suffix_search_rank_operations,
+                );
+        }
         for (destination, result) in output.iter_mut().zip(private) {
             *destination =
                 result.map(|(interval, matched_bases)| (self.bind(interval), matched_bases));
@@ -1640,12 +1741,19 @@ impl CombinedIndexQuery<'_> {
                 },
             ));
         }
-        Ok(ReferenceLocateMetrics {
+        let metrics = ReferenceLocateMetrics {
             located_coordinates: metrics.located_rows(),
             lf_steps: metrics.lf_steps(),
             rank_operations: metrics.rank_operations(),
             interval_nodes: metrics.interval_nodes(),
-        })
+        };
+        if self.reference.owner.query_diagnostics.is_enabled() {
+            self.reference
+                .owner
+                .query_diagnostics
+                .observe_locate(interval.len(), metrics);
+        }
+        Ok(metrics)
     }
 
     /// Streams two complete checked intervals through the backend's paired
@@ -1675,7 +1783,16 @@ impl CombinedIndexQuery<'_> {
                 ));
             }
         }
-        Ok(metrics.map(private_locate_metrics))
+        let metrics = metrics.map(private_locate_metrics);
+        if self.reference.owner.query_diagnostics.is_enabled() {
+            for lane in 0..2 {
+                self.reference
+                    .owner
+                    .query_diagnostics
+                    .observe_locate(private[lane].len(), metrics[lane]);
+            }
+        }
+        Ok(metrics)
     }
 
     fn backward_extend_intervals_inner(
@@ -2034,6 +2151,81 @@ struct ReferenceOwner {
     runs: RunCatalog,
     metrics: ReferenceMetrics,
     packed_reference_words: OnceLock<Result<PrivatePackedReferenceWords, String>>,
+    query_diagnostics: AtomicReferenceQueryDiagnostics,
+}
+
+#[derive(Default)]
+struct AtomicReferenceQueryDiagnostics {
+    enabled: AtomicBool,
+    suffix_search_lanes: AtomicU64,
+    suffix_search_rank_operations: AtomicU64,
+    locate_calls: AtomicU64,
+    singleton_locate_calls: AtomicU64,
+    multi_hit_locate_calls: AtomicU64,
+    located_rows: AtomicU64,
+    locate_lf_steps: AtomicU64,
+    locate_rank_operations: AtomicU64,
+    locate_interval_nodes: AtomicU64,
+}
+
+impl AtomicReferenceQueryDiagnostics {
+    fn enable(&self) {
+        self.suffix_search_lanes.store(0, Ordering::Relaxed);
+        self.suffix_search_rank_operations
+            .store(0, Ordering::Relaxed);
+        self.locate_calls.store(0, Ordering::Relaxed);
+        self.singleton_locate_calls.store(0, Ordering::Relaxed);
+        self.multi_hit_locate_calls.store(0, Ordering::Relaxed);
+        self.located_rows.store(0, Ordering::Relaxed);
+        self.locate_lf_steps.store(0, Ordering::Relaxed);
+        self.locate_rank_operations.store(0, Ordering::Relaxed);
+        self.locate_interval_nodes.store(0, Ordering::Relaxed);
+        self.enabled.store(true, Ordering::Release);
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.enabled.load(Ordering::Relaxed)
+    }
+
+    fn observe_suffix_search(&self, lanes: u64, rank_operations: u64) {
+        self.suffix_search_lanes.fetch_add(lanes, Ordering::Relaxed);
+        self.suffix_search_rank_operations
+            .fetch_add(rank_operations, Ordering::Relaxed);
+    }
+
+    fn observe_locate(&self, interval_rows: u64, metrics: ReferenceLocateMetrics) {
+        self.locate_calls.fetch_add(1, Ordering::Relaxed);
+        if interval_rows == 1 {
+            self.singleton_locate_calls.fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.multi_hit_locate_calls.fetch_add(1, Ordering::Relaxed);
+        }
+        self.located_rows
+            .fetch_add(metrics.located_coordinates(), Ordering::Relaxed);
+        self.locate_lf_steps
+            .fetch_add(metrics.lf_steps(), Ordering::Relaxed);
+        self.locate_rank_operations
+            .fetch_add(metrics.rank_operations(), Ordering::Relaxed);
+        self.locate_interval_nodes
+            .fetch_add(metrics.interval_nodes(), Ordering::Relaxed);
+    }
+
+    fn disable_and_snapshot(&self) -> ReferenceQueryDiagnostics {
+        self.enabled.store(false, Ordering::Release);
+        ReferenceQueryDiagnostics {
+            suffix_search_lanes: self.suffix_search_lanes.load(Ordering::Relaxed),
+            suffix_search_rank_operations: self
+                .suffix_search_rank_operations
+                .load(Ordering::Relaxed),
+            locate_calls: self.locate_calls.load(Ordering::Relaxed),
+            singleton_locate_calls: self.singleton_locate_calls.load(Ordering::Relaxed),
+            multi_hit_locate_calls: self.multi_hit_locate_calls.load(Ordering::Relaxed),
+            located_rows: self.located_rows.load(Ordering::Relaxed),
+            locate_lf_steps: self.locate_lf_steps.load(Ordering::Relaxed),
+            locate_rank_operations: self.locate_rank_operations.load(Ordering::Relaxed),
+            locate_interval_nodes: self.locate_interval_nodes.load(Ordering::Relaxed),
+        }
+    }
 }
 
 /// Private two-bit positional representation of retained reference bases.
@@ -2351,6 +2543,7 @@ impl ReferenceIndex {
             runs: RunCatalog::Scalar(runs),
             metrics: scan.metrics,
             packed_reference_words: OnceLock::new(),
+            query_diagnostics: AtomicReferenceQueryDiagnostics::default(),
         });
         Ok(Self { owner })
     }
@@ -2443,6 +2636,7 @@ impl ReferenceIndex {
             }),
             metrics: scan.metrics,
             packed_reference_words: OnceLock::new(),
+            query_diagnostics: AtomicReferenceQueryDiagnostics::default(),
         });
         Ok(Self { owner })
     }
@@ -2465,6 +2659,19 @@ impl ReferenceIndex {
     #[must_use]
     pub fn metrics(&self) -> ReferenceMetrics {
         self.owner.metrics
+    }
+
+    /// Enables and resets optional combined-index work diagnostics.
+    #[doc(hidden)]
+    pub fn enable_query_diagnostics(&self) {
+        self.owner.query_diagnostics.enable();
+    }
+
+    /// Disables optional work diagnostics and returns their final snapshot.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn disable_and_take_query_diagnostics(&self) -> ReferenceQueryDiagnostics {
+        self.owner.query_diagnostics.disable_and_snapshot()
     }
 
     /// Borrows the raw interval, rank, and locate surface for the combined

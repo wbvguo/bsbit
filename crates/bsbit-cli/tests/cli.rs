@@ -261,6 +261,21 @@ fn align(snapshot: &Path, read1: &Path, read2: Option<&Path>, output_bam: &Path)
     run(arguments)
 }
 
+fn align_paired_metrics(snapshot: &Path, read1: &Path, read2: &Path, output_bam: &Path) -> Output {
+    run([
+        OsString::from("align"),
+        OsString::from("--index"),
+        snapshot.as_os_str().to_owned(),
+        OsString::from("-1"),
+        read1.as_os_str().to_owned(),
+        OsString::from("-2"),
+        read2.as_os_str().to_owned(),
+        OsString::from("--output-bam"),
+        output_bam.as_os_str().to_owned(),
+        OsString::from("--metrics"),
+    ])
+}
+
 fn align_single_sensitive(snapshot: &Path, read1: &Path, output_bam: &Path) -> Output {
     run([
         OsString::from("align"),
@@ -967,6 +982,7 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     let read2 = directory.join("r2.fq");
     let single_bam = directory.join("single.bam");
     let paired_bam = directory.join("paired.bam");
+    let paired_metrics_bam = directory.join("paired-metrics.bam");
 
     fs::write(&reference, b">chr\nAACCGTGATCTAGGCTTACGGAAT\n").expect("reference");
     fs::write(&single_reads, b"@single\nCCGTGA\n+\nIIIIII\n").expect("single reads");
@@ -976,6 +992,51 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     assert_success(&index(&reference, &index_path));
     assert_success(&align(&index_path, &single_reads, None, &single_bam));
     assert_success(&align(&index_path, &read1, Some(&read2), &paired_bam));
+    let metrics_output = align_paired_metrics(&index_path, &read1, &read2, &paired_metrics_bam);
+    assert_success(&metrics_output);
+    let metrics_text = std::str::from_utf8(&metrics_output.stdout).expect("metrics UTF-8");
+    let mut metric_lines = metrics_text.lines();
+    let headers = metric_lines
+        .next()
+        .expect("metrics header")
+        .split('\t')
+        .collect::<Vec<_>>();
+    let values = metric_lines
+        .next()
+        .expect("metrics values")
+        .split('\t')
+        .collect::<Vec<_>>();
+    assert_eq!(headers.len(), values.len());
+    assert!(metric_lines.next().is_none());
+    let field = |name: &str| {
+        values[headers
+            .iter()
+            .position(|header| *header == name)
+            .expect("required metrics field")]
+    };
+    assert_eq!(field("schema"), "bsbit-alignment-metrics-v2");
+    assert_eq!(field("pairs"), "1");
+    assert_eq!(field("bam_records"), "2");
+    assert_eq!(field("alignment_pair_passes"), "1");
+    assert!(
+        field("suffix_search_lanes")
+            .parse::<u64>()
+            .expect("suffix lanes integer")
+            > 0
+    );
+    let locate_calls = field("locate_calls")
+        .parse::<u64>()
+        .expect("locate calls integer");
+    let singleton_locates = field("singleton_locate_calls")
+        .parse::<u64>()
+        .expect("singleton locate calls integer");
+    let multi_hit_locates = field("multi_hit_locate_calls")
+        .parse::<u64>()
+        .expect("multi-hit locate calls integer");
+    assert_eq!(
+        locate_calls,
+        singleton_locates.saturating_add(multi_hit_locates)
+    );
 
     let single = decode_process_bam(&single_bam);
     assert_eq!(single.len(), 1);

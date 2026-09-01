@@ -111,7 +111,14 @@ Pair-specific options fail explicitly when only read 1 is supplied.
 | `--max-template-span N` | 1000 | Inclusive maximum template span |
 
 `--metrics` is optional benchmark diagnostics, not an alignment mode. Paired
-TSV rows start with `bsbit-alignment-metrics-v1`; single-end rows start with
+TSV rows start with `bsbit-alignment-metrics-v2`. Its `fastq_decode_ns` field
+contains FASTQ open/decode/close work but excludes bounded-queue blocking, and
+`record_worker_total_ns` includes result observation, record composition, and
+composer flush. Optional work columns report directional pair passes,
+maximal-suffix lanes and rank operations, sampled-SA locate calls/rows/LF/rank,
+candidate starts, verified placements, and compatible pair frontiers. These
+are profiling counters, not output-quality scores, and are collected only
+when `--metrics` is present. Single-end rows continue to start with
 `bsbit-single-alignment-metrics-v1` and report read classes, search work,
 adapter outcomes, and direct-versus-traceback record counts.
 

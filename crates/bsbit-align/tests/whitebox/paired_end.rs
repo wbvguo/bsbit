@@ -19,6 +19,55 @@ fn reference(bases: &[Base]) -> ReferenceIndex {
 }
 
 #[test]
+fn optional_batch_work_metrics_aggregate_candidate_and_pair_frontiers() {
+    let mut first_metrics = empty_pair_metrics();
+    first_metrics.mate1.emitted_candidate_starts = 7;
+    first_metrics.mate2.emitted_candidate_starts = 5;
+    first_metrics.mate1.distinct_candidate_starts = 4;
+    first_metrics.mate2.distinct_candidate_starts = 3;
+    first_metrics.mate1.verified_placements = 2;
+    first_metrics.mate2.verified_placements = 1;
+    first_metrics.compatible_pairs = 6;
+    first_metrics.best_pair_placements = 2;
+    let first = PairedBatchResult {
+        class: PairMappingStatus::Ambiguous,
+        metrics: first_metrics,
+        best_pair: None,
+        second_best_distance: None,
+        repeat_risk_q20_certified: false,
+        parsimony_q20_certified: false,
+        ambiguity_q10_certified: false,
+        requires_positive_mapq_for_reporting: false,
+    };
+    let mut second = first;
+    second.metrics.mate1.emitted_candidate_starts = 11;
+    second.metrics.mate2.emitted_candidate_starts = 0;
+    second.metrics.compatible_pairs = 1;
+    second.metrics.best_pair_placements = 1;
+
+    let mut profiled = PairedBatchAligner::with_capacity_and_work_metrics(2);
+    profiled.observe_work_metrics(&[first, second], 1);
+    let metrics = profiled.last_work_metrics();
+    assert_eq!(metrics.pair_mapping_passes(), 2);
+    assert_eq!(metrics.emitted_candidate_starts(), 23);
+    assert_eq!(metrics.distinct_candidate_starts(), 14);
+    assert_eq!(metrics.verified_placements(), 6);
+    assert_eq!(metrics.compatible_pairs(), 7);
+    assert_eq!(metrics.best_pair_placements(), 3);
+
+    let mut non_directional = PairedBatchAligner::with_capacity_and_work_metrics(2);
+    non_directional.observe_work_metrics(&[first, second], 2);
+    assert_eq!(non_directional.last_work_metrics().pair_mapping_passes(), 4);
+
+    let mut unprofiled = PairedBatchAligner::with_capacity(2);
+    unprofiled.observe_work_metrics(&[first, second], 1);
+    assert_eq!(
+        unprofiled.last_work_metrics(),
+        PairedAlignmentWorkMetrics::default()
+    );
+}
+
+#[test]
 fn sensitive_profile_is_separate_and_prefers_whole_read_edits() {
     let default = PairedSearchMode::Default.limits();
     let sensitive = PairedSearchMode::Sensitive.limits();

@@ -10,7 +10,9 @@ overwrites an existing destination.
 - **Alignment:** `bsbit align` creates an input-order BAM. It is valid BAM but
   is not coordinate-sorted or indexable yet.
 - **Metrics:** `bsbit align --metrics` writes a two-row TSV to stdout. Redirect
-  it explicitly when needed.
+  it explicitly when needed. Paired schema v2 separates active decode time
+  from queue waits and includes optional FM search, sampled-SA locate,
+  candidate, and verification work counters.
 - **BAM preparation:** `samtools` creates a coordinate-sorted,
   duplicate-marked BAM plus BAI or CSI.
 - **Methylation calling:** `bsbit call meth` creates CGmap or 18-column

@@ -291,6 +291,17 @@ the broader replicated scorecard above. Commands, binaries, BAMs, evaluator
 outputs, and per-record endpoint comparison were retained under
 `/tmp/bsbit-single-hotpath-20260901-codex-01` on the qualification host.
 
+## Optional paired work diagnostics
+
+Paired `--metrics` uses the `bsbit-alignment-metrics-v2` schema. It separates
+active FASTQ decode time from queue waits and, only while profiling is enabled,
+counts maximal-suffix search lanes, sampled-SA locate work, emitted and
+distinct candidate starts, verified placements, compatible pair frontiers,
+and qualified adapter/stability remapping passes. Normal runs leave the atomic
+reference counters and paired work aggregation disabled. These diagnostics
+identify future optimization targets; they do not extend the qualified speed
+or accuracy claims above.
+
 ## Reproduction protocol
 
 Build the audited executable with the release script and verify its recorded

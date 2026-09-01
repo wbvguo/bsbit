@@ -86,7 +86,9 @@ use self::selection::{
 };
 
 pub use options::{PairedAlignmentOptions, PairedSearchMode};
-pub use result::{PairMappingStatus, PairedAlignmentResult, PairedPlacement};
+pub use result::{
+    PairMappingStatus, PairedAlignmentResult, PairedAlignmentWorkMetrics, PairedPlacement,
+};
 
 /// Maximum number of paired reads mapped in one paired-end worker batch.
 pub const PAIRED_ALIGNMENT_BATCH_SIZE: usize = 32;
@@ -348,6 +350,8 @@ pub struct PairedBatchAligner {
     projections: Vec<[[ProjectedBase; MAX_READ_BASES]; 2]>,
     first_seeds: Vec<Option<CombinedSeedMatches>>,
     results: Vec<PairedBatchResult>,
+    collect_work_metrics: bool,
+    last_work_metrics: PairedAlignmentWorkMetrics,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

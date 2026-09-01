@@ -29,7 +29,7 @@ samtools faidx "$output_dir/reference.fa"
   > "$output_dir/alignment.summary.tsv"
 
 samtools quickcheck -v "$output_dir/alignment.bam"
-awk -F '\t' 'NR == 2 && $1 == "bsbit-alignment-metrics-v1" && $2 == 4 && $3 == 4 && $6 == 8 { passed = 1 } END { exit !passed }' \
+awk -F '\t' 'NR == 2 && $1 == "bsbit-alignment-metrics-v2" && $2 == 4 && $3 == 4 && $6 == 8 { passed = 1 } END { exit !passed }' \
   "$output_dir/alignment.summary.tsv"
 test "$(samtools view "$output_dir/alignment.bam" | awk '$5 == 60 { count++ } END { print count + 0 }')" -eq 8
 
