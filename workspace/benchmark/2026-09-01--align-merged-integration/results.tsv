@@ -1,0 +1,4 @@
+layout	profile	input_units	bam_records	mapped_records	mapping_threads	bam_threads	wall_s	user_s	system_s	peak_rss_kib	bam_bytes	quickcheck	bam_sha256	alignment_mode
+single	directional	5000000	5000000	4989023	8	2	13.55	107.26	2.92	9160224	378564966	ok	79c47bdd63fd4c637d054dd446dff106668700239dd0b2b44642ffb6b42584ac	caller-compatible-directional-single
+single	non-directional	5000000	5000000	4989028	8	2	45.89	364.69	4.18	9162968	378579708	ok	a0a3dd541cae1542f498482f1533bf3d95d048f939106411460b2f5a79ec08b6	caller-compatible-nondirectional-single
+paired	directional	5000000	10000000	9884356	10	4	13.95	144.00	3.83	9804332	739799488	ok	2d86a537748ffc7a6836bd988b916f44a1bd79b43b15b6c829195af31da7c331	caller-compatible-directional-paired

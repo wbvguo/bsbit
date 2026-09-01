@@ -8,18 +8,20 @@ result.
 
 ## Canonical result and exclusions
 
-The canonical integration branch is `codex/align-optimized-integration`. The
-qualified code before this ledger is commit `82e4984`; it combines the full
-optimization branch, the single-end hot-path/endpoint branch, and the retained
-metrics-v2 subset from the throughput exploration.
+The canonical integration branch is `codex/align-optimized-integration`. Its
+qualified code commit is `def3857`; it combines the full optimization branch,
+the single-end hot-path/endpoint branch, the retained metrics-v2 subset from
+the throughput exploration, non-directional single-end support, and the final
+single-end sensitive-accuracy audit.
 
-Two branches were explicitly excluded from cleanup because separate Codex
-tasks were still modifying them at the cleanup snapshot:
-
-- `codex/single-sensitive-accuracy` at `f043970`;
-- `codex/non-directional-single-end` at `f043970`.
-
-The dirty `dev` checkout was also left untouched.
+`codex/single-sensitive-accuracy` and `codex/non-directional-single-end` were
+explicitly excluded from the first cleanup snapshot because separate Codex
+tasks were still modifying them. Once those tasks became idle and both
+worktrees were clean, the non-directional tip `a237f51` was merged by
+`b754ce7`, then the sensitive-accuracy tip `63d0f62` was merged by `def3857`.
+Their worktrees and local branches were removed after the post-merge
+qualification below. The dirty primary checkout and detached
+`align-general-reference` worktree were left untouched.
 
 ## Branch disposition
 
@@ -33,9 +35,9 @@ The dirty `dev` checkout was also left untouched.
 | `codex/single-end-sensitive` | `6341e6f` | delete | Already an ancestor of `dev` and the integration branch. |
 | `codex/alignment-locate-wavefront` | `76f599a` | delete | All source candidates regressed; only the measurements below were retained. |
 | `codex/alignment-throughput` | `6ee2de0` | delete | Metrics v2 was selectively ported by `8bed5f5` and qualified by `82e4984`; the other source candidates regressed. |
-| `codex/align-optimized-integration` | `82e4984` | keep | Canonical qualified optimization result. |
-| `codex/single-sensitive-accuracy` | `f043970` | keep | Active worktree/task at cleanup time. |
-| `codex/non-directional-single-end` | `f043970` | keep | Active worktree/task at cleanup time. |
+| `codex/align-optimized-integration` | `def3857` | keep | Canonical qualified optimization result containing both formerly active branches. |
+| `codex/single-sensitive-accuracy` | `63d0f62` | delete | Merged by `def3857`; post-merge tests and 5M validation passed. |
+| `codex/non-directional-single-end` | `a237f51` | delete | Merged by `b754ce7`; post-merge tests and 5M validation passed. |
 
 ## Frozen benchmark contract
 
@@ -141,6 +143,23 @@ The final paired metrics-v2 run retained the same search/locate totals and
 reported 19,184,752 distinct candidate starts, 25,125,969 verified placements,
 12,190,085 compatible pairs, and 7,969,678 best-pair placements.
 
+After merging the two formerly active source branches, code commit `def3857`
+again passed workspace check/tests, Clippy with warnings denied, formatting,
+strict MkDocs, `git diff --check`, and all 26 crate-boundary tests. Three
+stride-8 5M validation runs then produced:
+
+| Layout | Wall (s) | BAM SHA-256 | Result |
+| --- | ---: | --- | --- |
+| directional single | 13.55 | `79c47bdd63fd4c637d054dd446dff106668700239dd0b2b44642ffb6b42584ac` | Exact qualified-baseline match. |
+| non-directional single | 45.89 | `a0a3dd541cae1542f498482f1533bf3d95d048f939106411460b2f5a79ec08b6` | New frozen non-directional baseline. |
+| directional paired | 13.95 | `2d86a537748ffc7a6836bd988b916f44a1bd79b43b15b6c829195af31da7c331` | Exact qualified-baseline match. |
+
+All three BAMs passed `samtools quickcheck`; counts, flag summaries,
+caller-compatible provenance, timings, RSS, input/index hashes, and complete
+built-in metrics are recorded in the merged-integration evidence directory.
+The two source tips were confirmed ancestors of the integration head before
+their clean worktrees and local branches were removed.
+
 ## Checked-in evidence
 
 - Exploratory report:
@@ -159,6 +178,15 @@ reported 19,184,752 distinct candidate starts, 25,125,969 verified placements,
   `workspace/benchmark/2026-09-01--align-full-optimization/paired-metrics.tsv`
 - Full optimization reproduction commands:
   `workspace/benchmark/2026-09-01--align-full-optimization/commands.md`
+- Merged integration report:
+  `workspace/benchmark/2026-09-01--align-merged-integration/report.md`
+- Merged integration timing/output summary:
+  `workspace/benchmark/2026-09-01--align-merged-integration/results.tsv`
+- Merged integration exact metrics:
+  `workspace/benchmark/2026-09-01--align-merged-integration/single-metrics.tsv`
+  and `workspace/benchmark/2026-09-01--align-merged-integration/paired-metrics.tsv`
+- Merged integration reproduction commands:
+  `workspace/benchmark/2026-09-01--align-merged-integration/commands.md`
 
 The reports also name the host-local `/tmp` directories that held complete raw
 runs, BAMs, binaries, indexes, and `perf.data`. Those paths are supporting
