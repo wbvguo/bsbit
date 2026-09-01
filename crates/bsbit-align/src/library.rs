@@ -13,12 +13,6 @@ pub enum LibraryProfile {
     NonDirectional,
 }
 
-/// Backward-compatible name for callers that constructed paired options.
-///
-/// New code should use [`LibraryProfile`], which also describes single-end
-/// alignment.
-pub type PairedLibraryProfile = LibraryProfile;
-
 /// One directional two-strand pass inside a library-profile search.
 ///
 /// A single read uses the pass to select its query projection and hit labels.
@@ -36,16 +30,6 @@ const NON_DIRECTIONAL_PASSES: [ConversionPass; 2] =
     [ConversionPass::Original, ConversionPass::Complementary];
 
 impl LibraryProfile {
-    /// Returns the number of directional two-strand passes required by this
-    /// profile.
-    #[must_use]
-    pub const fn conversion_pass_count(self) -> u8 {
-        match self {
-            Self::Directional => 1,
-            Self::NonDirectional => 2,
-        }
-    }
-
     pub(crate) const fn conversion_passes(self) -> &'static [ConversionPass] {
         match self {
             Self::Directional => &DIRECTIONAL_PASSES,
@@ -221,8 +205,6 @@ mod tests {
             LibraryProfile::NonDirectional.conversion_passes(),
             [ConversionPass::Original, ConversionPass::Complementary]
         );
-        assert_eq!(LibraryProfile::Directional.conversion_pass_count(), 1);
-        assert_eq!(LibraryProfile::NonDirectional.conversion_pass_count(), 2);
     }
 
     #[test]

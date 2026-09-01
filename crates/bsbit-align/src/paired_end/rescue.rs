@@ -4,10 +4,10 @@ use super::adapter::best_ungapped_semi_global_placement;
 use super::frontier::{append_local_flexible_proof_candidates, balanced_rescue_blocks};
 use super::selection::{counterpart_strand, expected_mate2_strand, is_inward};
 use super::{
-    AlignmentError, Base, CombinedSearchReferenceExt, CombinedSeedHit, ConversionPass,
-    FLEXIBLE_NOMINAL_PROOF, INITIAL_EDIT_DISTANCE, MAX_READ_BASES, MateRescueWindow,
-    PairedPlacement, ProjectedBase, RESCUE_BLOCKS, ReadAlignmentMetrics, ReadCandidate,
-    ReadPlacement, ReadWorkspace, ReferenceIndex, SearchBase,
+    AlignmentError, Base, CombinedSearchReferenceExt, CombinedSeedHit, FLEXIBLE_NOMINAL_PROOF,
+    INITIAL_EDIT_DISTANCE, MAX_READ_BASES, MateRescueWindow, MateRole, PairedPlacement,
+    ProjectedBase, RESCUE_BLOCKS, ReadAlignmentMetrics, ReadCandidate, ReadPlacement,
+    ReadWorkspace, ReferenceIndex, SearchBase,
 };
 
 fn rescue_window_contains_candidate(
@@ -34,7 +34,7 @@ pub(super) fn rescue_from_ranked_anchor_windows(
     reference: &ReferenceIndex,
     read: &[Base],
     anchors: &[ReadPlacement],
-    rescuing_mate1: bool,
+    rescuing_mate: MateRole,
     maximum_template_span: u64,
     maximum_edit_distance: u8,
 ) -> Result<ReadAlignmentMetrics, AlignmentError> {
@@ -45,7 +45,7 @@ pub(super) fn rescue_from_ranked_anchor_windows(
         rescue_windows,
         reference,
         anchors,
-        rescuing_mate1,
+        rescuing_mate,
         maximum_template_span,
     )?;
     for &window in rescue_windows.iter() {
@@ -81,7 +81,7 @@ pub(super) fn rescue_from_combined_exact_blocks(
     read: &[Base],
     reversed_projected: &[ProjectedBase],
     anchors: &[ReadPlacement],
-    rescuing_mate1: bool,
+    rescuing_mate: MateRole,
     maximum_template_span: u64,
     maximum_edit_distance: u8,
     incremental_fallback_requested: bool,
@@ -94,7 +94,7 @@ pub(super) fn rescue_from_combined_exact_blocks(
         rescue_windows,
         reference,
         anchors,
-        rescuing_mate1,
+        rescuing_mate,
         maximum_template_span,
     )?;
     if rescue_windows.is_empty() {
@@ -115,11 +115,7 @@ pub(super) fn rescue_from_combined_exact_blocks(
     for (ordinal, block) in blocks.into_iter().enumerate() {
         let query_start = usize::from(block.query_start());
         let query_end = usize::from(block.query_end());
-        let source = if rescuing_mate1 {
-            &read[query_start..query_end]
-        } else {
-            &read[read.len() - query_end..read.len() - query_start]
-        };
+        let source = rescuing_mate.query_block(read, query_start, query_end);
         if source.contains(&Base::N) {
             continue;
         }
@@ -155,7 +151,7 @@ pub(super) fn rescue_from_combined_exact_blocks(
                 rescue_windows,
                 reference,
                 anchors,
-                rescuing_mate1,
+                rescuing_mate,
                 maximum_template_span,
             )?;
             for &window in rescue_windows.iter() {
@@ -187,11 +183,7 @@ pub(super) fn rescue_from_combined_exact_blocks(
         ));
     }
 
-    let conversion_pass = if rescuing_mate1 {
-        ConversionPass::Original
-    } else {
-        ConversionPass::Complementary
-    };
+    let conversion_pass = rescuing_mate.conversion_pass();
     let query_len = u64::try_from(read.len()).expect("bounded read length fits u64");
     let mut located_rows = 0_u64;
     for (matches, query_offset, proof_mask) in exact.into_iter().flatten() {
@@ -239,12 +231,12 @@ pub(super) fn prepare_rescue_windows(
     rescue_windows: &mut Vec<MateRescueWindow>,
     reference: &ReferenceIndex,
     anchors: &[ReadPlacement],
-    rescuing_mate1: bool,
+    rescuing_mate: MateRole,
     maximum_template_span: u64,
 ) -> Result<(), AlignmentError> {
     rescue_windows.clear();
     for &anchor in anchors {
-        let Some(strand) = counterpart_strand(anchor.strand(), rescuing_mate1) else {
+        let Some(strand) = counterpart_strand(anchor.strand(), rescuing_mate) else {
             continue;
         };
         let Some(contig) = reference.contig_by_ordinal(anchor.contig_ordinal()) else {
@@ -272,7 +264,7 @@ pub(super) fn prepare_best_distance_rescue_windows(
     rescue_windows: &mut Vec<MateRescueWindow>,
     reference: &ReferenceIndex,
     anchors: &[ReadPlacement],
-    rescuing_mate1: bool,
+    rescuing_mate: MateRole,
     maximum_template_span: u64,
 ) -> Result<(), AlignmentError> {
     rescue_windows.clear();
@@ -293,7 +285,7 @@ pub(super) fn prepare_best_distance_rescue_windows(
         .iter()
         .filter(|anchor| anchor.distance() == best_distance)
     {
-        let Some(strand) = counterpart_strand(anchor.strand(), rescuing_mate1) else {
+        let Some(strand) = counterpart_strand(anchor.strand(), rescuing_mate) else {
             continue;
         };
         let Some(contig) = reference.contig_by_ordinal(anchor.contig_ordinal()) else {
@@ -376,14 +368,9 @@ pub(super) fn append_ungapped_semi_global_placements(
 
 pub(super) fn relabel_exact_retained_hit(
     hit: CombinedSeedHit,
-    lane: usize,
+    mate: MateRole,
 ) -> Option<ReadCandidate> {
-    let conversion_pass = if lane == 1 {
-        ConversionPass::Complementary
-    } else {
-        ConversionPass::Original
-    };
-    let strand = conversion_pass.relabel_combined_hit(hit.strand())?;
+    let strand = mate.conversion_pass().relabel_combined_hit(hit.strand())?;
     Some(ReadCandidate {
         contig_ordinal: hit.contig_ordinal(),
         start: hit.start(),

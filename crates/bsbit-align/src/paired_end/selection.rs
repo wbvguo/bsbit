@@ -6,10 +6,10 @@ use super::adapter::{
 };
 use super::{
     AffineScoreWorkspace, AlignmentError, AlignmentOrientation, BWA_MISMATCH_PENALTY, Base,
-    BisulfiteStrand, OriginPairEvidence, OriginPairStorageKey, PairScoreConfidence, PairSelection,
-    PairedPlacement, ReadCandidate, ReadPlacement, ReferenceIndex, SENSITIVE_CLIP_PENALTY,
-    banded_affine_score, placement_net_gap_bases, placement_origin_key, strand_index,
-    strand_semantics,
+    BisulfiteStrand, MateRole, OriginPairEvidence, OriginPairStorageKey, PairScoreConfidence,
+    PairSelection, PairedPlacement, ReadCandidate, ReadPlacement, ReferenceIndex,
+    SENSITIVE_CLIP_PENALTY, banded_affine_score, placement_net_gap_bases, placement_origin_key,
+    strand_index, strand_semantics,
 };
 
 pub(super) fn candidate_for_origin_endpoint(
@@ -834,13 +834,13 @@ pub(super) const fn expected_mate2_strand(strand: BisulfiteStrand) -> Option<Bis
 
 pub(super) const fn counterpart_strand(
     anchor: BisulfiteStrand,
-    rescuing_mate1: bool,
+    rescuing_mate: MateRole,
 ) -> Option<BisulfiteStrand> {
-    match (anchor, rescuing_mate1) {
-        (BisulfiteStrand::CTOT, true) => Some(BisulfiteStrand::OT),
-        (BisulfiteStrand::CTOB, true) => Some(BisulfiteStrand::OB),
-        (BisulfiteStrand::OT, false) => Some(BisulfiteStrand::CTOT),
-        (BisulfiteStrand::OB, false) => Some(BisulfiteStrand::CTOB),
+    match (anchor, rescuing_mate) {
+        (BisulfiteStrand::CTOT, MateRole::First) => Some(BisulfiteStrand::OT),
+        (BisulfiteStrand::CTOB, MateRole::First) => Some(BisulfiteStrand::OB),
+        (BisulfiteStrand::OT, MateRole::Second) => Some(BisulfiteStrand::CTOT),
+        (BisulfiteStrand::OB, MateRole::Second) => Some(BisulfiteStrand::CTOB),
         _ => None,
     }
 }

@@ -39,7 +39,7 @@ use self::mapq::{
 };
 use crate::library::ConversionPass;
 #[cfg(test)]
-use crate::library::LibraryProfile;
+use crate::library::{LibraryProfile, PairConstraints, TemplateSpan, TemplateSpanBounds};
 use crate::search::combined_adaptive::{
     CombinedSearchLimits, CombinedTwoLaneSearchState, DIRECT_SINGLETON_PROOF,
     FLEXIBLE_NOMINAL_PROOF, INITIAL_SEARCH_LIMITS, continue_combined_two_lane_search,
@@ -172,6 +172,53 @@ struct RankedBlockSelection {
 
 type RankedBlockPartition = Option<(u64, [Option<RankedBlockSeed>; SENSITIVE_PROOF_BLOCKS])>;
 type EndpointKey = (u16, usize, u8, usize, usize, u8, usize, usize);
+
+/// Semantic mate identity inside the canonical paired two-lane search.
+///
+/// Keeping this typed prevents lane indices and booleans from silently
+/// selecting the wrong query projection or bisulfite conversion pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MateRole {
+    First,
+    Second,
+}
+
+impl MateRole {
+    const ALL: [Self; 2] = [Self::First, Self::Second];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::First => 0,
+            Self::Second => 1,
+        }
+    }
+
+    const fn other(self) -> Self {
+        match self {
+            Self::First => Self::Second,
+            Self::Second => Self::First,
+        }
+    }
+
+    const fn conversion_pass(self) -> ConversionPass {
+        match self {
+            Self::First => ConversionPass::Original,
+            Self::Second => ConversionPass::Complementary,
+        }
+    }
+
+    fn query_block(self, read: &[Base], start: usize, end: usize) -> &[Base] {
+        match self {
+            Self::First => &read[start..end],
+            Self::Second => &read[read.len() - end..read.len() - start],
+        }
+    }
+}
+
+const MATE_CONVERSION_PASSES: [ConversionPass; 2] = [
+    MateRole::First.conversion_pass(),
+    MateRole::Second.conversion_pass(),
+];
 
 /// One disjoint exact block and its already-counted FM interval.
 #[derive(Clone, Copy, Debug)]
@@ -352,6 +399,7 @@ pub struct PairedBatchAligner {
     projections: Vec<[[ProjectedBase; MAX_READ_BASES]; 2]>,
     first_seeds: Vec<Option<CombinedSeedMatches>>,
     results: Vec<PairedBatchResult>,
+    primary_pass_results: Vec<PairedBatchResult>,
     collect_work_metrics: bool,
     last_work_metrics: PairedAlignmentWorkMetrics,
 }

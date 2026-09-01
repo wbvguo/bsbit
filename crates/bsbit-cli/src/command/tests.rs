@@ -1,10 +1,32 @@
 use super::index::IndexSpeed;
-use super::{Action, parse};
+use super::{Action, ReadLayout, caller_compatible_alignment_mode, parse};
+use bsbit_align::library::LibraryProfile;
 use bsbit_call::meth::OutputFormat as MethylationOutputFormat;
 use bsbit_combine::MatrixFormat as CombineMatrixFormat;
+use bsbit_hts::BsbitAlignmentMode;
 
 fn arguments(values: &[&str]) -> Vec<std::ffi::OsString> {
     values.iter().map(std::ffi::OsString::from).collect()
+}
+
+#[test]
+fn alignment_provenance_mode_covers_layout_and_library_profile() {
+    assert_eq!(
+        caller_compatible_alignment_mode(ReadLayout::SingleEnd, LibraryProfile::Directional),
+        BsbitAlignmentMode::CallerCompatibleDirectionalSingle
+    );
+    assert_eq!(
+        caller_compatible_alignment_mode(ReadLayout::SingleEnd, LibraryProfile::NonDirectional),
+        BsbitAlignmentMode::CallerCompatibleNondirectionalSingle
+    );
+    assert_eq!(
+        caller_compatible_alignment_mode(ReadLayout::PairedEnd, LibraryProfile::Directional),
+        BsbitAlignmentMode::CallerCompatibleDirectionalPaired
+    );
+    assert_eq!(
+        caller_compatible_alignment_mode(ReadLayout::PairedEnd, LibraryProfile::NonDirectional),
+        BsbitAlignmentMode::CallerCompatibleNondirectionalPaired
+    );
 }
 
 #[test]

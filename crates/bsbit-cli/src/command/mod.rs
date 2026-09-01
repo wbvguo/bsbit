@@ -8,10 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
+use bsbit_align::library::LibraryProfile;
 use bsbit_call::joint::Options as CallJointOptions;
 use bsbit_call::meth::Options as CallMethOptions;
 use bsbit_call::snp::Options as CallSnpOptions;
 use bsbit_combine::Options as CombineOptions;
+use bsbit_hts::BsbitAlignmentMode;
 use bsbit_io::select_sibling_staging_path;
 
 use crate::{CliError, GENERAL_HELP};
@@ -23,6 +25,32 @@ use combine::parse_combine;
 use index::parse_index;
 
 pub(crate) const MAX_CLI_THREADS: u64 = 64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReadLayout {
+    SingleEnd,
+    PairedEnd,
+}
+
+const fn caller_compatible_alignment_mode(
+    layout: ReadLayout,
+    profile: LibraryProfile,
+) -> BsbitAlignmentMode {
+    match (layout, profile) {
+        (ReadLayout::SingleEnd, LibraryProfile::Directional) => {
+            BsbitAlignmentMode::CallerCompatibleDirectionalSingle
+        }
+        (ReadLayout::SingleEnd, LibraryProfile::NonDirectional) => {
+            BsbitAlignmentMode::CallerCompatibleNondirectionalSingle
+        }
+        (ReadLayout::PairedEnd, LibraryProfile::Directional) => {
+            BsbitAlignmentMode::CallerCompatibleDirectionalPaired
+        }
+        (ReadLayout::PairedEnd, LibraryProfile::NonDirectional) => {
+            BsbitAlignmentMode::CallerCompatibleNondirectionalPaired
+        }
+    }
+}
 
 fn unused_staging_path(
     target: &Path,

@@ -31,13 +31,6 @@ pub enum AlignmentError {
         /// Candidate reference length.
         length: usize,
     },
-    /// The minimum template span exceeds the maximum.
-    InvertedTemplateSpan {
-        /// Requested minimum span.
-        minimum: u64,
-        /// Requested maximum span.
-        maximum: u64,
-    },
     /// The requested edit budget exceeds the supported maximum.
     UnsupportedEditDistance {
         /// Requested edit-distance budget.
@@ -91,10 +84,6 @@ impl fmt::Display for AlignmentError {
             Self::CandidateEndpointOverflow { start, length } => write!(
                 formatter,
                 "alignment candidate endpoint {start}+{length} overflowed"
-            ),
-            Self::InvertedTemplateSpan { minimum, maximum } => write!(
-                formatter,
-                "paired-end minimum template span {minimum} exceeds maximum {maximum}"
             ),
             Self::UnsupportedEditDistance { requested, maximum } => write!(
                 formatter,

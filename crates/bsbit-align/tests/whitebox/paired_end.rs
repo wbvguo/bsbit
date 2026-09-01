@@ -86,24 +86,14 @@ fn sensitive_profile_is_separate_and_prefers_whole_read_edits() {
 
 #[test]
 fn mapping_options_fix_primary_and_adapter_trimmed_policies() {
-    let default = PairedAlignmentOptions::primary(
+    let constraints = PairConstraints::new(
         LibraryProfile::Directional,
-        PairedSearchMode::Default,
-        0,
-        1_000,
+        TemplateSpanBounds::new(TemplateSpan::new(0), TemplateSpan::new(1_000))
+            .expect("ordered template bounds"),
     );
-    let sensitive = PairedAlignmentOptions::primary(
-        LibraryProfile::Directional,
-        PairedSearchMode::Sensitive,
-        0,
-        1_000,
-    );
-    let trimmed = PairedAlignmentOptions::adapter_trimmed(
-        LibraryProfile::Directional,
-        PairedSearchMode::Sensitive,
-        0,
-        1_000,
-    );
+    let default = PairedAlignmentOptions::primary(constraints, PairedSearchMode::Default);
+    let sensitive = PairedAlignmentOptions::primary(constraints, PairedSearchMode::Sensitive);
+    let trimmed = PairedAlignmentOptions::adapter_trimmed(constraints, PairedSearchMode::Sensitive);
     assert_eq!(
         default.derived_policy(),
         (PAIRED_MAX_EDIT_DISTANCE, false, false)

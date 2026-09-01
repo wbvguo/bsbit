@@ -30,7 +30,9 @@ use crate::parallel::{
 use crate::record_composition::{RecordBuildError, SingleRecordComposer, build_sam_header};
 use crate::{CliError, CliWarning, RunReport};
 
-use super::{internal_search_file_prefix, unused_staging_path};
+use super::{
+    ReadLayout, caller_compatible_alignment_mode, internal_search_file_prefix, unused_staging_path,
+};
 
 const MAX_CLI_READ_BASES: u64 = 1_000_000;
 const MAX_CLI_DESCRIPTION_BYTES: u64 = 1_000_000;
@@ -161,10 +163,8 @@ pub(crate) fn run_single_end(options: &SingleEndCommandOptions) -> Result<RunRep
     let reference_started = options.emit_metrics.then(Instant::now);
     let (reference, semantic_digest) = load_index(options)?;
     let reference_load_ns = elapsed_ns(reference_started);
-    let alignment_mode = match options.library_profile {
-        LibraryProfile::Directional => BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
-        LibraryProfile::NonDirectional => BsbitAlignmentMode::CallerCompatibleNondirectionalSingle,
-    };
+    let alignment_mode =
+        caller_compatible_alignment_mode(ReadLayout::SingleEnd, options.library_profile);
     let completion = run_single_align(
         options,
         &reference,
@@ -456,7 +456,7 @@ fn map_single_records(
         }));
         let mapping_started = options.emit_metrics.then(Instant::now);
         let mapped = aligner
-            .map_reads_for_output_with_profile(
+            .map_reads_for_output(
                 reference,
                 &reads,
                 maximum_edit_distance,

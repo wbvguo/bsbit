@@ -1,12 +1,11 @@
 //! Candidate-frontier construction and ranked exact-block proofs.
 
 use super::{
-    AlignmentError, AlignmentOrientation, Base, CombinedSearchReferenceExt, ConversionPass,
-    FLEXIBLE_NOMINAL_PROOF, MAX_EDIT_DISTANCE, MAX_READ_BASES, MateRescueWindow,
-    PairAlignmentMetrics, ProjectedBase, ProofBlock, RESCUE_BLOCKS, RankedBlockPartition,
-    RankedBlockSeed, RankedBlockSelection, ReadCandidate, ReferenceIndex,
-    SENSITIVE_ADAPTIVE_BOUNDARY_SHIFTS, SENSITIVE_ADAPTIVE_MIN_BLOCK_BASES,
-    SENSITIVE_BALANCED_BOUNDARY_SHIFTS, SENSITIVE_PROOF_BLOCKS,
+    AlignmentError, AlignmentOrientation, Base, CombinedSearchReferenceExt, FLEXIBLE_NOMINAL_PROOF,
+    MAX_EDIT_DISTANCE, MAX_READ_BASES, MateRescueWindow, MateRole, PairAlignmentMetrics,
+    ProjectedBase, ProofBlock, RESCUE_BLOCKS, RankedBlockPartition, RankedBlockSeed,
+    RankedBlockSelection, ReadCandidate, ReferenceIndex, SENSITIVE_ADAPTIVE_BOUNDARY_SHIFTS,
+    SENSITIVE_ADAPTIVE_MIN_BLOCK_BASES, SENSITIVE_BALANCED_BOUNDARY_SHIFTS, SENSITIVE_PROOF_BLOCKS,
     SENSITIVE_SELECTIVE_UNMAPPED_MAX_RETAINED_HITS, SENSITIVE_SELECTIVE_UNMAPPED_MIN_RETAINED_HITS,
     SearchBase, strand_semantics,
 };
@@ -207,17 +206,13 @@ pub(super) fn ranked_block_seed_for_range(
     reference: &ReferenceIndex,
     read: &[Base],
     projected_search: &[SearchBase; MAX_READ_BASES],
-    mate1: bool,
+    mate: MateRole,
     block_ordinal: usize,
     query_start: usize,
     query_end: usize,
 ) -> Result<Option<RankedBlockSeed>, AlignmentError> {
     let block_len = query_end - query_start;
-    let source = if mate1 {
-        &read[query_start..query_end]
-    } else {
-        &read[read.len() - query_end..read.len() - query_start]
-    };
+    let source = mate.query_block(read, query_start, query_end);
     if source.contains(&Base::N) {
         return Ok(None);
     }
@@ -245,7 +240,7 @@ pub(super) fn fill_ranked_block_seed_partition(
     reference: &ReferenceIndex,
     read: &[Base],
     projected_search: &[SearchBase; MAX_READ_BASES],
-    mate1: bool,
+    mate: MateRole,
     block_count: usize,
     boundaries: &[usize; SENSITIVE_PROOF_BLOCKS + 1],
     output: &mut [Option<RankedBlockSeed>; SENSITIVE_PROOF_BLOCKS],
@@ -258,7 +253,7 @@ pub(super) fn fill_ranked_block_seed_partition(
             reference,
             read,
             projected_search,
-            mate1,
+            mate,
             block_ordinal,
             query_start,
             query_end,
@@ -279,7 +274,7 @@ pub(super) fn optimal_adaptive_ranked_block_partition(
     reference: &ReferenceIndex,
     read: &[Base],
     projected_search: &[SearchBase; MAX_READ_BASES],
-    mate1: bool,
+    mate: MateRole,
     block_count: usize,
     maximum_ranked_block_hits: u64,
 ) -> Result<RankedBlockPartition, AlignmentError> {
@@ -338,7 +333,7 @@ pub(super) fn optimal_adaptive_ranked_block_partition(
                     reference,
                     read,
                     projected_search,
-                    mate1,
+                    mate,
                     block_ordinal,
                     query_start,
                     query_end,
@@ -398,7 +393,7 @@ pub(super) fn collect_ranked_block_seeds(
     reference: &ReferenceIndex,
     read: &[Base],
     reversed_projected: &[ProjectedBase],
-    mate1: bool,
+    mate: MateRole,
     maximum_edit_distance: u8,
     maximum_ranked_block_hits: u64,
     output: &mut [Option<RankedBlockSeed>; SENSITIVE_PROOF_BLOCKS],
@@ -425,7 +420,7 @@ pub(super) fn collect_ranked_block_seeds(
         reference,
         read,
         &projected_search,
-        mate1,
+        mate,
         block_count,
         &balanced_boundaries,
         &mut best_seeds,
@@ -435,7 +430,7 @@ pub(super) fn collect_ranked_block_seeds(
             reference,
             read,
             &projected_search,
-            mate1,
+            mate,
             block_count,
             maximum_ranked_block_hits,
         )?
@@ -468,15 +463,11 @@ pub(super) fn collect_ranked_block_seeds(
 pub(super) fn append_ranked_block_candidates(
     reference: &ReferenceIndex,
     read_len: usize,
-    mate1: bool,
+    mate: MateRole,
     seeds: &[Option<RankedBlockSeed>; SENSITIVE_PROOF_BLOCKS],
     candidates: &mut Vec<ReadCandidate>,
 ) -> Result<u64, AlignmentError> {
-    let conversion_pass = if mate1 {
-        ConversionPass::Original
-    } else {
-        ConversionPass::Complementary
-    };
+    let conversion_pass = mate.conversion_pass();
     let query_len = u64::try_from(read_len).expect("bounded read length fits u64");
     let mut located_rows = 0_u64;
     for seed in seeds.iter().flatten() {

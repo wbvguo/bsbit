@@ -1,4 +1,4 @@
-use crate::library::LibraryProfile;
+use crate::library::PairConstraints;
 use crate::search::combined_adaptive::{
     CombinedSearchLimits, DEFAULT_SEARCH_LIMITS, SENSITIVE_SEARCH_LIMITS,
 };
@@ -31,42 +31,29 @@ pub(super) enum AlignmentPhase {
 /// mode. Callers cannot compose internal alignment stages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PairedAlignmentOptions {
-    pub(super) library_profile: LibraryProfile,
+    pub(super) constraints: PairConstraints,
     pub(super) search_mode: PairedSearchMode,
-    pub(super) minimum_template_span: u64,
-    pub(super) maximum_template_span: u64,
     pub(super) phase: AlignmentPhase,
 }
 
 impl PairedAlignmentOptions {
     /// Creates options for the initial complete-read alignment.
     #[must_use]
-    pub const fn primary(
-        library_profile: LibraryProfile,
-        search_mode: PairedSearchMode,
-        minimum_template_span: u64,
-        maximum_template_span: u64,
-    ) -> Self {
+    pub const fn primary(constraints: PairConstraints, search_mode: PairedSearchMode) -> Self {
         Self {
-            library_profile,
+            constraints,
             search_mode,
-            minimum_template_span,
-            maximum_template_span,
             phase: AlignmentPhase::Primary,
         }
     }
 
     pub(super) const fn adapter_trimmed(
-        library_profile: LibraryProfile,
+        constraints: PairConstraints,
         search_mode: PairedSearchMode,
-        minimum_template_span: u64,
-        maximum_template_span: u64,
     ) -> Self {
         Self {
-            library_profile,
+            constraints,
             search_mode,
-            minimum_template_span,
-            maximum_template_span,
             phase: AlignmentPhase::AdapterTrimmed,
         }
     }

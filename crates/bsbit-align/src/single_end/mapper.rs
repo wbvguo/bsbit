@@ -232,60 +232,6 @@ impl SingleBatchAligner {
         }
     }
 
-    /// Maps a batch through the same persisted combined index, adaptive seed
-    /// schedule, and d3/d5 verifier used by paired-end alignment.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unsupported read/edit domain or combined-index failure.
-    #[allow(clippy::too_many_lines)]
-    pub fn map_reads<'a>(
-        &'a mut self,
-        reference: &ReferenceIndex,
-        reads: &[&[Base]],
-        maximum_edit_distance: u8,
-    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        self.map_reads_with_mode(
-            reference,
-            reads,
-            maximum_edit_distance,
-            SingleSearchMode::Default,
-        )
-    }
-
-    /// Maps a batch with the selected single-end candidate-search policy.
-    ///
-    /// Sensitive mode first obtains the default result and then completes the
-    /// bounded seed frontier as a confidence audit. Q20 incumbents at edit
-    /// distance two or better need verification only through distance three;
-    /// weaker results retain the full distance-five verification boundary. A
-    /// different-origin result or a new rescue must be unique at Q20 or above;
-    /// lower-confidence conflicts retain the default representative at Q0. It
-    /// does not apply paired-only mate rescue, template geometry, or
-    /// adapter-pair recovery. This search-only entry point does not apply the
-    /// single-end output adapter policy; callers producing complete directional
-    /// records should use [`Self::map_reads_for_output`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an unsupported read/edit domain or combined-index failure.
-    #[allow(clippy::too_many_lines)]
-    pub fn map_reads_with_mode<'a>(
-        &'a mut self,
-        reference: &ReferenceIndex,
-        reads: &[&[Base]],
-        maximum_edit_distance: u8,
-        search_mode: SingleSearchMode,
-    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        self.map_reads_with_profile_and_mode(
-            reference,
-            reads,
-            maximum_edit_distance,
-            LibraryProfile::Directional,
-            search_mode,
-        )
-    }
-
     /// Maps a batch through the conversion passes selected by one shared
     /// single-end/paired-end library profile.
     ///
@@ -296,7 +242,7 @@ impl SingleBatchAligner {
     /// # Errors
     ///
     /// Returns an unsupported read/edit domain or combined-index failure.
-    pub fn map_reads_with_profile_and_mode<'a>(
+    pub fn map_reads_with_mode<'a>(
         &'a mut self,
         reference: &ReferenceIndex,
         reads: &[&[Base]],
@@ -304,52 +250,23 @@ impl SingleBatchAligner {
         library_profile: LibraryProfile,
         search_mode: SingleSearchMode,
     ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        let passes = library_profile.conversion_passes();
-        let first = passes[0];
+        let (first, second) = match library_profile.conversion_passes() {
+            [first] => (*first, None),
+            [first, second] => (*first, Some(*second)),
+            _ => unreachable!("a library profile has one or two conversion passes"),
+        };
         self.map_reads_pass(reference, reads, maximum_edit_distance, search_mode, first)?;
-        if passes.len() == 1 {
+        let Some(second) = second else {
             return Ok(&self.results);
-        }
+        };
 
         self.primary_pass_results.clear();
         self.primary_pass_results.extend_from_slice(&self.results);
-        self.map_reads_pass(
-            reference,
-            reads,
-            maximum_edit_distance,
-            search_mode,
-            passes[1],
-        )?;
+        self.map_reads_pass(reference, reads, maximum_edit_distance, search_mode, second)?;
         for (complementary, original) in self.results.iter_mut().zip(&self.primary_pass_results) {
             *complementary = merge_non_directional_results(*original, *complementary);
         }
         Ok(&self.results)
-    }
-
-    /// Maps each read against OT, OB, CTOT, and CTOB, then makes one global
-    /// single-end placement decision across both directional passes.
-    ///
-    /// Equal-best evidence in the original and complementary passes is
-    /// ambiguous. A weaker cross-pass placement contributes to MAPQ separation
-    /// and repeat pressure for the selected result.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unsupported read/edit domain or combined-index failure.
-    pub fn map_reads_non_directional_with_mode<'a>(
-        &'a mut self,
-        reference: &ReferenceIndex,
-        reads: &[&[Base]],
-        maximum_edit_distance: u8,
-        search_mode: SingleSearchMode,
-    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        self.map_reads_with_profile_and_mode(
-            reference,
-            reads,
-            maximum_edit_distance,
-            LibraryProfile::NonDirectional,
-            search_mode,
-        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -481,33 +398,6 @@ impl SingleBatchAligner {
         Ok(&self.results)
     }
 
-    /// Maps directional complete reads and applies qualified single-end 3'
-    /// adapter recovery.
-    ///
-    /// This compatibility entry point preserves the original directional API.
-    /// New orchestration that already owns a library profile should use
-    /// [`Self::map_reads_for_output_with_profile`].
-    ///
-    /// # Errors
-    ///
-    /// Returns an unsupported read/edit domain or combined-index failure from
-    /// any primary, trimmed, or stability mapping phase.
-    pub fn map_reads_for_output<'a>(
-        &'a mut self,
-        reference: &ReferenceIndex,
-        reads: &[&[Base]],
-        maximum_edit_distance: u8,
-        search_mode: SingleSearchMode,
-    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        self.map_reads_for_output_with_profile(
-            reference,
-            reads,
-            maximum_edit_distance,
-            LibraryProfile::Directional,
-            search_mode,
-        )
-    }
-
     /// Maps complete reads under one shared library profile and applies the
     /// qualified single-end output policy.
     ///
@@ -533,7 +423,7 @@ impl SingleBatchAligner {
     /// matching adapter result, which violates this method's construction
     /// invariant.
     #[allow(clippy::too_many_lines)]
-    pub fn map_reads_for_output_with_profile<'a>(
+    pub fn map_reads_for_output<'a>(
         &'a mut self,
         reference: &ReferenceIndex,
         reads: &[&[Base]],
@@ -541,7 +431,7 @@ impl SingleBatchAligner {
         library_profile: LibraryProfile,
         search_mode: SingleSearchMode,
     ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        self.map_reads_with_profile_and_mode(
+        self.map_reads_with_mode(
             reference,
             reads,
             maximum_edit_distance,
@@ -572,7 +462,7 @@ impl SingleBatchAligner {
         let mut adapter_results = vec![None; reads.len()];
         {
             let remapped = self
-                .map_reads_with_profile_and_mode(
+                .map_reads_with_mode(
                     reference,
                     &clipped_reads,
                     maximum_edit_distance,
@@ -611,7 +501,7 @@ impl SingleBatchAligner {
 
             if !stability_reads.is_empty() {
                 let stability = self
-                    .map_reads_with_profile_and_mode(
+                    .map_reads_with_mode(
                         reference,
                         &stability_reads,
                         maximum_edit_distance,

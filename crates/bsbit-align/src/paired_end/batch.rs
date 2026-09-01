@@ -22,13 +22,14 @@ use super::{
     BWA_MATCH_SCORE, BWA_MISMATCH_PENALTY, BWA_NEAR_SUBOPTIMAL_DELTA, Base, BisulfiteStrand,
     CombinedSearchLimits, CombinedSearchReferenceExt, CombinedSeedMatches,
     CombinedTwoLaneSearchState, ConversionPass, DIRECT_SINGLETON_PROOF, INITIAL_EDIT_DISTANCE,
-    INITIAL_SEARCH_LIMITS, MAX_EDIT_DISTANCE, MAX_READ_BASES, MIN_SUFFIX_BASES,
-    PAIRED_MAX_EDIT_DISTANCE, PairAlignmentMetrics, PairMappingStatus, PairWorkspace,
-    PairedAlignmentOptions, PairedAlignmentResult, PairedAlignmentWorkMetrics, PairedBatchAligner,
-    PairedBatchResult, PairedPlacement, PairedSearchMode, ProjectedBase, RankedBlockSeed,
-    RankedBlockSelection, ReadAlignmentMetrics, ReadCandidate, ReadWorkspace, ReferenceIndex,
-    SEMI_GLOBAL_CLIP_PENALTY, SEMI_GLOBAL_MAX_EXACT_ANCHOR_HITS, SEMI_GLOBAL_MIN_ALIGNED_BASES,
-    SENSITIVE_MIN_EVENT_PENALTY, SENSITIVE_POSITIVE_MAPQ_REPORTING_MAX_RETAINED_HITS,
+    INITIAL_SEARCH_LIMITS, MATE_CONVERSION_PASSES, MAX_EDIT_DISTANCE, MAX_READ_BASES,
+    MIN_SUFFIX_BASES, MateRole, PAIRED_MAX_EDIT_DISTANCE, PairAlignmentMetrics, PairMappingStatus,
+    PairWorkspace, PairedAlignmentOptions, PairedAlignmentResult, PairedAlignmentWorkMetrics,
+    PairedBatchAligner, PairedBatchResult, PairedPlacement, PairedSearchMode, ProjectedBase,
+    RankedBlockSeed, RankedBlockSelection, ReadAlignmentMetrics, ReadCandidate, ReadWorkspace,
+    ReferenceIndex, SEMI_GLOBAL_CLIP_PENALTY, SEMI_GLOBAL_MAX_EXACT_ANCHOR_HITS,
+    SEMI_GLOBAL_MIN_ALIGNED_BASES, SENSITIVE_MIN_EVENT_PENALTY,
+    SENSITIVE_POSITIVE_MAPQ_REPORTING_MAX_RETAINED_HITS,
     SENSITIVE_POSITIVE_MAPQ_REPORTING_MIN_RETAINED_HITS, SENSITIVE_PROOF_BLOCKS,
     SENSITIVE_RANKED_BLOCK_HITS, SENSITIVE_REPEAT_RECHECK_ROWS,
     SENSITIVE_SELECTIVE_UNMAPPED_RANKED_BLOCK_HITS, SENSITIVE_UNMAPPED_RANKED_BLOCK_HITS,
@@ -49,6 +50,7 @@ impl PairedBatchAligner {
             projections: Vec::with_capacity(pair_capacity),
             first_seeds: Vec::with_capacity(pair_capacity.saturating_mul(2)),
             results: Vec::with_capacity(pair_capacity),
+            primary_pass_results: Vec::with_capacity(pair_capacity),
             collect_work_metrics: false,
             last_work_metrics: PairedAlignmentWorkMetrics::default(),
         }
@@ -109,8 +111,7 @@ impl PairedBatchAligner {
     ///
     /// # Errors
     ///
-    /// Returns [`AlignmentError`] for an unsupported library profile,
-    /// invalid template spans, or any mapping failure.
+    /// Returns [`AlignmentError`] when a qualified mapping phase fails.
     fn map_pairs_combined<'a>(
         &'a mut self,
         reference: &ReferenceIndex,
@@ -118,35 +119,44 @@ impl PairedBatchAligner {
         options: PairedAlignmentOptions,
     ) -> Result<&'a [PairedBatchResult], AlignmentError> {
         let (maximum_edit_distance, window_rescue, semi_global) = options.derived_policy();
-        let passes = options.library_profile.conversion_passes();
+        let profile = options.constraints.profile();
+        let bounds = options.constraints.span_bounds();
+        let minimum_template_span = bounds.minimum().get();
+        let maximum_template_span = bounds.maximum().get();
+        let (first, second) = match profile.conversion_passes() {
+            [first] => (*first, None),
+            [first, second] => (*first, Some(*second)),
+            _ => unreachable!("a library profile has one or two conversion passes"),
+        };
         self.map_pair_conversion_pass(
             reference,
             reads,
             maximum_edit_distance,
-            options.minimum_template_span,
-            options.maximum_template_span,
+            minimum_template_span,
+            maximum_template_span,
             window_rescue,
             semi_global,
             options.search_mode,
-            passes[0],
+            first,
         )?;
-        if passes.len() == 1 {
+        let Some(second) = second else {
             return Ok(&self.results);
-        }
+        };
 
-        let original = self.results.clone();
+        self.primary_pass_results.clear();
+        self.primary_pass_results.extend_from_slice(&self.results);
         self.map_pair_conversion_pass(
             reference,
             reads,
             maximum_edit_distance,
-            options.minimum_template_span,
-            options.maximum_template_span,
+            minimum_template_span,
+            maximum_template_span,
             window_rescue,
             semi_global,
             options.search_mode,
-            passes[1],
+            second,
         )?;
-        for (complementary, original) in self.results.iter_mut().zip(&original) {
+        for (complementary, original) in self.results.iter_mut().zip(&self.primary_pass_results) {
             *complementary = merge_non_directional_batch_results(original, complementary);
         }
         Ok(&self.results)
@@ -160,8 +170,7 @@ impl PairedBatchAligner {
     ///
     /// # Errors
     ///
-    /// Returns [`AlignmentError`] when the template span is invalid
-    /// or any qualified mapping phase fails.
+    /// Returns [`AlignmentError`] when any qualified mapping phase fails.
     ///
     /// # Panics
     ///
@@ -179,7 +188,8 @@ impl PairedBatchAligner {
     ) -> Result<Vec<PairedAlignmentResult>, AlignmentError> {
         self.last_work_metrics = PairedAlignmentWorkMetrics::default();
         let directional_passes_per_pair =
-            u64::from(options.library_profile.conversion_pass_count());
+            u64::try_from(options.constraints.profile().conversion_passes().len())
+                .expect("a library profile has at most two conversion passes");
         let primary = self.map_pairs_combined(reference, reads, options)?.to_vec();
         self.observe_work_metrics(&primary, directional_passes_per_pair);
         let mut adapter_results = vec![None; reads.len()];
@@ -221,12 +231,8 @@ impl PairedBatchAligner {
         }
 
         if !clipped_reads.is_empty() {
-            let adapter_options = PairedAlignmentOptions::adapter_trimmed(
-                options.library_profile,
-                options.search_mode,
-                options.minimum_template_span,
-                options.maximum_template_span,
-            );
+            let adapter_options =
+                PairedAlignmentOptions::adapter_trimmed(options.constraints, options.search_mode);
             let remapped = self
                 .map_pairs_combined(reference, &clipped_reads, adapter_options)?
                 .to_vec();
@@ -417,8 +423,8 @@ impl PairedBatchAligner {
                     *pair,
                     selected,
                     PAIRED_MAX_EDIT_DISTANCE,
-                    options.minimum_template_span,
-                    options.maximum_template_span,
+                    options.constraints.span_bounds().minimum().get(),
+                    options.constraints.span_bounds().maximum().get(),
                 )
             } else {
                 selected
@@ -517,12 +523,7 @@ impl PairedBatchAligner {
                 maximum: MAX_EDIT_DISTANCE,
             });
         }
-        if minimum_template_span > maximum_template_span {
-            return Err(AlignmentError::InvertedTemplateSpan {
-                minimum: minimum_template_span,
-                maximum: maximum_template_span,
-            });
-        }
+        debug_assert!(minimum_template_span <= maximum_template_span);
         if reads.len().saturating_mul(2) > 64 {
             return Err(AlignmentError::LocatedCountOverflow);
         }
@@ -530,10 +531,14 @@ impl PairedBatchAligner {
         self.projections
             .resize(reads.len(), [[ProjectedBase::A; MAX_READ_BASES]; 2]);
         for (projection, pair) in self.projections.iter_mut().zip(reads) {
-            prepare_combined_projection(pair[0], ConversionPass::Original, &mut projection[0])?;
+            prepare_combined_projection(
+                pair[0],
+                MateRole::First.conversion_pass(),
+                &mut projection[0],
+            )?;
             prepare_combined_projection(
                 pair[1],
-                ConversionPass::Complementary,
+                MateRole::Second.conversion_pass(),
                 &mut projection[1],
             )?;
         }
@@ -1167,23 +1172,22 @@ impl PairWorkspace {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn collect_ranked_block_seeds_for_lane(
+    fn collect_ranked_block_seeds_for_mate(
         reference: &ReferenceIndex,
         read: &[Base],
         reversed_projected: &[ProjectedBase],
-        lane: usize,
+        mate: MateRole,
         maximum_edit_distance: u8,
         maximum_ranked_block_hits: u64,
         output: &mut [Option<RankedBlockSeed>; SENSITIVE_PROOF_BLOCKS],
     ) -> Result<Option<RankedBlockSelection>, AlignmentError> {
         let budget = usize::from(maximum_edit_distance);
-        debug_assert!(lane < 2);
         debug_assert!(budget < SENSITIVE_PROOF_BLOCKS);
         let selection = collect_ranked_block_seeds(
             reference,
             read,
             reversed_projected,
-            lane == 0,
+            mate,
             maximum_edit_distance,
             maximum_ranked_block_hits,
             output,
@@ -1191,24 +1195,22 @@ impl PairWorkspace {
         Ok(selection)
     }
 
-    fn append_ranked_block_candidates_for_lane(
+    fn append_ranked_block_candidates_for_mate(
         &mut self,
         reference: &ReferenceIndex,
         read_len: usize,
-        lane: usize,
+        mate: MateRole,
         maximum_edit_distance: u8,
         seeds: &[Option<RankedBlockSeed>; SENSITIVE_PROOF_BLOCKS],
     ) -> Result<u64, AlignmentError> {
         let budget = usize::from(maximum_edit_distance);
-        debug_assert!(lane < 2);
         debug_assert!(budget < SENSITIVE_PROOF_BLOCKS);
-        let candidates = if lane == 0 {
-            &mut self.mate1.candidate_nominals
-        } else {
-            &mut self.mate2.candidate_nominals
+        let candidates = match mate {
+            MateRole::First => &mut self.mate1.candidate_nominals,
+            MateRole::Second => &mut self.mate2.candidate_nominals,
         };
         let located_rows =
-            append_ranked_block_candidates(reference, read_len, lane == 0, seeds, candidates)?;
+            append_ranked_block_candidates(reference, read_len, mate, seeds, candidates)?;
         Ok(located_rows)
     }
 
@@ -1257,7 +1259,7 @@ impl PairWorkspace {
             [read1, read2],
             projected,
             first_seeds,
-            [ConversionPass::Original, ConversionPass::Complementary],
+            MATE_CONVERSION_PASSES,
             search_limits,
             &mut self.mate1.candidate_nominals,
             &mut self.mate2.candidate_nominals,
@@ -1335,7 +1337,7 @@ impl PairWorkspace {
             None
         };
         let (mate1_metrics, mate2_metrics, window_rescue_attempted) = match rescue_anchor {
-            Some(0) => {
+            Some(MateRole::First) => {
                 let (anchors, mate1_metrics) = self.mate1.verify_sorted_candidates_with_budget(
                     reference,
                     read1,
@@ -1355,7 +1357,7 @@ impl PairWorkspace {
                         read2,
                         projected[1],
                         anchors,
-                        false,
+                        MateRole::Second,
                         maximum_template_span,
                         maximum_edit_distance,
                         preserve_fallback_frontier,
@@ -1365,7 +1367,7 @@ impl PairWorkspace {
                     (mate1_metrics, rescued_metrics, true)
                 }
             }
-            Some(1) => {
+            Some(MateRole::Second) => {
                 let (anchors, mate2_metrics) = self.mate2.verify_sorted_candidates_with_budget(
                     reference,
                     read2,
@@ -1385,7 +1387,7 @@ impl PairWorkspace {
                         read1,
                         projected[0],
                         anchors,
-                        true,
+                        MateRole::First,
                         maximum_template_span,
                         maximum_edit_distance,
                         preserve_fallback_frontier,
@@ -1395,7 +1397,6 @@ impl PairWorkspace {
                     (rescued_metrics, mate2_metrics, true)
                 }
             }
-            Some(_) => unreachable!("a pair has exactly two mates"),
             None => {
                 retain_nominal_pair_geometry(
                     &mut self.mate1.candidate_nominals,
@@ -1554,7 +1555,7 @@ impl PairWorkspace {
             reference,
             [read1, read2],
             projected,
-            [ConversionPass::Original, ConversionPass::Complementary],
+            MATE_CONVERSION_PASSES,
             &mut self.combined_search_state,
             &mut self.mate1.candidate_nominals,
             &mut self.mate2.candidate_nominals,
@@ -1616,20 +1617,20 @@ impl PairWorkspace {
         maximum_ranked_block_hits: u64,
     ) -> Result<Option<(PairMappingStatus, PairAlignmentMetrics, Option<u8>)>, AlignmentError> {
         let mut seed_sets = [[None; SENSITIVE_PROOF_BLOCKS]; 2];
-        let first_selection = Self::collect_ranked_block_seeds_for_lane(
+        let first_selection = Self::collect_ranked_block_seeds_for_mate(
             reference,
             read1,
             projected[0],
-            0,
+            MateRole::First,
             maximum_edit_distance,
             maximum_ranked_block_hits,
             &mut seed_sets[0],
         )?;
-        let second_selection = Self::collect_ranked_block_seeds_for_lane(
+        let second_selection = Self::collect_ranked_block_seeds_for_mate(
             reference,
             read2,
             projected[1],
-            1,
+            MateRole::Second,
             maximum_edit_distance,
             maximum_ranked_block_hits,
             &mut seed_sets[1],
@@ -1649,17 +1650,17 @@ impl PairWorkspace {
             self.mate2.candidates.clear();
             self.mate2.candidate_nominals.clear();
             self.mate2.placements.clear();
-            let mate1_rows = self.append_ranked_block_candidates_for_lane(
+            let mate1_rows = self.append_ranked_block_candidates_for_mate(
                 reference,
                 read1.len(),
-                0,
+                MateRole::First,
                 maximum_edit_distance,
                 &seed_sets[0],
             )?;
-            let mate2_rows = self.append_ranked_block_candidates_for_lane(
+            let mate2_rows = self.append_ranked_block_candidates_for_mate(
                 reference,
                 read2.len(),
-                1,
+                MateRole::Second,
                 maximum_edit_distance,
                 &seed_sets[1],
             )?;
@@ -1732,17 +1733,18 @@ impl PairWorkspace {
             }
         }
 
-        let anchor_lane = match (first_selection, second_selection) {
+        let anchor_mate = match (first_selection, second_selection) {
             (None, None) => return Ok(None),
-            (Some(_), None) => 0,
-            (None, Some(_)) => 1,
+            (Some(_), None) => MateRole::First,
+            (None, Some(_)) => MateRole::Second,
             (Some(first), Some(second)) => match (first.complete, second.complete) {
-                (true, false) => 0,
-                (false, true) => 1,
-                _ => usize::from(second.retained_hits < first.retained_hits),
+                (true, false) => MateRole::First,
+                (false, true) => MateRole::Second,
+                _ if second.retained_hits < first.retained_hits => MateRole::Second,
+                _ => MateRole::First,
             },
         };
-        let anchor_frontier_complete = [first_selection, second_selection][anchor_lane]
+        let anchor_frontier_complete = [first_selection, second_selection][anchor_mate.index()]
             .expect("selected anchor has retained hits")
             .complete;
 
@@ -1755,19 +1757,19 @@ impl PairWorkspace {
         self.mate2.placements.clear();
         self.ranked_anchor_placements.clear();
 
-        let located_rows = if anchor_lane == 0 {
-            self.append_ranked_block_candidates_for_lane(
+        let located_rows = if anchor_mate == MateRole::First {
+            self.append_ranked_block_candidates_for_mate(
                 reference,
                 read1.len(),
-                0,
+                MateRole::First,
                 maximum_edit_distance,
                 &seed_sets[0],
             )?
         } else {
-            self.append_ranked_block_candidates_for_lane(
+            self.append_ranked_block_candidates_for_mate(
                 reference,
                 read2.len(),
-                1,
+                MateRole::Second,
                 maximum_edit_distance,
                 &seed_sets[1],
             )?
@@ -1776,7 +1778,7 @@ impl PairWorkspace {
             located_rows,
             ..ReadAlignmentMetrics::default()
         };
-        let anchor_metrics = if anchor_lane == 0 {
+        let anchor_metrics = if anchor_mate == MateRole::First {
             let (_, metrics) = self.mate1.verify_candidates_with_budget(
                 reference,
                 read1,
@@ -1799,19 +1801,19 @@ impl PairWorkspace {
         };
 
         let (mate1_metrics, mate2_metrics) = if self.ranked_anchor_placements.is_empty() {
-            if anchor_lane == 0 {
+            if anchor_mate == MateRole::First {
                 (anchor_metrics, ReadAlignmentMetrics::default())
             } else {
                 (ReadAlignmentMetrics::default(), anchor_metrics)
             }
-        } else if anchor_lane == 0 {
+        } else if anchor_mate == MateRole::First {
             let partner_metrics = rescue_from_ranked_anchor_windows(
                 &mut self.mate2,
                 &mut self.rescue_windows,
                 reference,
                 read2,
                 &self.ranked_anchor_placements,
-                false,
+                MateRole::Second,
                 maximum_template_span,
                 maximum_edit_distance,
             )?;
@@ -1823,7 +1825,7 @@ impl PairWorkspace {
                 reference,
                 read1,
                 &self.ranked_anchor_placements,
-                true,
+                MateRole::First,
                 maximum_template_span,
                 maximum_edit_distance,
             )?;
@@ -1903,20 +1905,20 @@ impl PairWorkspace {
         }
 
         let mut seed_sets = [[None; SENSITIVE_PROOF_BLOCKS]; 2];
-        let first_selection = Self::collect_ranked_block_seeds_for_lane(
+        let first_selection = Self::collect_ranked_block_seeds_for_mate(
             reference,
             read1,
             projected[0],
-            0,
+            MateRole::First,
             proof_budget,
             SENSITIVE_RANKED_BLOCK_HITS,
             &mut seed_sets[0],
         )?;
-        let second_selection = Self::collect_ranked_block_seeds_for_lane(
+        let second_selection = Self::collect_ranked_block_seeds_for_mate(
             reference,
             read2,
             projected[1],
-            1,
+            MateRole::Second,
             proof_budget,
             SENSITIVE_RANKED_BLOCK_HITS,
             &mut seed_sets[1],
@@ -1949,17 +1951,17 @@ impl PairWorkspace {
         self.mate2.candidates.clear();
         self.mate2.candidate_nominals.clear();
         self.mate2.placements.clear();
-        let mate1_rows = self.append_ranked_block_candidates_for_lane(
+        let mate1_rows = self.append_ranked_block_candidates_for_mate(
             reference,
             read1.len(),
-            0,
+            MateRole::First,
             proof_budget,
             &seed_sets[0],
         )?;
-        let mate2_rows = self.append_ranked_block_candidates_for_lane(
+        let mate2_rows = self.append_ranked_block_candidates_for_mate(
             reference,
             read2.len(),
-            1,
+            MateRole::Second,
             proof_budget,
             &seed_sets[1],
         )?;
@@ -2203,12 +2205,12 @@ impl PairWorkspace {
         let mut second_projected = [SearchBase::A; MAX_READ_BASES];
         prepare_combined_search_projection(
             retained[0],
-            ConversionPass::Original,
+            MateRole::First.conversion_pass(),
             &mut first_projected,
         )?;
         prepare_combined_search_projection(
             retained[1],
-            ConversionPass::Complementary,
+            MateRole::Second.conversion_pass(),
             &mut second_projected,
         )?;
         let projected = [
@@ -2228,9 +2230,10 @@ impl PairWorkspace {
             return Ok(true);
         };
         let seeds = [first_seed, second_seed];
-        for lane in 0..2 {
-            if seeds[lane].matched_bases()
-                != u64::try_from(retained[lane].len()).expect("bounded retained length fits u64")
+        for mate in MateRole::ALL {
+            let index = mate.index();
+            if seeds[index].matched_bases()
+                != u64::try_from(retained[index].len()).expect("bounded retained length fits u64")
             {
                 return Err(AlignmentError::CombinedIndex);
             }
@@ -2239,20 +2242,26 @@ impl PairWorkspace {
         if hits == [1, 1] {
             return Ok(false);
         }
-        let anchor_lane = usize::from(hits[1] < hits[0]);
-        if hits[anchor_lane] > SEMI_GLOBAL_MAX_EXACT_ANCHOR_HITS {
+        let anchor_mate = if hits[1] < hits[0] {
+            MateRole::Second
+        } else {
+            MateRole::First
+        };
+        let anchor_index = anchor_mate.index();
+        if hits[anchor_index] > SEMI_GLOBAL_MAX_EXACT_ANCHOR_HITS {
             return Ok(true);
         }
-        let other_lane = 1 - anchor_lane;
+        let other_mate = anchor_mate.other();
+        let other_index = other_mate.index();
         self.exact_anchor_candidates.clear();
         reference
             .visit_combined_seed(
-                seeds[anchor_lane],
+                seeds[anchor_index],
                 0,
-                u64::try_from(retained[anchor_lane].len())
+                u64::try_from(retained[anchor_index].len())
                     .expect("bounded retained length fits u64"),
                 &mut |hit| {
-                    if let Some(candidate) = relabel_exact_retained_hit(hit, anchor_lane) {
+                    if let Some(candidate) = relabel_exact_retained_hit(hit, anchor_mate) {
                         self.exact_anchor_candidates.push(candidate);
                     }
                     true
@@ -2268,43 +2277,42 @@ impl PairWorkspace {
         let mut alternative = false;
         reference
             .visit_combined_seed(
-                seeds[other_lane],
+                seeds[other_index],
                 0,
-                u64::try_from(retained[other_lane].len())
+                u64::try_from(retained[other_index].len())
                     .expect("bounded retained length fits u64"),
                 &mut |hit| {
-                    let Some(other_candidate) = relabel_exact_retained_hit(hit, other_lane) else {
+                    let Some(other_candidate) = relabel_exact_retained_hit(hit, other_mate) else {
                         return true;
                     };
                     let Some(other) = exact_retained_placement(
                         other_candidate,
-                        placements[other_lane],
-                        retained[other_lane].len(),
+                        placements[other_index],
+                        retained[other_index].len(),
                     ) else {
                         return true;
                     };
                     for &anchor_candidate in anchors {
                         let Some(anchor) = exact_retained_placement(
                             anchor_candidate,
-                            placements[anchor_lane],
-                            retained[anchor_lane].len(),
+                            placements[anchor_index],
+                            retained[anchor_index].len(),
                         ) else {
                             continue;
                         };
-                        let pair = if anchor_lane == 0 {
-                            exact_compatible_pair(
+                        let pair = match anchor_mate {
+                            MateRole::First => exact_compatible_pair(
                                 anchor,
                                 other,
                                 minimum_template_span,
                                 maximum_template_span,
-                            )
-                        } else {
-                            exact_compatible_pair(
+                            ),
+                            MateRole::Second => exact_compatible_pair(
                                 other,
                                 anchor,
                                 minimum_template_span,
                                 maximum_template_span,
-                            )
+                            ),
                         };
                         if pair.is_some_and(|pair| {
                             pair_origin_key(pair, read1.len(), read2.len()) != selected_origin
@@ -2468,29 +2476,42 @@ fn select_combined_window_rescue_anchor(
     first_seeds: [Option<CombinedSeedMatches>; 2],
     mate1: &[ReadCandidate],
     mate2: &[ReadCandidate],
-) -> Option<usize> {
+) -> Option<MateRole> {
     let pools = [mate1, mate2];
-    let evidence = core::array::from_fn::<_, 2, _>(|mate| {
-        let seed = first_seeds[mate]?;
-        if seed.exact_hit_count() != 1 || pools[mate].is_empty() {
+    let evidence = MateRole::ALL.map(|mate| {
+        let index = mate.index();
+        let seed = first_seeds[index]?;
+        if seed.exact_hit_count() != 1 || pools[index].is_empty() {
             return None;
         }
-        let direct = pools[mate]
+        let direct = pools[index]
             .iter()
             .any(|candidate| candidate.proof_mask & DIRECT_SINGLETON_PROOF != 0);
-        Some((direct, seed.matched_bases(), pools[mate].len()))
+        Some((direct, seed.matched_bases(), pools[index].len()))
     });
     match (evidence[0], evidence[1]) {
         (None, None) => None,
-        (Some(_), None) => Some(0),
-        (None, Some(_)) => Some(1),
+        (Some(_), None) => Some(MateRole::First),
+        (None, Some(_)) => Some(MateRole::Second),
         (Some(first), Some(second)) => {
             if first.0 != second.0 {
-                Some(usize::from(!first.0))
+                Some(if first.0 {
+                    MateRole::First
+                } else {
+                    MateRole::Second
+                })
             } else if first.1 != second.1 {
-                Some(usize::from(first.1 < second.1))
+                Some(if first.1 > second.1 {
+                    MateRole::First
+                } else {
+                    MateRole::Second
+                })
             } else {
-                Some(usize::from(first.2 > second.2))
+                Some(if first.2 <= second.2 {
+                    MateRole::First
+                } else {
+                    MateRole::Second
+                })
             }
         }
     }
@@ -2508,7 +2529,7 @@ fn nominal_pair_geometry_exists(
         nominal_partner_exists(
             left,
             mate2,
-            true,
+            MateRole::First,
             read1_len,
             read2_len,
             maximum_span,
@@ -2529,7 +2550,7 @@ fn retain_nominal_pair_geometry(
         nominal_partner_exists(
             *left,
             mate2,
-            true,
+            MateRole::First,
             read1_len,
             read2_len,
             maximum_span,
@@ -2540,7 +2561,7 @@ fn retain_nominal_pair_geometry(
         nominal_partner_exists(
             *right,
             mate1,
-            false,
+            MateRole::Second,
             read1_len,
             read2_len,
             maximum_span,
@@ -2552,18 +2573,18 @@ fn retain_nominal_pair_geometry(
 fn nominal_partner_exists(
     candidate: ReadCandidate,
     pool: &[ReadCandidate],
-    candidate_is_mate1: bool,
+    candidate_mate: MateRole,
     read1_len: usize,
     read2_len: usize,
     maximum_span: u64,
     maximum_edit_distance: u8,
 ) -> bool {
     let edit_budget = u64::from(maximum_edit_distance);
-    let target = match (candidate_is_mate1, candidate.strand()) {
-        (true, BisulfiteStrand::OT) => BisulfiteStrand::CTOT,
-        (true, BisulfiteStrand::OB) => BisulfiteStrand::CTOB,
-        (false, BisulfiteStrand::CTOT) => BisulfiteStrand::OT,
-        (false, BisulfiteStrand::CTOB) => BisulfiteStrand::OB,
+    let target = match (candidate_mate, candidate.strand()) {
+        (MateRole::First, BisulfiteStrand::OT) => BisulfiteStrand::CTOT,
+        (MateRole::First, BisulfiteStrand::OB) => BisulfiteStrand::CTOB,
+        (MateRole::Second, BisulfiteStrand::CTOT) => BisulfiteStrand::OT,
+        (MateRole::Second, BisulfiteStrand::CTOB) => BisulfiteStrand::OB,
         _ => return false,
     };
     let lower_start = candidate.start().saturating_sub(maximum_span);
@@ -2577,10 +2598,9 @@ fn nominal_partner_exists(
             <= (target, candidate.contig_ordinal(), upper_start)
     });
     pool[lower..upper].iter().any(|partner| {
-        let (left, right) = if candidate_is_mate1 {
-            (candidate, *partner)
-        } else {
-            (*partner, candidate)
+        let (left, right) = match candidate_mate {
+            MateRole::First => (candidate, *partner),
+            MateRole::Second => (*partner, candidate),
         };
         match (left.strand(), right.strand()) {
             (BisulfiteStrand::OT, BisulfiteStrand::CTOT) => {

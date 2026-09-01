@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::Instant;
 
-use bsbit_align::library::{LibraryProfile, TemplateSpan, TemplateSpanBounds};
+use bsbit_align::library::{LibraryProfile, PairConstraints, TemplateSpan, TemplateSpanBounds};
 use bsbit_align::materialize::traceback_read_placement;
 use bsbit_align::paired_end::{
     PAIRED_ALIGNMENT_BATCH_SIZE, PAIRED_MAX_EDIT_DISTANCE, PairedAlignmentOptions,
@@ -26,15 +26,14 @@ use bsbit_core::sequence::NormalizedSequence;
 use bsbit_hts::{
     AlignmentAuxiliaryMode, AlignmentPlacement, AlignmentRead, AlignmentRecordBatch,
     AlignmentRecordLimits, BamStagingWriter, BorrowedAlignmentRead, BorrowedFastqRecord,
-    BsbitAlignmentMode, BsbitProgramProvenance, DecodedFastqReader, FastqRecordBatch, SamHeader,
-    TextRecordLimits,
+    BsbitProgramProvenance, DecodedFastqReader, FastqRecordBatch, SamHeader, TextRecordLimits,
 };
 use bsbit_index::reference::{ReferenceIndex, ReferenceQueryDiagnostics};
 use bsbit_index::storage::combined::{
     CombinedIndexSaStride, combined_index_sa_stride_hint, load_combined_reference_catalog,
 };
 
-use super::internal_search_file_prefix;
+use super::{ReadLayout, caller_compatible_alignment_mode, internal_search_file_prefix};
 use crate::command::single_end::{SingleEndCommandOptions, run_single_end};
 use crate::cpu_placement::CpuPlacement;
 use crate::record_composition::{PairedRecordComposer, build_sam_header};
@@ -166,12 +165,6 @@ pub(crate) struct Options {
     minimum_template_span: u64,
     maximum_template_span: u64,
     emit_metrics: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ReadLayout {
-    SingleEnd,
-    PairedEnd,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -368,6 +361,7 @@ pub(crate) fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         TemplateSpan::new(options.minimum_template_span),
         TemplateSpan::new(options.maximum_template_span),
     )?;
+    let constraints = PairConstraints::new(options.library_profile, bounds);
     let mut observation = Observation::default();
     let _coordinator_affinity = cpu_placement.pin_auxiliary_scoped();
     let consume_result = consume_batches(
@@ -375,10 +369,9 @@ pub(crate) fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
         receiver,
         &alignment_sender,
         &mut observation,
-        bounds,
+        constraints,
         limits,
         options.output_contract,
-        options.library_profile,
         options.search_mode,
         options.read_output,
         options.emit_metrics,
@@ -450,10 +443,8 @@ fn load_alignment_reference(
         load_combined_reference_catalog(&options.index, None, &internal_prefix, options.threads)?;
     let semantic_digest = loaded.summary().semantic_digest();
     let reference = loaded.into_index();
-    let alignment_mode = match options.library_profile {
-        LibraryProfile::Directional => BsbitAlignmentMode::CallerCompatibleDirectionalPaired,
-        LibraryProfile::NonDirectional => BsbitAlignmentMode::CallerCompatibleNondirectionalPaired,
-    };
+    let alignment_mode =
+        caller_compatible_alignment_mode(ReadLayout::PairedEnd, options.library_profile);
     let header = build_sam_header(&reference, limits)?.with_bsbit_provenance(
         BsbitProgramProvenance::new(semantic_digest.into_bytes(), alignment_mode),
         limits,
@@ -579,10 +570,9 @@ fn consume_batches(
     receiver: Receiver<InputFastqBatch>,
     alignment_sender: &std::sync::mpsc::SyncSender<Vec<AlignmentRecordBatch>>,
     observation: &mut Observation,
-    bounds: TemplateSpanBounds,
+    constraints: PairConstraints,
     limits: AlignmentRecordLimits,
     output_contract: AlignmentAuxiliaryMode,
-    library_profile: LibraryProfile,
     search_mode: PairedSearchMode,
     read_output: ReadOutputMode,
     emit_metrics: bool,
@@ -594,10 +584,9 @@ fn consume_batches(
         let processed = process_paired_batch(
             reference,
             &batch,
-            bounds,
+            constraints,
             limits,
             output_contract,
-            library_profile,
             search_mode,
             read_output,
             emit_metrics,
@@ -647,10 +636,9 @@ struct PairedBatchOutput {
 fn process_paired_batch(
     reference: &ReferenceIndex,
     records: &InputFastqBatch,
-    bounds: TemplateSpanBounds,
+    constraints: PairConstraints,
     limits: AlignmentRecordLimits,
     output_contract: AlignmentAuxiliaryMode,
-    library_profile: LibraryProfile,
     search_mode: PairedSearchMode,
     read_output: ReadOutputMode,
     emit_metrics: bool,
@@ -700,12 +688,7 @@ fn process_paired_batch(
                             .map_pairs_for_output(
                                 reference,
                                 &pair_reads,
-                                PairedAlignmentOptions::primary(
-                                    library_profile,
-                                    search_mode,
-                                    bounds.minimum().get(),
-                                    bounds.maximum().get(),
-                                ),
+                                PairedAlignmentOptions::primary(constraints, search_mode),
                             )
                             .map_err(|error| error.to_string())?;
                         mapping_worker_ns =

@@ -1,8 +1,7 @@
 #![allow(missing_docs)]
 
 use bsbit_align::library::{
-    LibraryProfile, PairConstraintError, PairConstraints, PairedLibraryProfile, TemplateSpan,
-    TemplateSpanBounds,
+    LibraryProfile, PairConstraintError, PairConstraints, TemplateSpan, TemplateSpanBounds,
 };
 
 #[test]
@@ -15,8 +14,6 @@ fn paired_library_values_validate_without_search_policy() {
 
     let constraints = PairConstraints::new(LibraryProfile::Directional, bounds);
     assert_eq!(constraints.profile(), LibraryProfile::Directional);
-    let compatibility_name: PairedLibraryProfile = constraints.profile();
-    assert_eq!(compatibility_name, LibraryProfile::Directional);
     assert_eq!(constraints.span_bounds(), bounds);
 
     assert_eq!(
