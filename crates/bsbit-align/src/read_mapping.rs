@@ -14,7 +14,7 @@ use crate::read_mapping_limits::{
     INITIAL_EDIT_DISTANCE, MAX_EDIT_DISTANCE, MAX_READ_BASES, VERIFICATION_BATCH,
 };
 use crate::search::combined_adaptive::{DIRECT_SINGLETON_PROOF, FLEXIBLE_NOMINAL_PROOF};
-use crate::verification::ungapped::{UngappedProfile, reference_masks_by_query};
+use crate::verification::ungapped::{bounded_complete_distance, reference_masks_by_query};
 use crate::verification::{
     NarrowEndpointDistances, NarrowPlacementDistances, narrow_banded_fixed_start_batch,
     narrow_banded_placement_distances, narrow_banded_placement_distances_batch,
@@ -1145,8 +1145,13 @@ pub(crate) fn ungapped_distance(
 ) -> Option<u8> {
     let contig = reference.contig_by_ordinal(candidate.contig_ordinal())?;
     let start = usize::try_from(candidate.start()).ok()?;
-    UngappedProfile::new(contig.sequence().bases(), start, read, candidate.strand())?
-        .complete_distance(INITIAL_EDIT_DISTANCE)
+    bounded_complete_distance(
+        contig.sequence().bases(),
+        start,
+        read,
+        candidate.strand(),
+        INITIAL_EDIT_DISTANCE,
+    )
 }
 
 const fn base_code(base: Base) -> u8 {

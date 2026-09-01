@@ -25,6 +25,57 @@ pub struct UngappedProfile {
     barrier_prefix: [u16; MAX_UNGAPPED_QUERY_BASES + 1],
 }
 
+/// Returns the conversion-aware whole-query mismatch distance when a complete
+/// ungapped reference span is present and the distance stays within the bound.
+///
+/// Unlike [`UngappedProfile`], this direct scan does not build prefix arrays;
+/// callers that only need the complete distance can also stop at the first
+/// mismatch beyond their bound.
+#[must_use]
+pub(crate) fn bounded_complete_distance(
+    reference: &[Base],
+    nominal_start: usize,
+    read: &[Base],
+    strand: BisulfiteStrand,
+    maximum_distance: u8,
+) -> Option<u8> {
+    if read.is_empty() || read.len() > MAX_UNGAPPED_QUERY_BASES {
+        return None;
+    }
+    let reference_end = nominal_start.checked_add(read.len())?;
+    let reference = reference.get(nominal_start..reference_end)?;
+    let semantics = strand_semantics(strand);
+    let mut distance = 0_u8;
+    match semantics.orientation() {
+        AlignmentOrientation::Forward => {
+            for (&reference_base, &query_base) in reference.iter().zip(read) {
+                distance += u8::from(
+                    !classify_bases(reference_base, query_base, semantics.cytosine_strand())
+                        .is_zero_cost(),
+                );
+                if distance > maximum_distance {
+                    return None;
+                }
+            }
+        }
+        AlignmentOrientation::Reverse => {
+            for (&reference_base, query_base) in reference
+                .iter()
+                .zip(read.iter().rev().map(|base| base.complement()))
+            {
+                distance += u8::from(
+                    !classify_bases(reference_base, query_base, semantics.cytosine_strand())
+                        .is_zero_cost(),
+                );
+                if distance > maximum_distance {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(distance)
+}
+
 impl UngappedProfile {
     /// Builds the allocation-free profile for an already selected reference
     /// origin.
@@ -456,5 +507,81 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn bounded_complete_distance_matches_profile_for_every_short_sequence() {
+        let strands = [
+            BisulfiteStrand::OT,
+            BisulfiteStrand::OB,
+            BisulfiteStrand::CTOT,
+            BisulfiteStrand::CTOB,
+        ];
+        let all_pairs: Vec<(Base, Base)> = Base::ALL
+            .into_iter()
+            .flat_map(|reference| Base::ALL.into_iter().map(move |query| (reference, query)))
+            .collect();
+        for &strand in &strands {
+            for maximum_distance in 0..=3 {
+                for &(reference_first, query_first) in &all_pairs {
+                    for &(reference_second, query_second) in &all_pairs {
+                        let reference = [Base::A, reference_first, reference_second, Base::T];
+                        let read = [query_first, query_second];
+                        let expected = UngappedProfile::new(&reference, 1, &read, strand)
+                            .and_then(|profile| profile.complete_distance(maximum_distance));
+                        assert_eq!(
+                            bounded_complete_distance(
+                                &reference,
+                                1,
+                                &read,
+                                strand,
+                                maximum_distance,
+                            ),
+                            expected,
+                            "strand={strand:?}, maximum_distance={maximum_distance}, reference={reference:?}, read={read:?}",
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_complete_distance_preserves_profile_boundaries() {
+        let reference = [Base::A; MAX_UNGAPPED_QUERY_BASES];
+        assert_eq!(
+            bounded_complete_distance(&reference, 0, &[], BisulfiteStrand::OT, 3),
+            None
+        );
+        assert_eq!(
+            bounded_complete_distance(
+                &reference,
+                0,
+                &[Base::A; MAX_UNGAPPED_QUERY_BASES + 1],
+                BisulfiteStrand::OT,
+                3,
+            ),
+            None
+        );
+        assert_eq!(
+            bounded_complete_distance(
+                &reference,
+                reference.len(),
+                &[Base::A],
+                BisulfiteStrand::OT,
+                3
+            ),
+            None
+        );
+        assert_eq!(
+            bounded_complete_distance(
+                &reference,
+                reference.len() - 1,
+                &[Base::A, Base::A],
+                BisulfiteStrand::OT,
+                3,
+            ),
+            None
+        );
     }
 }
