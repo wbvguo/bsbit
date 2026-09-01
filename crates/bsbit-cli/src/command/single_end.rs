@@ -10,11 +10,12 @@ use bsbit_align::single_end::{
 };
 use bsbit_core::coordinate::{ReferenceInterval, ReferenceLength};
 use bsbit_core::reference::ReferenceSemanticDigest;
+use bsbit_core::sequence::NormalizedSequence;
 use bsbit_hts::TextRecordLimits;
 use bsbit_hts::{
-    AlignmentRead, AlignmentRecord, AlignmentRecordLimits, BamStagingWriter, BsbitAlignmentMode,
-    BsbitProgramProvenance, DecodedFastqReader, FastqRecord, RecordMappingQuality,
-    SAM_MAX_QUERY_NAME_BYTES, SamHeader,
+    AlignmentAuxiliaryMode, AlignmentRecordBatch, AlignmentRecordLimits, BamStagingWriter,
+    BorrowedAlignmentRead, BsbitAlignmentMode, BsbitProgramProvenance, DecodedFastqReader,
+    FastqRecord, SAM_MAX_QUERY_NAME_BYTES, SamHeader,
 };
 use bsbit_index::reference::ReferenceIndex;
 use bsbit_index::storage::combined::load_combined_reference_catalog;
@@ -23,9 +24,7 @@ use bsbit_io::validate_create_target;
 use crate::parallel::{
     DispatchError, ProducerOutcome, WorkDispatcher, WorkerOutcome, run_ordered_parallel,
 };
-use crate::record_composition::{
-    RecordBuildError, build_indexed_single_alignment_record, build_sam_header,
-};
+use crate::record_composition::{RecordBuildError, SingleRecordComposer, build_sam_header};
 use crate::{CliError, CliWarning, RunReport};
 
 use super::{internal_search_file_prefix, unused_staging_path};
@@ -293,7 +292,7 @@ fn map_single_batch_parallel(
     options: &SingleEndCommandOptions,
     cancellation: &AtomicBool,
     aligner: &mut SingleBatchAligner,
-) -> WorkerOutcome<Vec<AlignmentRecord>> {
+) -> WorkerOutcome<AlignmentRecordBatch> {
     match map_single_records(reference, input, options, Some(cancellation), aligner) {
         Ok(records) => WorkerOutcome::Completed(records),
         Err(_error) if cancellation.load(Ordering::Relaxed) => WorkerOutcome::Cancelled,
@@ -303,12 +302,11 @@ fn map_single_batch_parallel(
 
 fn write_parallel_records(
     writer: &mut OutputWriter,
-    records: Vec<AlignmentRecord>,
+    records: AlignmentRecordBatch,
 ) -> Result<(), CliError> {
-    for record in records {
-        writer.write_record(&record)?;
-    }
-    Ok(())
+    let written = writer.write_batch(&records);
+    drop(records);
+    written
 }
 
 fn map_and_write_single_batch(
@@ -318,10 +316,8 @@ fn map_and_write_single_batch(
     aligner: &mut SingleBatchAligner,
     writer: &mut OutputWriter,
 ) -> Result<(), CliError> {
-    for record in map_single_records(reference, input, options, None, aligner)? {
-        writer.write_record(&record)?;
-    }
-    Ok(())
+    let records = map_single_records(reference, input, options, None, aligner)?;
+    writer.write_batch(&records)
 }
 
 fn map_single_records(
@@ -330,20 +326,16 @@ fn map_single_records(
     options: &SingleEndCommandOptions,
     cancellation: Option<&AtomicBool>,
     aligner: &mut SingleBatchAligner,
-) -> Result<Vec<AlignmentRecord>, CliError> {
+) -> Result<AlignmentRecordBatch, CliError> {
     let maximum_edit_distance = u8::try_from(options.max_edit_distance).map_err(|_| {
         CliError::operation(format!(
             "align: single edit distance {} is not representable",
             options.max_edit_distance
         ))
     })?;
-    let mut output = Vec::new();
-    output.try_reserve_exact(input.len()).map_err(|_| {
-        CliError::operation(format!(
-            "align: reserve {} single alignment records: allocation failed",
-            input.len()
-        ))
-    })?;
+    let limits = AlignmentRecordLimits::default();
+    let mut output = AlignmentRecordBatch::new();
+    let mut composer = SingleRecordComposer::new();
     let mut reads = Vec::with_capacity(SINGLE_SEARCH_BATCH_SIZE);
     for chunk in input.chunks(SINGLE_SEARCH_BATCH_SIZE) {
         if cancellation.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
@@ -352,7 +344,7 @@ fn map_single_records(
         reads.clear();
         reads.extend(chunk.iter().map(|record| record.sequence().bases()));
         let mapped = aligner
-            .map_reads_with_mode(
+            .map_reads_for_output(
                 reference,
                 &reads,
                 maximum_edit_distance,
@@ -363,10 +355,11 @@ fn map_single_records(
             if cancellation.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 return Err(CliError::operation("align: single mapping cancelled"));
             }
-            output.push(materialize_single_record(
-                reference, source, result, options,
-            )?);
+            materialize_single_record(reference, source, result, options, &mut composer, limits)?;
         }
+        composer.flush_into(&mut output, limits).map_err(|error| {
+            CliError::operation(format!("align: store single alignment batch: {error}"))
+        })?;
     }
     Ok(output)
 }
@@ -376,60 +369,87 @@ fn materialize_single_record(
     source: &FastqRecord,
     result: SingleAlignmentResult,
     options: &SingleEndCommandOptions,
-) -> Result<AlignmentRecord, CliError> {
-    let alignment = result
-        .placement()
-        .map(|placement| {
-            let contig_id = reference
-                .contig_id(placement.contig_ordinal())
-                .map_err(|error| error.to_string())?;
-            let contig = reference
-                .resolve_contig(&contig_id)
-                .map_err(|error| error.to_string())?;
-            let interval = ReferenceInterval::new(
-                placement.start(),
-                placement.end(),
-                ReferenceLength::new(contig.sequence().len()),
-            )
-            .map_err(|error| error.to_string())?;
-            traceback_read_placement(
-                reference,
-                source.sequence(),
-                &contig_id,
-                interval,
-                placement.strand(),
-                placement.distance(),
-            )
-            .map_err(|error| error.to_string())
-        })
-        .transpose()
-        .map_err(|error| {
-            CliError::operation(format!(
-                "align: materialize record {} from {}: {error}",
-                source.ordinal().get(),
-                options.read1.display()
-            ))
-        })?;
-    let mapping_quality = match result.status() {
-        SingleMappingStatus::Unmapped => RecordMappingQuality::Unmapped,
-        SingleMappingStatus::Unique => RecordMappingQuality::Calibrated(result.mapping_quality()),
-        SingleMappingStatus::Ambiguous => RecordMappingQuality::Tied,
+    composer: &mut SingleRecordComposer,
+    limits: AlignmentRecordLimits,
+) -> Result<(), CliError> {
+    let full_read = BorrowedAlignmentRead::new(source.sequence().bases(), source.quality());
+    let Some(placement) = result.placement() else {
+        return composer
+            .push_unmapped_single(source.record_name().name(), full_read, limits)
+            .map_err(|error| {
+                CliError::operation(format!(
+                    "align: construct unmapped record {} from {}: {error}",
+                    source.ordinal().get(),
+                    options.read1.display()
+                ))
+            });
     };
-    build_indexed_single_alignment_record(
-        reference,
-        source.record_name().name(),
-        AlignmentRead::new(source.sequence(), Some(source.quality())),
-        alignment.as_ref(),
-        mapping_quality,
-        AlignmentRecordLimits::default(),
-    )
+    let retained_range = result.retained_query_interval();
+    let retained_storage;
+    let retained_sequence =
+        if retained_range.start == 0 && retained_range.end == source.sequence().bases().len() {
+            source.sequence()
+        } else {
+            retained_storage = NormalizedSequence::from_bases(
+                source.sequence().bases()[retained_range.clone()]
+                    .iter()
+                    .copied(),
+            );
+            &retained_storage
+        };
+    let alignment = (|| {
+        let contig_id = reference
+            .contig_id(placement.contig_ordinal())
+            .map_err(|error| error.to_string())?;
+        let contig = reference
+            .resolve_contig(&contig_id)
+            .map_err(|error| error.to_string())?;
+        let interval = ReferenceInterval::new(
+            placement.start(),
+            placement.end(),
+            ReferenceLength::new(contig.sequence().len()),
+        )
+        .map_err(|error| error.to_string())?;
+        traceback_read_placement(
+            reference,
+            retained_sequence,
+            &contig_id,
+            interval,
+            placement.strand(),
+            placement.distance(),
+        )
+        .map_err(|error| error.to_string())
+    })()
     .map_err(|error| {
         CliError::operation(format!(
-            "align: construct record {} from {}: {error}",
+            "align: materialize record {} from {}: {error}",
             source.ordinal().get(),
             options.read1.display()
         ))
-    })
+    })?;
+    let mapping_quality = match result.status() {
+        SingleMappingStatus::Unique => result.mapping_quality(),
+        SingleMappingStatus::Ambiguous | SingleMappingStatus::Unmapped => 0,
+    };
+    composer
+        .push_retained_single_with_mapping_quality(
+            reference,
+            source.record_name().name(),
+            full_read,
+            retained_range,
+            retained_sequence,
+            &alignment,
+            limits,
+            AlignmentAuxiliaryMode::Minimal,
+            mapping_quality,
+        )
+        .map_err(|error| {
+            CliError::operation(format!(
+                "align: construct record {} from {}: {error}",
+                source.ordinal().get(),
+                options.read1.display()
+            ))
+        })
 }
 
 fn load_index(
@@ -489,10 +509,15 @@ impl OutputWriter {
             .map_err(|error| operation_error("align", "create BAM staging", target, &error))
     }
 
-    fn write_record(&mut self, record: &AlignmentRecord) -> Result<(), CliError> {
-        self.0
-            .write_record_as_bam(record)
-            .map_err(|error| CliError::operation(format!("align: write BAM record: {error}")))
+    fn write_batch(&mut self, batch: &AlignmentRecordBatch) -> Result<(), CliError> {
+        for record in batch.records() {
+            self.0
+                .write_borrowed_alignment_record(&record)
+                .map_err(|error| {
+                    CliError::operation(format!("align: write BAM record: {error}"))
+                })?;
+        }
+        Ok(())
     }
 
     fn finish(self, target: &Path) -> Result<RunReport, CliError> {

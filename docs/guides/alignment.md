@@ -35,8 +35,18 @@ bsbit align \
 Omit `--sensitive` for the low-latency default. With it, single-end alignment
 replays seed intervals admitted only by the wider 4,096-hit bound, completes
 the six-round bounded frontier, and then performs distance-5 verification,
-origin classification, and MAPQ. Pair geometry, mate rescue, and paired
-adapter recovery do not apply to a single read.
+origin classification, and MAPQ. Pair geometry and mate rescue do not apply to
+a single read. Both single-end modes do, however, recover an otherwise-unmapped
+read when its final 30-base domain contains an exact supported prefix of the
+Illumina universal adapter. Recovery requires at least 8 adapter bases and 50
+retained read bases. A tentative unique placement must remain unique at the
+same strand-aware origin after 8 additional retained bases are removed.
+
+An accepted recovery preserves the complete input sequence and qualities in
+the BAM and represents the adapter tail as a strand-correct soft clip. Its MAPQ
+is the lower of the recovery and stability evidence, capped at 20. Reads
+without exact adapter support, and reads that already have a complete-read
+placement, are unchanged by this fallback.
 
 !!! note "Single-end confidence"
     Unique origins receive numeric Q10/Q15/Q20/Q30/Q40 from evidence retained
@@ -92,8 +102,10 @@ The BAM is written in input order. Inspect it immediately, then follow the
 
 Both layouts expose default and sensitive search. For single-end input,
 default keeps the existing early-resolution d3/d5 path and `--sensitive`
-completes the wider bounded candidate frontier before classification. The
-paired-end path additionally records one of these stable strategies:
+completes the wider bounded candidate frontier before classification. Both
+single-end modes apply the same exact-adapter recovery after that primary
+decision; sensitive mode is also used for its trimmed and stability remaps.
+The paired-end path additionally records one of these stable strategies:
 
 | Mode | Stable strategy | Main behavior |
 |---|---|---|

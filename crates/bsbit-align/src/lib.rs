@@ -14,6 +14,7 @@
 #[allow(unsafe_code)]
 pub mod verification;
 
+mod adapter;
 mod error;
 pub mod extension;
 pub mod library;

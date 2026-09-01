@@ -73,7 +73,8 @@ target/release/bsbit align \
 
 For directional single-end input, supply only `--read1` (or `-1`). The
 single-end path accepts the shared runtime/BAM controls and `--sensitive`,
-writes numeric MAPQ from the retained search evidence, and declares
+writes numeric MAPQ from the retained search evidence, performs conservative
+exact 3' Illumina-adapter recovery for otherwise-unmapped reads, and declares
 caller-compatible provenance; see the [single-end alignment
 guide](docs/guides/alignment.md).
 

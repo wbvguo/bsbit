@@ -1,38 +1,18 @@
 //! Adapter evidence and bounded endpoint-placement policy.
 
+pub(super) use crate::adapter::{
+    read_has_supported_three_prime_adapter, sequencing_three_prime_adapter_supported,
+    supported_three_prime_adapter_start,
+};
+
 use super::{
-    Base, BoundedSemiglobalConfig, EndpointKey, ILLUMINA_UNIVERSAL_ADAPTER,
-    ORIGIN_ENDPOINT_ADAPTER_CLIP_EXTENSION_PENALTY, ORIGIN_ENDPOINT_ADAPTER_CLIP_OPEN_PENALTY,
-    ORIGIN_ENDPOINT_CLIP_EXTENSION_PENALTY, ORIGIN_ENDPOINT_CLIP_OPEN_PENALTY,
-    ORIGIN_ENDPOINT_MIN_ADAPTER_SUPPORT, PairedPlacement, ReadCandidate, ReadPlacement,
+    Base, BoundedSemiglobalConfig, EndpointKey, ORIGIN_ENDPOINT_ADAPTER_CLIP_EXTENSION_PENALTY,
+    ORIGIN_ENDPOINT_ADAPTER_CLIP_OPEN_PENALTY, ORIGIN_ENDPOINT_CLIP_EXTENSION_PENALTY,
+    ORIGIN_ENDPOINT_CLIP_OPEN_PENALTY, PairedPlacement, ReadCandidate, ReadPlacement,
     ReferenceIndex, SEMI_GLOBAL_ADMISSION_EDIT_PENALTY, SEMI_GLOBAL_CLIP_PENALTY,
     SEMI_GLOBAL_EDIT_PENALTY, SEMI_GLOBAL_MAX_CLIP_BASES, SEMI_GLOBAL_MIN_ALIGNED_BASES,
     UngappedEndpoint, UngappedProfile, placement_net_gap_bases,
 };
-
-pub(super) fn sequencing_three_prime_adapter_supported(read: &[Base], retained_end: usize) -> bool {
-    let clipped = read.get(retained_end..).unwrap_or_default();
-    let supported = clipped.len().min(ILLUMINA_UNIVERSAL_ADAPTER.len());
-    supported >= ORIGIN_ENDPOINT_MIN_ADAPTER_SUPPORT
-        && clipped
-            .iter()
-            .take(supported)
-            .zip(ILLUMINA_UNIVERSAL_ADAPTER.iter().take(supported))
-            .all(|(observed, expected)| observed.as_ascii() == *expected)
-}
-
-#[must_use]
-pub(super) fn supported_three_prime_adapter_start(read: &[Base]) -> Option<usize> {
-    let earliest = read.len().saturating_sub(SEMI_GLOBAL_MAX_CLIP_BASES);
-    let latest = read
-        .len()
-        .checked_sub(ORIGIN_ENDPOINT_MIN_ADAPTER_SUPPORT)?;
-    (earliest..=latest).find(|&start| sequencing_three_prime_adapter_supported(read, start))
-}
-
-pub(super) fn read_has_supported_three_prime_adapter(read: &[Base]) -> bool {
-    supported_three_prime_adapter_start(read).is_some()
-}
 
 pub(super) fn affine_terminal_clip_cost(length: usize, adapter_supported: bool) -> u16 {
     if length == 0 {

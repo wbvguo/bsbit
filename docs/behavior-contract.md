@@ -63,6 +63,14 @@ leave a read or pair unmapped; they never turn an incomplete frontier into an
 unsupported unique claim. Simulator truth, read names, known coordinates, and
 peer-aligner output are unavailable to mapping decisions.
 
+After primary classification, an otherwise-unmapped single read with exact
+supported 3' Illumina-adapter evidence may be remapped from its retained
+prefix. At least 50 bases must remain, and a unique recovery must retain the
+same strand-aware origin after an additional 8-base shortening. Accepted BAM
+records preserve the complete SEQ and QUAL, use terminal soft clipping, and
+cap MAPQ at 20. This fallback never replaces an existing complete-read single
+placement.
+
 ## BAM output and MAPQ
 
 `bsbit align` writes one primary record per input read by default. Unique pairs

@@ -20,11 +20,15 @@ use bsbit_core::coordinate::ReferenceInterval;
 use bsbit_core::sequence::NormalizedSequence;
 use bsbit_hts::{
     AlignmentAuxiliaryMode, AlignmentCigarOp, AlignmentCigarRun, AlignmentPlacement, AlignmentRead,
-    AlignmentRecord, AlignmentRecordAllocation, AlignmentRecordBatch,
+    AlignmentRecordAllocation, AlignmentRecordBatch,
     AlignmentRecordError as HtsAlignmentRecordError, AlignmentRecordField, AlignmentRecordLimits,
-    AlignmentRecordResource, BorrowedAlignmentRead, BorrowedAlignmentRecord, MappedAlignmentRecord,
-    RecordMappingQuality, RecordMateLocation, RecordReference, RecordSegment,
+    AlignmentRecordResource, BorrowedAlignmentRead, BorrowedAlignmentRecord, RecordSegment,
     SAM_MAX_REFERENCE_LENGTH, SamHeader, SamHeaderReference,
+};
+#[cfg(test)]
+use bsbit_hts::{
+    AlignmentRecord, MappedAlignmentRecord, RecordMappingQuality, RecordMateLocation,
+    RecordReference,
 };
 use bsbit_index::reference::{ReferenceAccessError, ReferenceIndex};
 
@@ -246,9 +250,9 @@ struct DirectRecordOffsets {
     has_bismark_xm: bool,
 }
 
-/// Worker-local compact storage for retained paired direct-BAM records.
+/// Worker-local compact storage for retained direct-BAM records.
 #[derive(Debug, Default)]
-pub(crate) struct PairedRecordComposer {
+pub(crate) struct DirectRecordComposer {
     records: Vec<DirectRecordOffsets>,
     bytes: Vec<u8>,
     cigar_runs: Vec<AlignmentCigarRun>,
@@ -256,7 +260,10 @@ pub(crate) struct PairedRecordComposer {
     bismark_xm: Vec<u8>,
 }
 
-impl PairedRecordComposer {
+pub(crate) type PairedRecordComposer = DirectRecordComposer;
+pub(crate) type SingleRecordComposer = DirectRecordComposer;
+
+impl DirectRecordComposer {
     /// Creates an empty worker-local batch.
     #[must_use]
     pub const fn new() -> Self {
@@ -267,6 +274,112 @@ impl PairedRecordComposer {
             md: Vec::new(),
             bismark_xm: Vec::new(),
         }
+    }
+
+    /// Appends one unmapped unpaired record while preserving sequencing
+    /// orientation and the complete input sequence and qualities.
+    pub(crate) fn push_unmapped_single(
+        &mut self,
+        query_name: &[u8],
+        read: BorrowedAlignmentRead<'_>,
+        _limits: AlignmentRecordLimits,
+    ) -> Result<(), RecordBuildError> {
+        let query_name_start = append_pool_bytes(
+            &mut self.bytes,
+            query_name,
+            AlignmentRecordAllocation::QueryName,
+        )?;
+        let sequence_start = append_oriented_read_sequence(
+            &mut self.bytes,
+            read.sequence(),
+            AlignmentOrientation::Forward,
+        )?;
+        let (quality_start, quality_len) = append_oriented_quality(
+            &mut self.bytes,
+            Some(read.quality()),
+            AlignmentOrientation::Forward,
+        )?;
+        self.records
+            .try_reserve_exact(1)
+            .map_err(|_| RecordBuildError::AllocationFailed {
+                allocation: AlignmentRecordAllocation::Sequence,
+                requested: 1,
+            })?;
+        self.records.push(DirectRecordOffsets {
+            query_name_start,
+            query_name_len: query_name.len(),
+            flag: 0x4,
+            reference_ordinal: None,
+            position: 0,
+            mapping_quality: 0,
+            cigar_start: self.cigar_runs.len(),
+            cigar_len: 0,
+            mate_reference_ordinal: None,
+            mate_position: 0,
+            template_length: 0,
+            sequence_start,
+            sequence_len: read.sequence().len(),
+            quality_start,
+            quality_len,
+            literal_nm: 0,
+            md_start: 0,
+            md_len: 0,
+            has_md: false,
+            strand: BisulfiteStrand::OT,
+            bismark_xm_start: 0,
+            bismark_xm_len: 0,
+            has_bismark_xm: false,
+        });
+        Ok(())
+    }
+
+    /// Appends one mapped unpaired record from a retained contiguous query
+    /// interval. The complete read is serialized and omitted terminal bases
+    /// are represented as strand-correct soft clips.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn push_retained_single_with_mapping_quality(
+        &mut self,
+        reference: &ReferenceIndex,
+        query_name: &[u8],
+        full_read: BorrowedAlignmentRead<'_>,
+        retained_range: core::ops::Range<usize>,
+        retained_sequence: &NormalizedSequence,
+        alignment: &VerifiedAlignment,
+        limits: AlignmentRecordLimits,
+        auxiliary_mode: AlignmentAuxiliaryMode,
+        mapping_quality: u8,
+    ) -> Result<(), RecordBuildError> {
+        validate_soft_clipped_subsequence(full_read, retained_range.clone(), retained_sequence, 1)?;
+        let query_name_start = append_pool_bytes(
+            &mut self.bytes,
+            query_name,
+            AlignmentRecordAllocation::QueryName,
+        )?;
+        let prepared = prepare_direct_soft_clipped_mapping(
+            &mut self.bytes,
+            &mut self.cigar_runs,
+            &mut self.md,
+            &mut self.bismark_xm,
+            reference,
+            full_read,
+            retained_range,
+            retained_sequence,
+            alignment,
+            limits,
+            auxiliary_mode,
+        )?;
+        self.records
+            .try_reserve_exact(1)
+            .map_err(|_| RecordBuildError::AllocationFailed {
+                allocation: AlignmentRecordAllocation::Sequence,
+                requested: 1,
+            })?;
+        self.records.push(prepared.finish_single(
+            query_name_start,
+            query_name.len(),
+            mapping_quality,
+        ));
+        Ok(())
     }
 
     /// Appends the two primary records for a paired template with no accepted
@@ -913,6 +1026,44 @@ struct DirectPreparedMapping {
 }
 
 impl DirectPreparedMapping {
+    fn finish_single(
+        self,
+        query_name_start: usize,
+        query_name_len: usize,
+        mapping_quality: u8,
+    ) -> DirectRecordOffsets {
+        let flag = if matches!(self.orientation, AlignmentOrientation::Reverse) {
+            0x10
+        } else {
+            0
+        };
+        DirectRecordOffsets {
+            query_name_start,
+            query_name_len,
+            flag,
+            reference_ordinal: Some(self.reference_ordinal),
+            position: self.position,
+            mapping_quality,
+            cigar_start: self.cigar_start,
+            cigar_len: self.cigar_len,
+            mate_reference_ordinal: None,
+            mate_position: 0,
+            template_length: 0,
+            sequence_start: self.sequence_start,
+            sequence_len: self.sequence_len,
+            quality_start: self.quality_start,
+            quality_len: self.quality_len,
+            literal_nm: self.literal_nm,
+            md_start: self.md_start,
+            md_len: self.md_len,
+            has_md: self.has_md,
+            strand: self.strand,
+            bismark_xm_start: self.bismark_xm_start,
+            bismark_xm_len: self.bismark_xm_len,
+            has_bismark_xm: self.has_bismark_xm,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn finish(
         self,
@@ -1407,31 +1558,6 @@ pub(crate) fn build_single_alignment_record(
     )
 }
 
-/// Constructs one single-read record from an indexed-search placement that
-/// has already been materialized into a canonical alignment.
-pub(crate) fn build_indexed_single_alignment_record(
-    reference: &ReferenceIndex,
-    query_name: &[u8],
-    read: AlignmentRead<'_>,
-    alignment: Option<&VerifiedAlignment>,
-    mapping_quality: RecordMappingQuality,
-    limits: AlignmentRecordLimits,
-) -> Result<AlignmentRecord, RecordBuildError> {
-    prepare_record(
-        reference,
-        query_name,
-        read,
-        alignment,
-        RecordSegment::Unpaired,
-        false,
-        mapping_quality,
-        None,
-        0,
-        limits,
-        AlignmentAuxiliaryMode::Minimal,
-    )
-}
-
 /// Constructs one deterministic single-read record with an explicit optional
 /// field materialization policy.
 ///
@@ -1464,6 +1590,7 @@ fn build_single_alignment_record_with_auxiliary_mode(
     )
 }
 
+#[cfg(test)]
 struct PreparedRecord {
     mapping: Option<MappedAlignmentRecord>,
     sequence: Box<[u8]>,
@@ -1471,6 +1598,7 @@ struct PreparedRecord {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn prepare_record(
     reference: &ReferenceIndex,
     query_name: &[u8],
@@ -1498,6 +1626,7 @@ fn prepare_record(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn finish_prepared_record(
     query_name: &[u8],
     segment: RecordSegment,
@@ -1523,6 +1652,7 @@ fn finish_prepared_record(
     .map_err(Into::into)
 }
 
+#[cfg(test)]
 fn prepare_mapping(
     reference: &ReferenceIndex,
     read: AlignmentRead<'_>,
@@ -1554,6 +1684,7 @@ fn prepare_mapping(
     })
 }
 
+#[cfg(test)]
 fn build_mapped_record(
     reference: &ReferenceIndex,
     read: &NormalizedSequence,
@@ -1614,14 +1745,17 @@ fn build_mapped_record(
     .map_err(Into::into)
 }
 
+#[cfg(test)]
 struct LiteralReplay {
     literal_nm: u64,
     md: Option<Box<[u8]>>,
     bismark_xm: Option<Box<[u8]>>,
 }
 
+#[cfg(test)]
 const INITIAL_MD_CAPACITY: u64 = 64;
 
+#[cfg(test)]
 fn literal_replay(
     reference: &NormalizedSequence,
     interval: ReferenceInterval,
@@ -1914,6 +2048,7 @@ fn is_literal_acgt_match(reference: Base, query: Base) -> bool {
     reference == query && !reference.is_unknown()
 }
 
+#[cfg(test)]
 fn oriented_sequence(
     sequence: &NormalizedSequence,
     orientation: AlignmentOrientation,
@@ -1933,6 +2068,7 @@ fn oriented_sequence(
     Ok(output.into_boxed_slice())
 }
 
+#[cfg(test)]
 fn oriented_quality(
     quality: Option<&[u8]>,
     orientation: AlignmentOrientation,
@@ -1956,6 +2092,7 @@ fn oriented_quality(
         .transpose()
 }
 
+#[cfg(test)]
 pub(crate) fn check_limit(
     observed: u64,
     limit: u64,

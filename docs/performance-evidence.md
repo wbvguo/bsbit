@@ -296,7 +296,8 @@ exercise the recovery rule; their results are
 - Non-directional paired-end has functional coverage, not this large-corpus
   performance/MAPQ qualification. Standard directional single-end has one
   controlled 5M-R1 performance/truth regression run, but no replicated MAPQ
-  qualification.
+  qualification. Single-end exact-adapter recovery has focused functional
+  regression coverage and is not included in those retained timing claims.
 - Calling and cohort outputs are outside this aligner scorecard and require
   study-specific validation.
 - The benchmark is not an independent third-party study.
