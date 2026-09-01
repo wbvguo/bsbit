@@ -546,6 +546,44 @@ fn narrow_placement_distance_three_compact_batch_equals_general_batch() {
 }
 
 #[test]
+fn narrow_interleaved_distance_three_batch_equals_row_major_batch() {
+    let masks = [1_u8, 2, 4, 2 | 8, 0];
+    let mut state = 0xa54f_f53a_5f1d_36f1_u64;
+    for query_length in [1, 17, 100, 192] {
+        let pattern_length = query_length + 6;
+        for candidates in 2..=4 {
+            let mut query = vec![0_u8; query_length];
+            let mut row_major = vec![0_u8; pattern_length * candidates];
+            for code in query.iter_mut().chain(&mut row_major) {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                *code = u8::try_from((state >> 61) % 5).unwrap();
+            }
+            let mut interleaved = vec![4_u8; pattern_length * 4];
+            for candidate in 0..candidates {
+                for position in 0..pattern_length {
+                    interleaved[position * 4 + candidate] =
+                        row_major[candidate * pattern_length + position];
+                }
+            }
+            let mut expected = vec![NarrowPlacementDistances::EMPTY; candidates];
+            narrow_banded_placement_distances_batch_d3(&masks, &query, &row_major, &mut expected)
+                .unwrap();
+            let mut observed = vec![NarrowPlacementDistances::EMPTY; candidates];
+            narrow_banded_placement_distances_interleaved_batch_d3(
+                &masks,
+                &query,
+                &interleaved,
+                &mut observed,
+            )
+            .unwrap();
+            assert_eq!(observed, expected);
+        }
+    }
+}
+
+#[test]
 fn narrow_placement_distance_five_compact_batch_equals_independent_candidates() {
     let masks = [1_u8, 2, 4, 2 | 8, 0];
     let mut state = 0x5be0_cd19_137e_2179_u64;

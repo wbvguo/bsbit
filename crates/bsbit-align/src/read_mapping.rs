@@ -18,8 +18,8 @@ use crate::verification::ungapped::{bounded_complete_distance, reference_masks_b
 use crate::verification::{
     NarrowEndpointDistances, NarrowPlacementDistances, narrow_banded_fixed_start_batch,
     narrow_banded_placement_distances, narrow_banded_placement_distances_batch,
-    narrow_banded_placement_distances_batch_d3, narrow_banded_placement_distances_batch_d5,
-    narrow_banded_placement_distances_d3, narrow_banded_placement_distances_d5,
+    narrow_banded_placement_distances_batch_d5, narrow_banded_placement_distances_d3,
+    narrow_banded_placement_distances_d5, narrow_banded_placement_distances_interleaved_batch_d3,
 };
 
 const MINIMUM_READ_BASES: usize = 3;
@@ -239,6 +239,10 @@ impl PlacementVerifier {
         let budget = usize::from(INITIAL_EDIT_DISTANCE);
         let pattern_len = self.read_len + 2 * budget;
         let mut window_starts = [0_usize; 4];
+        let interleaved = candidates.len() > 1;
+        if interleaved {
+            self.pattern_codes[..pattern_len * 4].fill(4);
+        }
         for (ordinal, &candidate) in candidates.iter().enumerate() {
             debug_assert_eq!(candidate.contig_ordinal(), first.contig_ordinal());
             debug_assert_eq!(candidate.strand(), first.strand());
@@ -249,16 +253,25 @@ impl PlacementVerifier {
             })?;
             let window_start = nominal.saturating_sub(budget);
             window_starts[ordinal] = window_start;
-            let pattern = &mut self.pattern_codes
-                [ordinal * pattern_len..ordinal.saturating_add(1) * pattern_len];
-            pattern.fill(4);
             let available = contig.sequence().bases().len().saturating_sub(window_start);
             let copied = available.min(pattern_len);
-            for (destination, &base) in pattern[..copied]
-                .iter_mut()
-                .zip(&contig.sequence().bases()[window_start..window_start + copied])
-            {
-                *destination = base_code(base);
+            if interleaved {
+                for (position, &base) in contig.sequence().bases()
+                    [window_start..window_start + copied]
+                    .iter()
+                    .enumerate()
+                {
+                    self.pattern_codes[position * 4 + ordinal] = base_code(base);
+                }
+            } else {
+                let pattern = &mut self.pattern_codes[..pattern_len];
+                pattern.fill(4);
+                for (destination, &base) in pattern[..copied]
+                    .iter_mut()
+                    .zip(&contig.sequence().bases()[window_start..window_start + copied])
+                {
+                    *destination = base_code(base);
+                }
             }
         }
         let semantics = strand_semantics(first.strand());
@@ -279,10 +292,10 @@ impl PlacementVerifier {
             )?;
         } else {
             debug_assert_eq!(budget, usize::from(INITIAL_EDIT_DISTANCE));
-            narrow_banded_placement_distances_batch_d3(
+            narrow_banded_placement_distances_interleaved_batch_d3(
                 &self.reference_masks[cytosine_axis],
                 &self.query_codes[axis][..self.read_len],
-                &self.pattern_codes[..pattern_len * candidates.len()],
+                &self.pattern_codes[..pattern_len * 4],
                 &mut self.placement_distances[..candidates.len()],
             )?;
         }
@@ -497,6 +510,10 @@ impl FlexibleVerifier {
         )?;
         let pattern_len = self.read_len + 2 * budget;
         let mut window_starts = [0_usize; 4];
+        let interleaved = candidates.len() > 1 && maximum_edit_distance == INITIAL_EDIT_DISTANCE;
+        if interleaved {
+            self.pattern_codes[..pattern_len * 4].fill(4);
+        }
         for (ordinal, &candidate) in candidates.iter().enumerate() {
             debug_assert_eq!(candidate.contig_ordinal(), first.contig_ordinal());
             debug_assert_eq!(candidate.strand(), first.strand());
@@ -507,16 +524,26 @@ impl FlexibleVerifier {
             })?;
             let window_start = nominal.saturating_sub(budget);
             window_starts[ordinal] = window_start;
-            let pattern =
-                &mut self.pattern_codes[ordinal * pattern_len..(ordinal + 1) * pattern_len];
-            pattern.fill(4);
             let available = contig.sequence().bases().len().saturating_sub(window_start);
             let copied = available.min(pattern_len);
-            for (destination, &base) in pattern[..copied]
-                .iter_mut()
-                .zip(&contig.sequence().bases()[window_start..window_start + copied])
-            {
-                *destination = base_code(base);
+            if interleaved {
+                for (position, &base) in contig.sequence().bases()
+                    [window_start..window_start + copied]
+                    .iter()
+                    .enumerate()
+                {
+                    self.pattern_codes[position * 4 + ordinal] = base_code(base);
+                }
+            } else {
+                let pattern =
+                    &mut self.pattern_codes[ordinal * pattern_len..(ordinal + 1) * pattern_len];
+                pattern.fill(4);
+                for (destination, &base) in pattern[..copied]
+                    .iter_mut()
+                    .zip(&contig.sequence().bases()[window_start..window_start + copied])
+                {
+                    *destination = base_code(base);
+                }
             }
         }
         let semantics = strand_semantics(first.strand());
@@ -550,10 +577,10 @@ impl FlexibleVerifier {
                 )?
             };
         } else if maximum_edit_distance == INITIAL_EDIT_DISTANCE {
-            narrow_banded_placement_distances_batch_d3(
+            narrow_banded_placement_distances_interleaved_batch_d3(
                 &self.reference_masks[cytosine_axis],
                 &self.query_codes[axis][..self.read_len],
-                &self.pattern_codes[..pattern_len * candidates.len()],
+                &self.pattern_codes[..pattern_len * 4],
                 &mut self.placement_distances[..candidates.len()],
             )?;
         } else if maximum_edit_distance == MAX_EDIT_DISTANCE {

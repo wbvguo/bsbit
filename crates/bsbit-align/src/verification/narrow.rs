@@ -545,6 +545,73 @@ pub fn narrow_banded_placement_distances_batch_d3(
     Ok(NarrowBandedFlavor::Scalar)
 }
 
+/// Computes distance-three frontiers from a position-major, four-lane pattern
+/// slab. Each reference position occupies four adjacent bytes; unused lanes
+/// must contain any valid reference code and are ignored.
+///
+/// # Errors
+///
+/// Rejects an empty query, a batch outside two through four candidates, or a
+/// slab whose length is not exactly four times the candidate pattern length.
+pub(crate) fn narrow_banded_placement_distances_interleaved_batch_d3(
+    reference_masks_by_query: &[u8; 5],
+    query: &[u8],
+    interleaved_patterns: &[u8],
+    output: &mut [NarrowPlacementDistances],
+) -> Result<NarrowBandedFlavor, NarrowBandedError> {
+    const MAX_DISTANCE: usize = 3;
+    const PATTERN_LANES: usize = 4;
+
+    let pattern_len =
+        query
+            .len()
+            .checked_add(2 * MAX_DISTANCE)
+            .ok_or(NarrowBandedError::QueryLength {
+                observed: query.len(),
+            })?;
+    if query.is_empty() {
+        return Err(NarrowBandedError::EmptyQuery);
+    }
+    if !(2..=PATTERN_LANES).contains(&output.len()) {
+        return Err(NarrowBandedError::PlacementBatch {
+            observed: output.len(),
+            maximum: PATTERN_LANES,
+        });
+    }
+    let expected = pattern_len.saturating_mul(PATTERN_LANES);
+    if interleaved_patterns.len() != expected {
+        return Err(NarrowBandedError::PatternDimension {
+            expected,
+            observed: interleaved_patterns.len(),
+        });
+    }
+    if narrow_avx2_available() {
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: runtime detection proves AVX2/SSSE3, and the validated slab
+        // provides one complete four-byte code group for every DP access.
+        unsafe {
+            narrow_placement_distances_interleaved_batch_d3_avx2(
+                reference_masks_by_query,
+                query,
+                interleaved_patterns,
+                output,
+            );
+        }
+        return Ok(NarrowBandedFlavor::Avx2);
+    }
+    for (candidate, destination) in output.iter_mut().enumerate() {
+        *destination = narrow_placement_distances_scalar_interleaved(
+            reference_masks_by_query,
+            query,
+            interleaved_patterns,
+            candidate,
+            PATTERN_LANES,
+            MAX_DISTANCE,
+        );
+    }
+    Ok(NarrowBandedFlavor::Scalar)
+}
+
 /// Computes distance-five frontiers for up to two candidates while
 /// retaining only the eleven active diagonal vectors per candidate.
 ///
@@ -1251,6 +1318,57 @@ pub(super) fn narrow_placement_distances_scalar(
     distances
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn narrow_placement_distances_scalar_interleaved(
+    reference_masks_by_query: &[u8; 5],
+    query: &[u8],
+    patterns: &[u8],
+    candidate: usize,
+    pattern_lanes: usize,
+    max_distance: usize,
+) -> NarrowPlacementDistances {
+    let band_length = max_distance * 2 + 1;
+    let capped = u8::try_from(max_distance)
+        .unwrap_or(u8::MAX - 1)
+        .saturating_add(1);
+    let mut distances = NarrowPlacementDistances::for_band(band_length, max_distance);
+    let mut previous = [capped; MAX_NARROW_ENDPOINTS];
+    let mut current = [capped; MAX_NARROW_ENDPOINTS];
+    for start_delta in 0..band_length {
+        previous[..band_length].fill(capped);
+        previous[start_delta] = 0;
+        for diagonal in start_delta + 1..band_length {
+            previous[diagonal] = previous[diagonal - 1].saturating_add(1).min(capped);
+        }
+        for (query_position, &query_code) in query.iter().enumerate() {
+            current[..band_length].fill(capped);
+            let reference_mask = reference_masks_by_query
+                .get(usize::from(query_code))
+                .copied()
+                .unwrap_or(0);
+            for diagonal in 0..band_length {
+                let reference_position = query_position + diagonal;
+                let reference_code = patterns[reference_position * pattern_lanes + candidate];
+                let substitution =
+                    u8::from(reference_mask & (1_u8 << usize::from(reference_code)) == 0);
+                let mut best = previous[diagonal].saturating_add(substitution).min(capped);
+                if diagonal + 1 < band_length {
+                    best = best.min(previous[diagonal + 1].saturating_add(1).min(capped));
+                }
+                if diagonal != 0 {
+                    best = best.min(current[diagonal - 1].saturating_add(1).min(capped));
+                }
+                current[diagonal] = best;
+            }
+            core::mem::swap(&mut previous, &mut current);
+        }
+        for (endpoint_delta, &distance) in previous[..band_length].iter().enumerate() {
+            distances.insert_distance(start_delta, endpoint_delta, distance);
+        }
+    }
+    distances
+}
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "sse4.2")]
 // Unaligned SSE loads/stores intentionally accept byte-array pointers; the
@@ -1766,6 +1884,123 @@ unsafe fn narrow_placement_distances_batch_d3_avx2(
     for (endpoint, &endpoint_distances) in previous.iter().enumerate() {
         let mut lanes = [CAPPED; 32];
         // SAFETY: one vector writes the complete 32-byte local array.
+        unsafe {
+            _mm256_storeu_si256(lanes.as_mut_ptr().cast::<__m256i>(), endpoint_distances);
+        }
+        for (candidate, destination) in output.iter_mut().enumerate() {
+            for start in 0..BAND_LENGTH {
+                destination.insert_distance(
+                    start,
+                    endpoint,
+                    lanes[candidate * BAND_LENGTH + start],
+                );
+            }
+        }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+#[allow(clippy::cast_ptr_alignment, clippy::cast_possible_truncation)]
+unsafe fn narrow_placement_distances_interleaved_batch_d3_avx2(
+    reference_masks_by_query: &[u8; 5],
+    query: &[u8],
+    patterns: &[u8],
+    output: &mut [NarrowPlacementDistances],
+) {
+    use std::arch::x86_64::{
+        __m128i, __m256i, _mm_cvtsi32_si128, _mm_loadu_si128, _mm_movemask_epi8, _mm_setzero_si128,
+        _mm_shuffle_epi8, _mm256_adds_epu8, _mm256_loadu_si256, _mm256_min_epu8, _mm256_or_si256,
+        _mm256_set1_epi8, _mm256_setzero_si256, _mm256_storeu_si256,
+    };
+
+    const BAND_LENGTH: usize = 7;
+    const MAX_DISTANCE: usize = 3;
+    const CAPPED: u8 = 4;
+    const PATTERN_LANES: usize = 4;
+
+    let cap_vector = _mm256_set1_epi8(CAPPED.cast_signed());
+    let mut previous_storage = [cap_vector; BAND_LENGTH];
+    let mut current_storage = [cap_vector; BAND_LENGTH];
+    for (diagonal, slot) in previous_storage.iter_mut().enumerate() {
+        let mut lanes = [CAPPED; 32];
+        for candidate in 0..output.len() {
+            for start in 0..BAND_LENGTH {
+                if start <= diagonal {
+                    lanes[candidate * BAND_LENGTH + start] = (diagonal - start) as u8;
+                }
+            }
+        }
+        *slot = unsafe { _mm256_loadu_si256(lanes.as_ptr().cast::<__m256i>()) };
+    }
+    let mut previous = &mut previous_storage;
+    let mut current = &mut current_storage;
+    let one = _mm256_set1_epi8(1);
+    let lane_masks: [__m256i; 4] = core::array::from_fn(|candidate| {
+        let mut lanes = [0_u8; 32];
+        lanes[candidate * BAND_LENGTH..(candidate + 1) * BAND_LENGTH].fill(1);
+        unsafe { _mm256_loadu_si256(lanes.as_ptr().cast::<__m256i>()) }
+    });
+    let substitution_masks: [__m256i; 16] = core::array::from_fn(|mismatch_mask| {
+        let mut substitution = _mm256_setzero_si256();
+        for (candidate, &lane_mask) in lane_masks.iter().enumerate() {
+            if mismatch_mask & (1 << candidate) != 0 {
+                substitution = _mm256_or_si256(substitution, lane_mask);
+            }
+        }
+        substitution
+    });
+    let relation_tables: [__m128i; 5] = core::array::from_fn(|query_code| {
+        let reference_mask = reference_masks_by_query[query_code];
+        let mut table = [0_i8; 16];
+        for (reference_code, relation) in table[..5].iter_mut().enumerate() {
+            if reference_mask & (1_u8 << reference_code) != 0 {
+                *relation = -1;
+            }
+        }
+        unsafe { _mm_loadu_si128(table.as_ptr().cast::<__m128i>()) }
+    });
+    let active_candidates = (1_usize << output.len()) - 1;
+    for (query_position, &query_code) in query.iter().enumerate() {
+        current.fill(cap_vector);
+        let relation_table = relation_tables
+            .get(usize::from(query_code))
+            .copied()
+            .unwrap_or_else(|| _mm_setzero_si128());
+        for diagonal in 0..BAND_LENGTH {
+            let offset = (query_position + diagonal) * PATTERN_LANES;
+            let packed_codes =
+                unsafe { patterns.as_ptr().add(offset).cast::<i32>().read_unaligned() };
+            let codes = _mm_cvtsi32_si128(packed_codes);
+            let matches = _mm_shuffle_epi8(relation_table, codes);
+            let mismatch_mask = (!(u32::try_from(_mm_movemask_epi8(matches)).unwrap_or(0))
+                as usize)
+                & active_candidates;
+            let substitution = substitution_masks[mismatch_mask];
+            let diagonal_score = _mm256_adds_epu8(previous[diagonal], substitution);
+            let query_gap = if diagonal + 1 < BAND_LENGTH {
+                _mm256_adds_epu8(previous[diagonal + 1], one)
+            } else {
+                cap_vector
+            };
+            let reference_gap = if diagonal != 0 {
+                _mm256_adds_epu8(current[diagonal - 1], one)
+            } else {
+                cap_vector
+            };
+            current[diagonal] = _mm256_min_epu8(
+                _mm256_min_epu8(_mm256_min_epu8(diagonal_score, query_gap), reference_gap),
+                cap_vector,
+            );
+        }
+        core::mem::swap(&mut previous, &mut current);
+    }
+    for destination in output.iter_mut() {
+        destination.band_length = BAND_LENGTH as u8;
+        destination.max_distance = MAX_DISTANCE as u8;
+    }
+    for (endpoint, &endpoint_distances) in previous.iter().enumerate() {
+        let mut lanes = [CAPPED; 32];
         unsafe {
             _mm256_storeu_si256(lanes.as_mut_ptr().cast::<__m256i>(), endpoint_distances);
         }
