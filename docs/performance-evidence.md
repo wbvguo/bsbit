@@ -267,6 +267,34 @@ controlled observation, not a replicated timing or cross-corpus qualification.
 The complete binary, BAMs, commands, process-tree samples, evaluator output,
 tables, and hashes are retained under the local 2026-09-01 benchmark archive.
 
+### Single-end sensitive sufficient audit boundary
+
+Commit `7808aa1d1f9a66dfa93a24831fead7f20aa99240` keeps the complete
+six-round sensitive seed frontier but avoids distance-four/five verification
+for an incumbent that is already Q20 or better at edit distance two or less.
+Distance three contains every placement that can tie or beat that incumbent or
+reduce its Q20 edit separation. Weak, unmapped, and distance-three incumbents
+retain the full distance-five boundary.
+
+On the same 5M-R1 corpus, every non-MAPQ SAM field was byte-identical to
+`7b646e3`; only 115 reads (0.0023%) moved from Q10 to a higher bin. Q20 gained
+70 correct reads and one error, while the Q30 and Q40 additions were all
+correct. Q0/Q10 results were unchanged, and Q10 through Q40 continued to pass
+the one-sided 95% calibration contract.
+
+Two previous-binary measurements and two optimized measurements used the same
+CPU binding, sampler, warm inputs, index, and output contract:
+
+| Implementation | Wall mean | User CPU mean | Total CPU mean | Peak RSS / I/O |
+|---|---:|---:|---:|---|
+| `7b646e3` | 49.801 s | 390.475 s | 394.680 s | unchanged within sampling precision |
+| `7808aa1` | 47.426 s | 369.850 s | 373.070 s | unchanged within sampling precision |
+
+The observed mean reductions are 4.77% wall, 5.28% user CPU, and 5.48% total
+CPU. Complete formal and replicate process-tree sidecars, BAMs, MAPQ transition
+matrix, evaluator output, and the frozen binary are retained in
+`workspace/benchmark/2026-09-01--sim-wgbs-10m-current-head/single/experiments/7808aa1/`.
+
 ## Reproduction protocol
 
 Build the audited executable with the release script and verify its recorded
