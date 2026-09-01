@@ -25,8 +25,21 @@ only after the layout-specific pass completes.
 This is deliberately not a four-lane search kernel. The already qualified
 two-lane kernel and its compact workspaces remain intact, so directional work
 does not pay for non-directional state and paired policy does not leak into
-single-end code. The public `PairedLibraryProfile` name remains as a type alias
-for source compatibility; new orchestration uses `LibraryProfile`.
+single-end code. Because this crate is unpublished, the follow-up cleanup
+removes the obsolete `PairedLibraryProfile` alias instead of carrying a second
+name for `LibraryProfile`.
+
+The follow-up cleanup at `920aa9a` also:
+
+- makes `PairConstraints` the sole paired profile/span input, eliminating raw
+  duplicate span fields and the now-unreachable aligner span error;
+- replaces paired `bool` and `0/1` mate-routing conventions with a typed
+  `MateRole`, which owns lane identity, query-block orientation, and the
+  canonical per-mate conversion pass;
+- reuses a worker-owned primary-pass result buffer for non-directional paired
+  reduction instead of allocating a clone for every mapping call;
+- removes repository-unused single-end compatibility entry points; and
+- derives all four layout/profile provenance modes from one exhaustive table.
 
 ## Correctness result
 
@@ -41,10 +54,10 @@ four modes. Every BAM also passed `samtools quickcheck`.
 | non-directional paired | `87cf57ba3ba8fbba43d851dd088493165d528085095197e8529984c43e669468` |
 
 Internal classifications and search-work counters also match exactly between
-the A and B binaries; the retained values are in `single-metrics.tsv` and
-`paired-metrics.tsv`. A new CLI integration case covers non-directional paired
-dispatch and provenance, complementing the existing directional single,
-non-directional single, and directional paired coverage.
+the baseline, candidate, and cleanup binaries; the retained values are in
+`single-metrics.tsv` and `paired-metrics.tsv`. A CLI integration case covers
+non-directional paired dispatch and provenance, complementing the existing
+directional single, non-directional single, and directional paired coverage.
 
 ## Performance result
 
@@ -67,10 +80,29 @@ as stable estimates. Peak RSS is effectively unchanged. The defensible result
 is no material throughput regression or improvement from the responsibility
 refactor itself.
 
-Two allocations are nevertheless removed from the non-directional reducers:
-single-end reuses a retained primary-pass buffer instead of cloning both pass
-results, and paired-end no longer allocates a separate complementary result
-vector. Any benefit is currently below end-to-end measurement noise.
+The responsibility refactor made single-end reuse a retained primary-pass
+buffer. The cleanup applies the same ownership pattern to paired-end, removing
+its per-call primary-result clone. Any benefit is below end-to-end measurement
+noise and is not claimed as a throughput improvement.
+
+## Follow-up cleanup qualification
+
+The cleanup binary was rebuilt with the same release flags and rerun once in
+each mode on the same frozen five-million-record fixture. All four BAMs are
+byte-identical to the qualified `44f1d4c` candidate, all four passed
+`samtools quickcheck`, and all reported classifications and search-work
+counters are unchanged.
+
+| mode | cleanup wall | cleanup user CPU | peak RSS |
+| --- | ---: | ---: | ---: |
+| directional single | 14.54 s | 107.04 s | 8.74 GiB |
+| non-directional single | 45.18 s | 359.53 s | 8.74 GiB |
+| directional paired | 12.94 s | 133.59 s | 9.35 GiB |
+| non-directional paired | 28.65 s | 288.68 s | 9.35 GiB |
+
+These are single follow-up observations taken after the original A/B campaign;
+host-state and run-order effects are uncontrolled. They qualify absence of a
+large regression, not a speedup. Raw values are appended to `results.tsv`.
 
 ## Quality gates
 
@@ -92,10 +124,13 @@ above supplies the corpus-level qualification for this branch.
 
 - baseline source: `da5ea39`
 - candidate source: `44f1d4c`
+- cleanup source: `920aa9a`
 - baseline binary SHA-256:
   `049ff373cff4d421ba4450e7991151e9340b119c46de08ce34d0d78cb11450d6`
 - candidate binary SHA-256:
   `310a2038bfb58858c7dcf568444cf86f173f43688c5ade018ccbee625dd38467`
+- cleanup binary SHA-256:
+  `73c3fb00bd08972be4b10a4d56dbd9b7c2126cdbea0cee30f20fe6f2d2b31c7d`
 - raw binaries and BAMs: `/tmp/bsbit-align-strand-plan-20260901.FRNsk3`
 - R1/R2 fixture: `/tmp/bsbit-current-benchmark-20260831/inputs`
 - index: `/tmp/bsbit-align-full-optimization-20260901/sa8-index/grch38-sa8.bsbit`

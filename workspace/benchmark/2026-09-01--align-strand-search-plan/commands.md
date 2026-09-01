@@ -81,6 +81,33 @@ samtools quickcheck *.bam
 
 All comparisons and quick checks succeeded.
 
+## Follow-up code-cleanup qualification
+
+Commit `920aa9a` was built with the same frozen release command. The resulting
+binary was copied to `cleanup-bsbit` in the evidence directory and run with
+the same inputs, CPU sets, thread counts, compression level, and four CLI mode
+combinations above. Output names used the `cleanup-` prefix. Each invocation
+was wrapped with:
+
+```bash
+/usr/bin/time -f 'TIME MODE wall=%e user=%U system=%S maxrss_kib=%M' \
+  taskset -c CPU_SET "$EVIDENCE/cleanup-bsbit" align ...
+```
+
+The cleanup output was checked directly against the qualified candidate:
+
+```bash
+cmp candidate-directional-single.bam cleanup-directional-single.bam
+cmp candidate-nondirectional-single.bam cleanup-nondirectional-single.bam
+cmp candidate-directional-paired.bam cleanup-directional-paired.bam
+cmp candidate-nondirectional-paired.bam cleanup-nondirectional-paired.bam
+samtools quickcheck cleanup-*.bam
+sha256sum cleanup-*.bam cleanup-bsbit
+```
+
+All comparisons and quick checks succeeded. Timings and digests are recorded
+in `results.tsv` and `report.md`.
+
 ## Quality gates
 
 ```bash
@@ -91,6 +118,6 @@ cargo test --locked --workspace --all-targets
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 /mnt/conda/envs/dev/bin/python tests/tools/test_crate_boundaries.py
-mkdocs build --strict
+/mnt/conda/envs/dev/bin/python -m mkdocs build --strict
 git diff --check
 ```

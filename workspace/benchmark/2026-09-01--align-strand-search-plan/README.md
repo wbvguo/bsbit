@@ -1,12 +1,13 @@
 # Shared strand-search plan qualification — 2026-09-01
 
-This evidence qualifies commit `44f1d4c` on branch
-`codex/align-strand-search-plan` against its parent `da5ea39`.
+This evidence qualifies the responsibility refactor at `44f1d4c` on branch
+`codex/align-strand-search-plan` against its parent `da5ea39`, plus the
+source-surface cleanup at `920aa9a` against the qualified refactor.
 
 The five-million-record GRCh38 fixture, frozen release binaries, and BAMs
 remain outside Git under `/tmp/bsbit-align-strand-plan-20260901.FRNsk3`.
 The checked-in files retain the commands, raw timings, internal work counts,
-output digests, and interpretation needed to audit the refactor.
+output digests, and interpretation needed to audit both stages.
 
 Files:
 
