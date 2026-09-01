@@ -1,0 +1,100 @@
+site_name: bsbit
+site_description: Ultrafast, memory-efficient bisulfite alignment with methylation, SNP, and cohort analysis
+site_url: !ENV [SITE_URL, "http://127.0.0.1:8800/bsbit/"]
+dev_addr: !ENV [DEV_ADDR, "127.0.0.1:8800"]
+repo_url: https://github.com/wbvguo/bsbit
+repo_name: GitHub
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  logo: img/dna-methylation.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - toc.follow
+
+plugins:
+  - search
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Get started:
+      - Installation: getting-started/installation.md
+      - Quick start: getting-started/quickstart.md
+      - Workflow: getting-started/workflow.md
+  - Usage:
+      - Build index: guides/indexing.md
+      - Align reads: guides/alignment.md
+      - Prepare a BAM: guides/prepare-bam.md
+      - Call methylation: outputs/methylation.md
+      - Call SNVs: outputs/variant-calling.md
+      - Build matrix: outputs/methylation-matrices.md
+  - Outputs:
+      - Outputs overview: outputs/index.md
+      - Alignment BAM: outputs/alignment-bam.md
+  - Reference:
+      - Use the CLI reference: reference/cli.md
+      - Prepare input data: reference/input-data.md
+      - Troubleshoot problems: help/troubleshooting.md
+  - Evidence and limitations:
+      - Review performance evidence: performance-evidence.md
+      - Check known differences: known-differences.md
+  - Developer documentation:
+      - Review the architecture: architecture.md
+      - Run tests and release checks: testing.md
+      - Follow the repository layout: repository-layout.md
+
+# Exact contracts, binary-format specifications, and maintenance registries
+# remain searchable and directly linked without crowding the user navigation.
+not_in_nav: |
+  /behavior-contract.md
+  /scientific-contract.md
+  /development/feature-lifecycle.md
+  /getting-started/capabilities.md
+  /guides/paired-end-alignment.md
+  /tutorials/end-to-end.md
+
+copyright: !ENV [DOCS_COPYRIGHT, "Copyright &copy; bsbit contributors · local documentation build"]

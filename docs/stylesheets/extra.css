@@ -1,0 +1,84 @@
+.md-typeset h1 {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.md-grid {
+  max-width: 61rem;
+}
+
+.md-typeset h2 {
+  border-bottom: 0.05rem solid var(--md-default-fg-color--lightest);
+  padding-bottom: 0.35rem;
+}
+
+.md-typeset table:not([class]) {
+  font-size: 0.8rem;
+}
+
+.md-typeset table:not([class]) th {
+  white-space: nowrap;
+}
+
+.md-typeset table:not([class]) td:first-child code {
+  white-space: nowrap;
+}
+
+.docs-intro {
+  margin-bottom: 1.5rem;
+}
+
+.docs-intro h1 {
+  margin-bottom: 0.6rem;
+}
+
+.docs-intro p {
+  margin: 0.6rem 0;
+}
+
+.docs-intro::after {
+  clear: both;
+  content: "";
+  display: block;
+}
+
+.docs-logo {
+  clip-path: polygon(50% 0, 94% 23%, 94% 76%, 50% 100%, 6% 76%, 6% 23%);
+  float: right;
+  height: auto;
+  margin: 0 0 1rem 1.5rem;
+  width: 6rem;
+}
+
+@media screen and (min-width: 76.25em) {
+  .md-sidebar--primary
+    .md-nav--primary
+    > .md-nav__list
+    > .md-nav__item--section
+    > .md-nav__link {
+    font-size: 0.72rem;
+    letter-spacing: 0;
+    line-height: 1.3;
+    margin-top: 1rem;
+    text-transform: none;
+  }
+}
+
+@media screen and (max-width: 44.984375em) {
+  .docs-logo {
+    display: block;
+    float: none;
+    margin: 0 auto 1rem;
+    width: 4.5rem;
+  }
+
+  .md-typeset table:not([class]) th {
+    white-space: normal;
+  }
+
+  .md-typeset table:not([class]) code,
+  .md-typeset table:not([class]) td:first-child code {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+}
