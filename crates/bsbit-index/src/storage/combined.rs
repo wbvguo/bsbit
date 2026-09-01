@@ -1,8 +1,8 @@
 //! Read-only adapter for the current combined-directional FM index.
 //!
 //! This module is intentionally feature-gated and format-specific. It reads the
-//! current 16-mer table, Occ64/Occ65536 bit-plane rank, and SA16 sampled-row
-//! representation without exposing that layout through bsbit's opaque index
+//! current 16-mer table, Occ64/Occ65536 bit-plane rank, and versioned sparse-SA
+//! representation without exposing those layouts through bsbit's opaque index
 //! command contract.
 
 use core::fmt;
@@ -96,16 +96,57 @@ pub(crate) const META_BYTES: usize = 120;
 pub(crate) const META_BYTES_U32: u32 = 120;
 pub(crate) const META_EXTENSION_MAGIC: &[u8; 8] = b"BSBICMB1";
 pub(crate) const META_EXTENSION_MAJOR: u16 = 1;
+/// Original bound format containing a stride-16 sparse suffix array.
 pub(crate) const META_EXTENSION_MINOR: u16 = 0;
+/// Bound format extension containing a stride-8 sparse suffix array.
+pub(crate) const META_EXTENSION_MINOR_SA8: u16 = 1;
 pub(crate) const META_EXTENSION_OFFSET: usize = 68;
 pub(crate) const META_DIGEST_OFFSET: usize = 84;
 const LOOKUP_BASES: usize = 16;
 const LOOKUP_ENTRIES: u64 = 43_046_722;
-const SA_STRIDE: u64 = 16;
-const SA_STRIDE_U32: u32 = 16;
 const SA_VALUE_MASK: u32 = 0x3fff_ffff;
 const MAX_WAVEFRONT_LANES: usize = 64;
 const MAX_WAVEFRONT_BOUNDARIES: usize = MAX_WAVEFRONT_LANES * 2;
+
+/// Supported sparse suffix-array sampling distances.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CombinedIndexSaStride {
+    /// Faster location with a larger sparse suffix array.
+    Eight,
+    /// Qualified default balancing mapping speed and index size.
+    #[default]
+    Sixteen,
+}
+
+impl CombinedIndexSaStride {
+    /// Returns the physical row-sampling distance stored in metadata.
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        match self {
+            Self::Eight => 8,
+            Self::Sixteen => 16,
+        }
+    }
+
+    const fn value_u64(self) -> u64 {
+        self.value() as u64
+    }
+
+    pub(crate) const fn metadata_minor(self) -> u16 {
+        match self {
+            Self::Eight => META_EXTENSION_MINOR_SA8,
+            Self::Sixteen => META_EXTENSION_MINOR,
+        }
+    }
+
+    const fn from_metadata(value: u32, minor: u16) -> Option<Self> {
+        match (value, minor) {
+            (8, META_EXTENSION_MINOR_SA8) => Some(Self::Eight),
+            (16, META_EXTENSION_MINOR) => Some(Self::Sixteen),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug)]
 struct SameLowBlockRankPlan {
@@ -535,6 +576,7 @@ pub struct CombinedIndex {
     sa_flags_offset: usize,
     high_occ_entries: u64,
     high_occ_offset: usize,
+    sa_stride: CombinedIndexSaStride,
     reference_semantic_digest: ReferenceSemanticDigest,
 }
 
@@ -564,9 +606,9 @@ impl CombinedIndex {
         let sa_stride = slice_u32(&meta, 56);
         let occ_stride = slice_u32(&meta, 60);
         let high_occ_stride = slice_u32(&meta, 64);
+        let metadata_minor = slice_u16(&meta, 78);
         if &meta[META_EXTENSION_OFFSET..META_EXTENSION_OFFSET + 8] != META_EXTENSION_MAGIC
             || slice_u16(&meta, 76) != META_EXTENSION_MAJOR
-            || slice_u16(&meta, 78) != META_EXTENSION_MINOR
             || slice_u32(&meta, 80) != META_BYTES_U32
             || meta[116..120] != [0; 4]
         {
@@ -586,9 +628,14 @@ impl CombinedIndex {
                 "metadata suffix or cumulative-count domain is invalid",
             ));
         }
-        if sa_stride != SA_STRIDE_U32 || occ_stride != 64 || high_occ_stride != 128 {
+        let sa_stride = CombinedIndexSaStride::from_metadata(sa_stride, metadata_minor).ok_or(
+            CombinedIndexError::Structure(
+                "metadata sparse-SA stride and format minor are unsupported",
+            ),
+        )?;
+        if occ_stride != 64 || high_occ_stride != 128 {
             return Err(CombinedIndexError::Structure(
-                "only the current SA16/Occ64/Occ128 layout is supported",
+                "only the current Occ64/Occ128 layout is supported",
             ));
         }
 
@@ -664,6 +711,7 @@ impl CombinedIndex {
             sa_flags_offset,
             high_occ_entries,
             high_occ_offset,
+            sa_stride,
             reference_semantic_digest,
         };
         index.validate_runtime_dimensions()?;
@@ -686,6 +734,12 @@ impl CombinedIndex {
     #[must_use]
     pub const fn reference_semantic_digest(&self) -> ReferenceSemanticDigest {
         self.reference_semantic_digest
+    }
+
+    /// Returns the validated sparse suffix-array sampling distance.
+    #[must_use]
+    pub const fn sa_stride(&self) -> CombinedIndexSaStride {
+        self.sa_stride
     }
 
     /// Requires this image to be bound to the supplied reference catalog.
@@ -1096,6 +1150,17 @@ impl CombinedIndex {
         {
             return Err(CombinedIndexError::Structure(
                 "rank or sampled-SA arrays are shorter than their row domain",
+            ));
+        }
+        let expected_sparse_entries = (self.suffix_count - 1)
+            .checked_div(self.sa_stride.value_u64())
+            .and_then(|samples| samples.checked_add(1))
+            .ok_or(CombinedIndexError::Structure(
+                "sampled-SA entry dimensions overflow",
+            ))?;
+        if self.sparse_sa_entries != expected_sparse_entries {
+            return Err(CombinedIndexError::Structure(
+                "sampled-SA entry count disagrees with the declared stride",
             ));
         }
         if self.sample_rank(self.suffix_count)? != self.sparse_sa_entries {
@@ -1719,7 +1784,20 @@ impl CombinedIndex {
         Ok(ordinal)
     }
 
+    #[inline]
     fn locate_row(&self, row: u64) -> Result<(u64, u64), CombinedIndexError> {
+        match self.sa_stride {
+            CombinedIndexSaStride::Eight => self.locate_row_at_stride::<8>(row),
+            CombinedIndexSaStride::Sixteen => self.locate_row_at_stride::<16>(row),
+        }
+    }
+
+    #[inline]
+    fn locate_row_at_stride<const SA_STRIDE: u64>(
+        &self,
+        row: u64,
+    ) -> Result<(u64, u64), CombinedIndexError> {
+        debug_assert!(matches!(SA_STRIDE, 8 | 16));
         let mut row = row;
         let mut steps = 0_u64;
         loop {
@@ -1756,6 +1834,18 @@ impl CombinedIndex {
 
     #[inline]
     fn locate_rows_two_lanes(&self, rows: [u64; 2]) -> Result<[(u64, u64); 2], CombinedIndexError> {
+        match self.sa_stride {
+            CombinedIndexSaStride::Eight => self.locate_rows_two_lanes_at_stride::<8>(rows),
+            CombinedIndexSaStride::Sixteen => self.locate_rows_two_lanes_at_stride::<16>(rows),
+        }
+    }
+
+    #[inline]
+    fn locate_rows_two_lanes_at_stride<const SA_STRIDE: u64>(
+        &self,
+        rows: [u64; 2],
+    ) -> Result<[(u64, u64); 2], CombinedIndexError> {
+        debug_assert!(matches!(SA_STRIDE, 8 | 16));
         let mut rows = rows;
         let mut steps = [0_u64; 2];
         let mut located = [None, None];

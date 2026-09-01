@@ -1,3 +1,4 @@
+use super::index::IndexSpeed;
 use super::{Action, parse};
 use bsbit_call::meth::OutputFormat as MethylationOutputFormat;
 use bsbit_combine::MatrixFormat as CombineMatrixFormat;
@@ -23,6 +24,7 @@ fn exact_index_options_parse() {
     assert_eq!(index.reference, std::path::Path::new("ref.fa"));
     assert_eq!(index.output, std::path::Path::new("ref.bsbit"));
     assert_eq!(index.threads, 4);
+    assert_eq!(index.speed, IndexSpeed::Balanced);
 }
 
 #[test]

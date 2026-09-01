@@ -45,7 +45,7 @@ fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
 }
 
 #[test]
-fn reader_rejects_retired_unbound_and_non_sa16_metadata() {
+fn reader_rejects_retired_unbound_and_mismatched_stride_metadata() {
     let directory = TestDirectory::new("retired-metadata");
     let prefix = directory.prefix();
 
@@ -76,9 +76,30 @@ fn reader_rejects_retired_unbound_and_non_sa16_metadata() {
     assert!(matches!(
         CombinedIndex::open(&prefix),
         Err(CombinedIndexError::Structure(
-            "only the current SA16/Occ64/Occ128 layout is supported"
+            "metadata sparse-SA stride and format minor are unsupported"
         ))
     ));
+}
+
+#[test]
+fn sparse_sa_stride_is_bound_to_its_format_minor() {
+    assert_eq!(
+        CombinedIndexSaStride::from_metadata(16, META_EXTENSION_MINOR),
+        Some(CombinedIndexSaStride::Sixteen)
+    );
+    assert_eq!(
+        CombinedIndexSaStride::from_metadata(8, META_EXTENSION_MINOR_SA8),
+        Some(CombinedIndexSaStride::Eight)
+    );
+    assert_eq!(
+        CombinedIndexSaStride::from_metadata(8, META_EXTENSION_MINOR),
+        None
+    );
+    assert_eq!(
+        CombinedIndexSaStride::from_metadata(16, META_EXTENSION_MINOR_SA8),
+        None
+    );
+    assert_eq!(CombinedIndexSaStride::from_metadata(4, 2), None);
 }
 
 #[test]

@@ -25,6 +25,21 @@ missing, stale, corrupt, or mismatched component is an error and is never
 rebuilt during alignment. Downstream calling independently uses the indexed
 original FASTA as its authoritative sequence.
 
+For repeated, throughput-oriented alignment where additional index storage and
+mapping memory are acceptable, build the optional stride-8 index:
+
+```bash
+bsbit index \
+  --reference GRCh38.fa \
+  --output GRCh38.fast.bsbit \
+  --threads 8 \
+  --index-speed fast
+```
+
+The default `--index-speed balanced` keeps the stride-16 layout. Both modes
+produce identical alignment decisions; `fast` stores roughly twice as many
+sparse suffix-array samples so that locating a hit needs fewer LF steps.
+
 ## Next
 
 - [Align reads](alignment.md)

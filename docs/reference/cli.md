@@ -46,7 +46,8 @@ Create the complete alignment index from local plain, gzip, or BGZF FASTA.
 The command refuses to overwrite an existing output.
 
 ```bash
-bsbit index --reference PATH --output PATH [--threads N]
+bsbit index --reference PATH --output PATH [--threads N] \
+  [--index-speed balanced|fast]
 ```
 
 | Option | Default | Meaning |
@@ -54,10 +55,14 @@ bsbit index --reference PATH --output PATH [--threads N]
 | `--reference PATH` | Required | Input FASTA |
 | `--output PATH` | Required | New logical index handle |
 | `--threads N` | 1 | Indexing workers, 1–64 |
+| `--index-speed balanced\\|fast` | `balanced` | Sparse suffix-array tradeoff: `fast` reduces locate work while increasing index size and mapping RSS |
 
 This single command builds all alignment data. `OUTPUT` is the opaque index
 handle passed to `bsbit align`; physical construction and
-layout are not part of the user-facing contract.
+layout are not part of the user-facing contract. The default `balanced` index
+uses stride 16. `fast` uses stride 8 and remains query-compatible with the same
+aligner, but it is a distinct on-disk format revision and consumes more storage
+and resident memory.
 
 ## `bsbit align` { #bsbit-align }
 

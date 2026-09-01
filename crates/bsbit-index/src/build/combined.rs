@@ -1,7 +1,7 @@
 //! Rust-owned publisher for the current combined three-letter index image.
 //!
 //! libsais supplies only the cyclic BWT and inverse-SA samples. Rust owns the
-//! reference projection, Occ64/Occ65536 packing, dense 16-mer lookup, SA16
+//! reference projection, Occ64/Occ65536 packing, dense 16-mer lookup, sparse-SA
 //! row inversion, validation, and create-only multi-file publication.
 
 use core::ffi::c_int;
@@ -30,8 +30,8 @@ use super::combined_blocks::{
 #[cfg(test)]
 use crate::build::libsais::{libsais_bwt_aux_omp, libsais64_bwt_aux_omp};
 use crate::storage::combined::{
-    BWT_WORDS_PER_128_ROWS, META_BYTES, META_BYTES_U32, META_DIGEST_OFFSET, META_EXTENSION_MAGIC,
-    META_EXTENSION_MAJOR, META_EXTENSION_MINOR, META_EXTENSION_OFFSET, SA_FLAG_WORDS_PER_256_ROWS,
+    BWT_WORDS_PER_128_ROWS, CombinedIndexSaStride, META_BYTES, META_BYTES_U32, META_DIGEST_OFFSET,
+    META_EXTENSION_MAGIC, META_EXTENSION_MAJOR, META_EXTENSION_OFFSET, SA_FLAG_WORDS_PER_256_ROWS,
     lf_all_boundaries,
 };
 use crate::storage::combined::{CombinedIndex, CombinedIndexError, ReadOnlyMapping};
@@ -60,18 +60,19 @@ const PARALLEL_RADIX_MIN_ENTRIES: usize = 1_000_000;
 const MAX_LOOKUP_TASK_DIGITS: usize = 4;
 #[cfg(test)]
 const PROJECTION_SEGMENT_BASES: usize = 8 * 1024 * 1024;
-/// Qualified default working-memory budget for bounded combined-index SA16 builds.
+/// Qualified default working-memory budget for bounded combined-index builds.
 pub const DEFAULT_COMBINED_INDEX_MEMORY_MIB: u64 = 9_300;
 const POW3: [u64; LOOKUP_BASES + 1] = [
     1, 3, 9, 27, 81, 243, 729, 2_187, 6_561, 19_683, 59_049, 177_147, 531_441, 1_594_323,
     4_782_969, 14_348_907, 43_046_721,
 ];
 
-/// Checked options for one combined-index SA16 build.
+/// Checked options for one combined-index sparse-SA build.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CombinedIndexBuildOptions {
     threads: u32,
     memory_mib: u64,
+    sa_stride: CombinedIndexSaStride,
 }
 
 impl CombinedIndexBuildOptions {
@@ -90,7 +91,15 @@ impl CombinedIndexBuildOptions {
         Ok(Self {
             threads,
             memory_mib: DEFAULT_COMBINED_INDEX_MEMORY_MIB,
+            sa_stride: CombinedIndexSaStride::Sixteen,
         })
+    }
+
+    /// Selects one supported sparse suffix-array speed/size tradeoff.
+    #[must_use]
+    pub const fn with_sa_stride(mut self, sa_stride: CombinedIndexSaStride) -> Self {
+        self.sa_stride = sa_stride;
+        self
     }
 
     /// Returns the configured libsais and Rust worker count.
@@ -103,6 +112,12 @@ impl CombinedIndexBuildOptions {
     #[must_use]
     pub const fn memory_mib(self) -> u64 {
         self.memory_mib
+    }
+
+    /// Returns the configured sparse suffix-array sampling distance.
+    #[must_use]
+    pub const fn sa_stride(self) -> CombinedIndexSaStride {
+        self.sa_stride
     }
 }
 
@@ -145,21 +160,21 @@ impl fmt::Display for CombinedIndexBuildError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Argument(message) => {
-                write!(formatter, "combined-index SA16 build argument: {message}")
+                write!(formatter, "combined-index build argument: {message}")
             }
             Self::Allocation(label) => {
-                write!(formatter, "combined-index SA16 allocation failed: {label}")
+                write!(formatter, "combined-index allocation failed: {label}")
             }
             Self::Libsais(status) => write!(formatter, "libsais BWT returned status {status}"),
             Self::Structure(message) => {
-                write!(formatter, "combined-index SA16 structure: {message}")
+                write!(formatter, "combined-index structure: {message}")
             }
-            Self::Detail(message) => write!(formatter, "combined-index SA16 structure: {message}"),
+            Self::Detail(message) => write!(formatter, "combined-index structure: {message}"),
             Self::ReferenceDigestMismatch { expected, observed } => write!(
                 formatter,
                 "combined-index source catalog digest differs: expected {expected}, observed {observed}"
             ),
-            Self::Io(error) => write!(formatter, "combined-index SA16 I/O: {error}"),
+            Self::Io(error) => write!(formatter, "combined-index I/O: {error}"),
             Self::CombinedIndex(error) => error.fmt(formatter),
         }
     }
@@ -1921,7 +1936,7 @@ fn write_lookup_boundary(
 }
 
 /// Projects a consumed catalog, releases it before libsais, and publishes a
-/// complete compatible SA16 image without overwriting an existing component.
+/// complete compatible sparse-SA image without overwriting an existing component.
 ///
 /// # Errors
 ///
@@ -1957,7 +1972,7 @@ pub fn build_combined_index_from_catalog_create_new(
     let projected = project_combined_packed_text(&contigs, projection_salt, options.threads)?;
     let text_length = u64::try_from(projected.len())
         .map_err(|_| CombinedIndexBuildError::Argument("projected text length exceeds u64"))?;
-    validate_combined_text_length(text_length, DEFAULT_COMBINED_INDEX_SA_STRIDE)?;
+    validate_combined_text_length(text_length, options.sa_stride.value())?;
     if projected.reference_bases().checked_mul(2) != Some(text_length) {
         return Err(CombinedIndexBuildError::Argument(
             "projected text length differs from twice the reference",
@@ -1990,7 +2005,8 @@ fn build_combined_index_bounded_create_new(
 ) -> Result<(), CombinedIndexBuildError> {
     let text_length = u64::try_from(projected.len())
         .map_err(|_| CombinedIndexBuildError::Argument("projected text length exceeds u64"))?;
-    validate_combined_text_length(text_length, DEFAULT_COMBINED_INDEX_SA_STRIDE)?;
+    let sa_stride = options.sa_stride.value();
+    validate_combined_text_length(text_length, sa_stride)?;
     if projected.reference_bases().checked_mul(2) != Some(text_length) {
         return Err(CombinedIndexBuildError::Argument(
             "projected text length differs from twice the reference",
@@ -2003,14 +2019,13 @@ fn build_combined_index_bounded_create_new(
     let short_thresholds = short_suffix_thresholds(&tail)?;
     let staging = StagedCombinedIndex::create(prefix)?;
 
-    let config = BoundedBwtConfig::new(options.memory_mib, options.threads)?.with_sample_stride(
-        usize::try_from(DEFAULT_COMBINED_INDEX_SA_STRIDE).expect("validated SA stride fits usize"),
-    )?;
+    let config = BoundedBwtConfig::new(options.memory_mib, options.threads)?
+        .with_sample_stride(usize::try_from(sa_stride).expect("validated SA stride fits usize"))?;
     let state = build_bounded_bwt(projected, config)?;
 
     let dimensions = write_bounded_bwt_and_occ(&state, &staging.bwt.file, &staging.occ.file)?;
 
-    write_bounded_sa16(&state, DEFAULT_COMBINED_INDEX_SA_STRIDE, &staging.sa.file)?;
+    write_bounded_sa16(&state, sa_stride, &staging.sa.file)?;
     drop(state);
 
     let rank = BuildRank::open(&staging.bwt.file, &staging.occ.file, dimensions)?;
@@ -2026,7 +2041,7 @@ fn build_combined_index_bounded_create_new(
     write_metadata(
         &staging.meta.file,
         dimensions,
-        DEFAULT_COMBINED_INDEX_SA_STRIDE,
+        options.sa_stride,
         reference_semantic_digest,
     )?;
     let completed = staging.seal()?;
@@ -2034,6 +2049,11 @@ fn build_combined_index_bounded_create_new(
     if index.suffix_count() != dimensions.suffix_count {
         return Err(CombinedIndexBuildError::Structure(
             "runtime reader returned a foreign suffix count",
+        ));
+    }
+    if index.sa_stride() != options.sa_stride {
+        return Err(CombinedIndexBuildError::Structure(
+            "runtime reader returned a foreign sparse-SA stride",
         ));
     }
     index.verify_reference_semantic_digest(reference_semantic_digest)?;
@@ -2050,7 +2070,7 @@ fn build_combined_index_bounded_create_new(
 fn write_metadata(
     file: &File,
     dimensions: BwtDimensions,
-    sa_stride: u32,
+    sa_stride: CombinedIndexSaStride,
     reference_semantic_digest: ReferenceSemanticDigest,
 ) -> Result<(), CombinedIndexBuildError> {
     let mut bytes = [0_u8; META_BYTES];
@@ -2060,13 +2080,13 @@ fn write_metadata(
         put_u64(&mut bytes, 16 + index * 8, value);
     }
     put_u64(&mut bytes, 48, dimensions.suffix_count);
-    put_u32(&mut bytes, 56, sa_stride);
+    put_u32(&mut bytes, 56, sa_stride.value());
     put_u32(&mut bytes, 60, OCC_STRIDE);
     put_u32(&mut bytes, 64, HIGH_OCC_STRIDE);
     bytes[META_EXTENSION_OFFSET..META_EXTENSION_OFFSET + META_EXTENSION_MAGIC.len()]
         .copy_from_slice(META_EXTENSION_MAGIC);
     put_u16(&mut bytes, 76, META_EXTENSION_MAJOR);
-    put_u16(&mut bytes, 78, META_EXTENSION_MINOR);
+    put_u16(&mut bytes, 78, sa_stride.metadata_minor());
     put_u32(&mut bytes, 80, META_BYTES_U32);
     bytes[META_DIGEST_OFFSET..META_DIGEST_OFFSET + 32]
         .copy_from_slice(reference_semantic_digest.as_bytes());

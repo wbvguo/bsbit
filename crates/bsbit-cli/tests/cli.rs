@@ -18,6 +18,7 @@ use bsbit_hts::{
     SamSortOrder, build_bam_index_create_new,
 };
 use bsbit_index::reference::{ContigInput, ReferenceBuildLimits, ReferenceIndex};
+use bsbit_index::storage::combined::{CombinedIndex, CombinedIndexSaStride};
 
 const BAM_CIGAR_CODES: &[u8; 10] = b"MIDNSHP=XB";
 const BAM_BASES: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
@@ -211,6 +212,18 @@ fn index(reference: &Path, output: &Path) -> Output {
         reference.as_os_str().to_owned(),
         OsString::from("--output"),
         output.as_os_str().to_owned(),
+    ])
+}
+
+fn fast_index(reference: &Path, output: &Path) -> Output {
+    run([
+        OsString::from("index"),
+        OsString::from("--reference"),
+        reference.as_os_str().to_owned(),
+        OsString::from("--output"),
+        output.as_os_str().to_owned(),
+        OsString::from("--index-speed"),
+        OsString::from("fast"),
     ])
 }
 
@@ -908,6 +921,22 @@ fn index_is_one_public_operation_and_rolls_back_an_incomplete_bundle() {
         output.as_os_str().to_owned(),
     ]);
     assert_eq!(hidden_subcommand.status.code(), Some(2));
+
+    fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+#[test]
+fn fast_index_publishes_a_stride8_image_accepted_by_the_runtime_reader() {
+    let directory = unique_directory("fast-index");
+    fs::create_dir(&directory).expect("fresh directory");
+    let reference = directory.join("reference.fa");
+    let output = directory.join("reference.bsbit");
+    fs::write(&reference, b">chr\nACGTACGT\n").expect("reference fixture");
+
+    assert_success(&fast_index(&reference, &output));
+    let combined = CombinedIndex::open(&internal_index_prefix(&output))
+        .expect("fast combined index opens through the production reader");
+    assert_eq!(combined.sa_stride(), CombinedIndexSaStride::Eight);
 
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }

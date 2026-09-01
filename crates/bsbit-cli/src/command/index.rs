@@ -5,6 +5,7 @@ use bsbit_index::build::combined::{
     CombinedIndexBuildOptions, build_combined_index_from_catalog_create_new,
 };
 use bsbit_index::reference::ContigInput;
+use bsbit_index::storage::combined::CombinedIndexSaStride;
 use bsbit_index::storage::reference_catalog::publish_reference_catalog_create_new;
 use bsbit_io::validate_create_target;
 
@@ -18,13 +19,25 @@ pub(crate) struct IndexOptions {
     pub(crate) reference: PathBuf,
     pub(crate) output: PathBuf,
     pub(crate) threads: u64,
+    pub(crate) speed: IndexSpeed,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum IndexSpeed {
+    #[default]
+    Balanced,
+    Fast,
 }
 
 pub(super) fn parse_index(arguments: &[String]) -> Result<Action, CliError> {
     if matches!(arguments, [value] if value == "--help" || value == "-h") {
         return Ok(Action::Help(INDEX_HELP));
     }
-    let (mut values, _) = option_map(arguments, &["--reference", "--output", "--threads"], &[])?;
+    let (mut values, _) = option_map(
+        arguments,
+        &["--reference", "--output", "--threads", "--index-speed"],
+        &[],
+    )?;
     let reference = required_path(&mut values, "--reference")?;
     let output = required_path(&mut values, "--output")?;
     let threads = optional_u64(&mut values, "--threads")?.unwrap_or(1);
@@ -33,10 +46,20 @@ pub(super) fn parse_index(arguments: &[String]) -> Result<Action, CliError> {
             "--threads must be in 1..={MAX_CLI_THREADS}"
         )));
     }
+    let speed = match values.remove("--index-speed").as_deref() {
+        None | Some("balanced") => IndexSpeed::Balanced,
+        Some("fast") => IndexSpeed::Fast,
+        Some(value) => {
+            return Err(CliError::usage(format!(
+                "invalid value `{value}` for `--index-speed`; expected balanced or fast"
+            )));
+        }
+    };
     Ok(Action::Index(IndexOptions {
         reference,
         output,
         threads,
+        speed,
     }))
 }
 
@@ -77,8 +100,13 @@ pub(crate) fn run(options: &IndexOptions) -> Result<RunReport, CliError> {
     let semantic_digest = publication.summary().semantic_digest();
     let internal_prefix = internal_search_file_prefix(&options.output);
     let threads = u32::try_from(options.threads).expect("validated CLI thread count fits u32");
+    let sa_stride = match options.speed {
+        IndexSpeed::Balanced => CombinedIndexSaStride::Sixteen,
+        IndexSpeed::Fast => CombinedIndexSaStride::Eight,
+    };
     let build_options = CombinedIndexBuildOptions::new(threads)
-        .expect("validated CLI thread count is accepted by the index builder");
+        .expect("validated CLI thread count is accepted by the index builder")
+        .with_sa_stride(sa_stride);
     if let Err(error) = build_combined_index_from_catalog_create_new(
         contigs,
         semantic_digest,
@@ -160,7 +188,8 @@ mod tests {
 
     use bsbit_hts::FastaReader;
 
-    use super::{contig_input_from_fasta_record, reference_text_limits};
+    use super::{IndexSpeed, contig_input_from_fasta_record, parse_index, reference_text_limits};
+    use crate::command::Action;
 
     #[test]
     fn fasta_description_is_not_promoted_into_the_contig_name() {
@@ -182,5 +211,32 @@ mod tests {
         let contig = contig_input_from_fasta_record(&record);
         assert_eq!(contig.name(), b"chr1");
         assert_eq!(contig.sequence().to_ascii(), b"ACGTN");
+    }
+
+    #[test]
+    fn index_speed_accepts_only_balanced_and_fast() {
+        let parse = |value: Option<&str>| {
+            let mut arguments = vec![
+                "--reference".to_owned(),
+                "ref.fa".to_owned(),
+                "--output".to_owned(),
+                "ref.bsbit".to_owned(),
+            ];
+            if let Some(value) = value {
+                arguments.extend(["--index-speed".to_owned(), value.to_owned()]);
+            }
+            parse_index(&arguments)
+        };
+        for (value, expected) in [
+            (None, IndexSpeed::Balanced),
+            (Some("balanced"), IndexSpeed::Balanced),
+            (Some("fast"), IndexSpeed::Fast),
+        ] {
+            let Action::Index(options) = parse(value).expect("supported speed parses") else {
+                panic!("expected index action");
+            };
+            assert_eq!(options.speed, expected);
+        }
+        assert!(parse(Some("quick")).is_err());
     }
 }

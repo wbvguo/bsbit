@@ -17,7 +17,7 @@ FASTA / FASTA.gz
 opaque complete index (.bsbit handle)
       |                                  \
       v                                   v
-compact exact-reference catalog     digest-bound combined SA16 image
+compact exact-reference catalog     digest-bound combined sparse-SA image
       |                                   |
       +----------------+------------------+
                        |
@@ -146,8 +146,9 @@ contig-local offsets, global offsets, FM rows, query offsets, and SAM positions
 remain distinct checked domains rather than interchangeable integers.
 
 The paired search surface combines a demand-paged BWT, exact 16-mer lookup,
-occurrence checkpoints, and SA16 rank samples with a separately validated
-packed reference catalog. Search projections may collapse letters, but every
+occurrence checkpoints, and format-versioned stride-16 or stride-8 suffix-array
+rank samples with a separately validated packed reference catalog. Search
+projections may collapse letters, but every
 accepted placement is verified against the exact bases, contig boundaries, and
 N mask owned by that catalog. A projected domain larger than `u32` requires a
 new 64-bit format; it is never truncated.
@@ -218,7 +219,9 @@ applies to `meth`, `snp`, and `joint`.
 the exact reference catalog. It projects the validated catalog into the three-symbol search domain,
 constructs exact libsais32 blocks, merges them in memory, and publishes
 digest-bound metadata last. The image contains a dense exact 16-mer lookup,
-BWT, Occ64/Occ65536 checkpoints, and SA16 samples. Unknown bases receive
+BWT, Occ64/Occ65536 checkpoints, and sparse suffix-array samples. The default
+stride is 16; the optional fast index uses a separately versioned stride-8
+layout. Unknown bases receive
 deterministic projection symbols, while the catalog's N mask remains
 authoritative.
 
