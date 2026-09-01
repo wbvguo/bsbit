@@ -70,7 +70,7 @@ OPTIONAL INPUT:
   -2, --read2 PATH                   R2 FASTQ; requires --read1
 
 OPTIONS FOR BOTH LAYOUTS:
-  --sensitive                        complete a wider bounded candidate frontier
+  --sensitive                        audit a wider bounded candidate frontier
   --threads N                        mapping workers; default: 1
   --bam-threads N                    BGZF workers; default: 1
   --bam-compression-level LEVEL      default|0..9; default: 1
@@ -92,9 +92,11 @@ placements use MAPQ 0. Its caller-compatible directional-single BAM is accepted
 by `bsbit call` after coordinate sorting, duplicate handling, and indexing.
 
 Without --sensitive, default mode runs the low-latency d3 pass plus an
-incremental d5 fallback. For single-end input, --sensitive completes the wider
-bounded seed frontier before d5 verification, classification, and MAPQ. For
-paired-end input it also enables the qualified pair-specific recovery policy.
+incremental d5 fallback. For single-end input, --sensitive preserves that
+result as an incumbent and audits it against the wider bounded seed frontier.
+A different-origin replacement or new rescue must be unique at MAPQ 20 or
+above; a lower-confidence conflict retains the incumbent at MAPQ 0. For
+paired-end input --sensitive enables the qualified pair-specific recovery policy.
 Inputs may remain gzip-compressed; pre-decompression is not required or recommended.
 ";
 

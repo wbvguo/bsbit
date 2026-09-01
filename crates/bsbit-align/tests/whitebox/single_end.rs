@@ -1,6 +1,23 @@
 //! White-box tests for canonical single-end mapping.
 
 use super::*;
+use bsbit_core::bisulfite::BisulfiteStrand;
+
+fn mapped(start: u64, mapping_quality: u8) -> SingleAlignmentResult {
+    SingleAlignmentResult {
+        status: SingleMappingStatus::Unique,
+        placement: Some(ReadPlacement::strict(
+            0,
+            start,
+            start + 100,
+            BisulfiteStrand::OT,
+            1,
+        )),
+        mapping_quality,
+        located_rows: 1,
+        verified_placements: 1,
+    }
+}
 
 #[test]
 fn sensitive_single_profile_completes_a_wider_bounded_frontier() {
@@ -14,4 +31,31 @@ fn sensitive_single_profile_completes_a_wider_bounded_frontier() {
     assert_eq!(sensitive.maximum_seed_rounds, default.maximum_seed_rounds);
     assert!(!SingleSearchMode::Default.completes_candidate_frontier());
     assert!(SingleSearchMode::Sensitive.completes_candidate_frontier());
+}
+
+#[test]
+fn sensitive_low_confidence_conflict_preserves_the_incumbent_as_ambiguous() {
+    let incumbent = mapped(100, 30);
+    let completed = mapped(500, SENSITIVE_REPLACEMENT_MIN_MAPQ - 1);
+    let reconciled = SingleBatchAligner::reconcile_sensitive_result(incumbent, completed, 100);
+    assert_eq!(reconciled.status(), SingleMappingStatus::Ambiguous);
+    assert_eq!(reconciled.placement(), incumbent.placement());
+    assert_eq!(reconciled.mapping_quality(), 0);
+}
+
+#[test]
+fn sensitive_q20_conflict_may_replace_the_incumbent() {
+    let incumbent = mapped(100, 30);
+    let completed = mapped(500, SENSITIVE_REPLACEMENT_MIN_MAPQ);
+    let reconciled = SingleBatchAligner::reconcile_sensitive_result(incumbent, completed, 100);
+    assert_eq!(reconciled, completed);
+}
+
+#[test]
+fn sensitive_low_confidence_rescue_remains_unmapped() {
+    let incumbent = SingleAlignmentResult::unmapped(1, 0);
+    let completed = mapped(500, SENSITIVE_REPLACEMENT_MIN_MAPQ - 1);
+    let reconciled = SingleBatchAligner::reconcile_sensitive_result(incumbent, completed, 100);
+    assert_eq!(reconciled.status(), SingleMappingStatus::Unmapped);
+    assert_eq!(reconciled.placement(), None);
 }

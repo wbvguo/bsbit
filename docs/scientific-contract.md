@@ -18,10 +18,9 @@ follow the library vocabulary documented by
 Directional paired WGBS is the large-corpus qualified alignment surface.
 Explicit non-directional paired alignment has four-strand semantic and
 compatibility coverage. Directional single-end alignment has one controlled
-large-corpus performance/truth regression snapshot but does not inherit the
-replicated paired performance/MAPQ qualification; its sensitive candidate
-completion has focused correctness coverage but needs a new large-corpus
-qualification before performance claims. PBAT, EM-seq, TAPS,
+large-corpus same-binary default/sensitive performance and truth comparison but
+does not inherit the replicated paired performance/MAPQ qualification. PBAT,
+EM-seq, TAPS,
 oxBS-seq, TAB-seq, hairpin bisulfite sequencing, long-read modification
 calling, and protocol-specific RRBS processing require separate contracts and
 are not silently approximated.

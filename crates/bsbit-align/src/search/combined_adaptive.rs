@@ -450,6 +450,11 @@ pub(crate) fn continue_combined_two_lane_search_with_limits(
     mate2_candidates: &mut Vec<ReadCandidate>,
 ) -> Result<[u64; 2], AlignmentError> {
     let before = state.located;
+    if complete_direct_frontier {
+        for lane in 0..2 {
+            state.active[lane] |= state.direct[lane];
+        }
+    }
     for (lane, read) in reads.into_iter().enumerate() {
         if state.direct[lane] && !complete_direct_frontier {
             continue;

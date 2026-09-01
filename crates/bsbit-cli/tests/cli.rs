@@ -990,7 +990,7 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
 }
 
 #[test]
-fn single_sensitive_completes_repeat_frontier_above_the_default_hit_cap() {
+fn single_sensitive_does_not_publish_an_uncertified_repeat_rescue() {
     const MOTIF: &[u8] = b"ACGTCAGATGCTACGAGTACCGATGACCTAGCATGCATGA";
     const COPIES: usize = 1_001;
     let directory = unique_directory("single-sensitive-repeat-frontier");
@@ -1040,8 +1040,11 @@ fn single_sensitive_completes_repeat_frontier_above_the_default_hit_cap() {
             0,
             "default hit cap leaves read unmapped"
         );
-        assert_eq!(sensitive_flag & 0x4, 0, "sensitive frontier maps the read");
-        assert_eq!(sensitive[4], b"0", "repeat tie must use MAPQ 0");
+        assert_ne!(
+            sensitive_flag & 0x4,
+            0,
+            "an uncertified repeat-only rescue remains unmapped"
+        );
     }
 
     fs::remove_dir_all(directory).expect("fixture cleanup");

@@ -40,9 +40,10 @@ defined in [Prepare input data](reference/input-data.md).
 
 ## Placement and classification
 
-A single result is `unique` when one best strand-aware biological origin
-survives, `ambiguous` when equal-best origins remain, and `unmapped` when no
-verified origin survives. A paired result is `unique` when one best concordant
+A single result is `unique` when one strand-aware biological origin survives
+the selected confidence policy, `ambiguous` when multiple plausible origins
+remain, and `unmapped` when no verified origin is accepted. A paired result is
+`unique` when one best concordant
 biological placement survives the selected complete policy, `ambiguous` when
 equal-best placements remain, and `unmapped` when no accepted pair exists.
 Concordance requires the same contig, an admitted library orientation, and a
@@ -55,13 +56,17 @@ relation. Equivalent CIGAR/end-point representations at one strand-aware
 ambiguous.
 
 Default mode prioritizes low latency and retries only bounded unresolved work.
-For single-end input, `--sensitive` completes the wider six-round, 4,096-hit
-candidate frontier before d5 verification and MAPQ. For paired input it also
-adds bounded failed-pair, repeat, mate-rescue, and endpoint evidence before
-final classification. Resource caps may conservatively retain ambiguity or
-leave a read or pair unmapped; they never turn an incomplete frontier into an
-unsupported unique claim. Simulator truth, read names, known coordinates, and
-peer-aligner output are unavailable to mapping decisions.
+For single-end input, `--sensitive` first obtains that default result and then
+audits it against the wider six-round, 4,096-hit candidate frontier. A
+different-origin replacement or new rescue requires a unique completed result
+at MAPQ 20 or above. A lower-confidence conflict retains the default
+representative as ambiguous at MAPQ 0, and an uncertified new rescue remains
+unmapped. For paired input sensitive mode adds bounded failed-pair, repeat,
+mate-rescue, and endpoint evidence before final classification. Resource caps
+may conservatively retain ambiguity or leave a read or pair unmapped; they
+never turn an incomplete frontier into an unsupported unique claim. Simulator
+truth, read names, known coordinates, and peer-aligner output are unavailable
+to mapping decisions.
 
 ## BAM output and MAPQ
 
@@ -86,8 +91,10 @@ calibration results and their corpus boundary are maintained only on the
 [performance page](performance-evidence.md).
 
 Directional single-end `bsbit align` assigns Q10/Q15/Q20/Q30/Q40 from evidence
-already retained by the selecting search; MAPQ calculation does not launch a
-second search. Tied origins remain MAPQ 0. The BAM declares
+retained by the selecting search or sensitive audit; MAPQ calculation itself
+does not launch another search. Sensitive different-origin replacements and
+new rescues require Q20 or above. Tied or lower-confidence conflicting origins
+remain MAPQ 0. The BAM declares
 `caller-compatible-directional-single` in structured `@PG` provenance and is
 accepted by `bsbit call` after the same sorting, indexing, tag, and reference
 identity checks as paired output. The current exact and within-5-bp calibration

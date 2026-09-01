@@ -28,9 +28,11 @@ pub enum SingleMappingStatus {
     Unmapped,
     /// Exactly one best biological origin survived.
     Unique,
-    /// Multiple equally good biological origins survived.
+    /// Multiple plausible biological origins survived the confidence policy.
     Ambiguous,
 }
+
+const SENSITIVE_REPLACEMENT_MIN_MAPQ: u8 = 20;
 
 /// Candidate-search effort for single-end alignment.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -38,7 +40,7 @@ pub enum SingleSearchMode {
     /// Qualified low-latency alignment with an incremental fallback.
     #[default]
     Default,
-    /// Bounded candidate-frontier completion before classification and MAPQ.
+    /// Default mapping followed by a bounded confidence audit.
     Sensitive,
 }
 
@@ -179,9 +181,11 @@ impl SingleBatchAligner {
 
     /// Maps a batch with the selected single-end candidate-search policy.
     ///
-    /// Sensitive mode completes the bounded seed frontier before verifying and
-    /// classifying placements. It does not apply paired-only mate rescue,
-    /// template geometry, or adapter-pair recovery.
+    /// Sensitive mode first obtains the default result and then completes the
+    /// bounded seed frontier as a confidence audit. A different-origin result
+    /// or a new rescue must be unique at Q20 or above; lower-confidence
+    /// conflicts retain the default representative at Q0. It does not apply
+    /// paired-only mate rescue, template geometry, or adapter-pair recovery.
     ///
     /// # Errors
     ///
@@ -241,12 +245,7 @@ impl SingleBatchAligner {
                 self.first_seeds.push(None);
             }
         }
-        self.prepare_search_wavefront(
-            reference,
-            reads,
-            search_mode.limits(),
-            search_mode.completes_candidate_frontier(),
-        )?;
+        self.prepare_search_wavefront(reference, reads, search_mode.limits(), false)?;
         self.results.clear();
         let mut ordinal = 0_usize;
         while ordinal < reads.len() {
@@ -520,6 +519,7 @@ impl SingleBatchAligner {
             initial_candidates,
         } = prepared;
         let mut search = *search;
+        let completion_search_start = search;
         let (workspaces, origins) = (&mut self.reads, &mut self.origins);
         let [read_workspace, unused_workspace] = workspaces;
         read_workspace.begin_verification_cache_read();
@@ -534,14 +534,37 @@ impl SingleBatchAligner {
             located_rows: search.located[0],
             ..ReadAlignmentMetrics::default()
         };
-        if search_mode.completes_candidate_frontier() {
-            let additional = continue_combined_two_lane_search_with_limits(
+        let initial_budget = maximum_edit_distance.min(INITIAL_EDIT_DISTANCE);
+        let (_, observed) = read_workspace.verify_candidates_with_budget(
+            reference,
+            read,
+            metrics,
+            initial_budget,
+        )?;
+        metrics = observed;
+        let mut verified_distance_limit = initial_budget;
+        if read_workspace.placements.is_empty() && maximum_edit_distance > initial_budget {
+            read_workspace.candidates.clear();
+            read_workspace.placements.clear();
+            let (_, observed) = read_workspace.verify_candidates_with_budget(
+                reference,
+                read,
+                metrics,
+                maximum_edit_distance,
+            )?;
+            metrics = observed;
+            verified_distance_limit = maximum_edit_distance;
+        }
+
+        if read_workspace.placements.is_empty() {
+            read_workspace.candidates.clear();
+            read_workspace.placements.clear();
+            unused_workspace.candidate_nominals.clear();
+            let additional = continue_combined_two_lane_search(
                 reference,
                 [read, &[]],
                 [projection, &[]],
                 false,
-                search_mode.limits(),
-                true,
                 &mut search,
                 &mut read_workspace.candidate_nominals,
                 &mut unused_workspace.candidate_nominals,
@@ -553,88 +576,48 @@ impl SingleBatchAligner {
                 metrics,
                 maximum_edit_distance,
             )?;
-            return Ok(Self::finish_result(
-                read_workspace,
-                origins,
-                SingleResultEvidence {
-                    read_length: read.len(),
-                    metrics: observed,
-                    verified_distance_limit: maximum_edit_distance,
-                    first_seed,
-                    search: &search,
-                    lane: 0,
-                },
-            ));
-        }
-        let initial_budget = maximum_edit_distance.min(INITIAL_EDIT_DISTANCE);
-        let (_, observed) = read_workspace.verify_candidates_with_budget(
-            reference,
-            read,
-            metrics,
-            initial_budget,
-        )?;
-        metrics = observed;
-        if !read_workspace.placements.is_empty() {
-            return Ok(Self::finish_result(
-                read_workspace,
-                origins,
-                SingleResultEvidence {
-                    read_length: read.len(),
-                    metrics,
-                    verified_distance_limit: initial_budget,
-                    first_seed,
-                    search: &search,
-                    lane: 0,
-                },
-            ));
-        }
-
-        if maximum_edit_distance > initial_budget {
-            read_workspace.candidates.clear();
-            read_workspace.placements.clear();
-            let (_, observed) = read_workspace.verify_candidates_with_budget(
-                reference,
-                read,
-                metrics,
-                maximum_edit_distance,
-            )?;
             metrics = observed;
-            if !read_workspace.placements.is_empty() {
-                return Ok(Self::finish_result(
-                    read_workspace,
-                    origins,
-                    SingleResultEvidence {
-                        read_length: read.len(),
-                        metrics,
-                        verified_distance_limit: maximum_edit_distance,
-                        first_seed,
-                        search: &search,
-                        lane: 0,
-                    },
-                ));
-            }
+            verified_distance_limit = maximum_edit_distance;
         }
 
+        let incumbent = Self::finish_result(
+            read_workspace,
+            origins,
+            SingleResultEvidence {
+                read_length: read.len(),
+                metrics,
+                verified_distance_limit,
+                first_seed,
+                search: &search,
+                lane: 0,
+            },
+        );
+        if !search_mode.completes_candidate_frontier() {
+            return Ok(incumbent);
+        }
+
+        let mut completion_search = completion_search_start;
         read_workspace.candidates.clear();
-        read_workspace.placements.clear();
         unused_workspace.candidate_nominals.clear();
-        let additional = continue_combined_two_lane_search(
+        continue_combined_two_lane_search_with_limits(
             reference,
             [read, &[]],
             [projection, &[]],
             false,
-            &mut search,
+            search_mode.limits(),
+            true,
+            &mut completion_search,
             &mut read_workspace.candidate_nominals,
             &mut unused_workspace.candidate_nominals,
         )?;
-        metrics.located_rows = metrics.located_rows.saturating_add(additional[0]);
+        metrics.located_rows = completion_search.located[0];
         let (_, observed) = read_workspace.verify_candidates_with_budget(
             reference,
             read,
             metrics,
             maximum_edit_distance,
         )?;
-        Ok(Self::finish_result(
+        let completed = Self::finish_result(
             read_workspace,
             origins,
             SingleResultEvidence {
@@ -642,9 +625,14 @@ impl SingleBatchAligner {
                 metrics: observed,
                 verified_distance_limit: maximum_edit_distance,
                 first_seed,
-                search: &search,
+                search: &completion_search,
                 lane: 0,
             },
+        );
+        Ok(Self::reconcile_sensitive_result(
+            incumbent,
+            completed,
+            read.len(),
         ))
     }
 
@@ -686,51 +674,14 @@ impl SingleBatchAligner {
             search.deferred[lane] = prepared_search.deferred[0];
             search.deferred_len[lane] = prepared_search.deferred_len[0];
         }
+        let completion_search_start = search;
         let mut metrics = search.located.map(|located_rows| ReadAlignmentMetrics {
             located_rows,
             ..ReadAlignmentMetrics::default()
         });
-        if search_mode.completes_candidate_frontier() {
-            let [first_workspace, second_workspace] = &mut *workspaces;
-            let additional = continue_combined_two_lane_search_with_limits(
-                reference,
-                reads,
-                projections,
-                false,
-                search_mode.limits(),
-                true,
-                &mut search,
-                &mut first_workspace.candidate_nominals,
-                &mut second_workspace.candidate_nominals,
-            )?;
-            for lane in 0..2 {
-                metrics[lane].located_rows =
-                    metrics[lane].located_rows.saturating_add(additional[lane]);
-                let (_, observed) = workspaces[lane].verify_candidates_with_budget(
-                    reference,
-                    reads[lane],
-                    metrics[lane],
-                    maximum_edit_distance,
-                )?;
-                metrics[lane] = observed;
-            }
-            return Ok(core::array::from_fn(|lane| {
-                Self::finish_result(
-                    &workspaces[lane],
-                    origins,
-                    SingleResultEvidence {
-                        read_length: reads[lane].len(),
-                        metrics: metrics[lane],
-                        verified_distance_limit: maximum_edit_distance,
-                        first_seed: first_seeds[lane],
-                        search: &search,
-                        lane,
-                    },
-                )
-            }));
-        }
         let initial_budget = maximum_edit_distance.min(INITIAL_EDIT_DISTANCE);
         let mut results = [None; 2];
+        let mut verified_distance_limits = [initial_budget; 2];
 
         for lane in 0..2 {
             let (_, observed) = workspaces[lane].verify_candidates_with_budget(
@@ -770,6 +721,7 @@ impl SingleBatchAligner {
                     maximum_edit_distance,
                 )?;
                 metrics[lane] = observed;
+                verified_distance_limits[lane] = maximum_edit_distance;
                 if !workspaces[lane].placements.is_empty() {
                     results[lane] = Some(Self::finish_result(
                         &workspaces[lane],
@@ -787,54 +739,146 @@ impl SingleBatchAligner {
             }
         }
 
-        if results.iter().all(Option::is_some) {
-            return Ok(results.map(|result| result.expect("both single reads resolved")));
-        }
-        for lane in 0..2 {
-            if results[lane].is_some() {
-                search.active[lane] = false;
-                search.deferred_len[lane] = 0;
-            } else {
-                workspaces[lane].candidates.clear();
-                workspaces[lane].placements.clear();
+        if results.iter().any(Option::is_none) {
+            for lane in 0..2 {
+                if results[lane].is_some() {
+                    search.active[lane] = false;
+                    search.deferred_len[lane] = 0;
+                } else {
+                    workspaces[lane].candidates.clear();
+                    workspaces[lane].placements.clear();
+                }
+            }
+            let [first_workspace, second_workspace] = workspaces;
+            let additional = continue_combined_two_lane_search(
+                reference,
+                reads,
+                projections,
+                false,
+                &mut search,
+                &mut first_workspace.candidate_nominals,
+                &mut second_workspace.candidate_nominals,
+            )?;
+            for lane in 0..2 {
+                if results[lane].is_some() {
+                    continue;
+                }
+                metrics[lane].located_rows =
+                    metrics[lane].located_rows.saturating_add(additional[lane]);
+                let (_, observed) = workspaces[lane].verify_candidates_with_budget(
+                    reference,
+                    reads[lane],
+                    metrics[lane],
+                    maximum_edit_distance,
+                )?;
+                results[lane] = Some(Self::finish_result(
+                    &workspaces[lane],
+                    origins,
+                    SingleResultEvidence {
+                        read_length: reads[lane].len(),
+                        metrics: observed,
+                        verified_distance_limit: maximum_edit_distance,
+                        first_seed: first_seeds[lane],
+                        search: &search,
+                        lane,
+                    },
+                ));
             }
         }
+        if !search_mode.completes_candidate_frontier() {
+            return Ok(
+                results.map(|result| result.expect("single-read continuation resolves every lane"))
+            );
+        }
+
+        let incumbents = results
+            .map(|result| result.expect("default single-read continuation resolves every lane"));
+        let mut completion_search = completion_search_start;
         let [first_workspace, second_workspace] = workspaces;
-        let additional = continue_combined_two_lane_search(
+        continue_combined_two_lane_search_with_limits(
             reference,
             reads,
             projections,
             false,
-            &mut search,
+            search_mode.limits(),
+            true,
+            &mut completion_search,
             &mut first_workspace.candidate_nominals,
             &mut second_workspace.candidate_nominals,
         )?;
+        let mut completed = [SingleAlignmentResult::unmapped(0, 0); 2];
         for lane in 0..2 {
-            if results[lane].is_some() {
-                continue;
-            }
-            metrics[lane].located_rows =
-                metrics[lane].located_rows.saturating_add(additional[lane]);
+            metrics[lane].located_rows = completion_search.located[lane];
             let (_, observed) = workspaces[lane].verify_candidates_with_budget(
                 reference,
                 reads[lane],
                 metrics[lane],
                 maximum_edit_distance,
             )?;
-            results[lane] = Some(Self::finish_result(
+            completed[lane] = Self::finish_result(
                 &workspaces[lane],
                 origins,
                 SingleResultEvidence {
                     read_length: reads[lane].len(),
                     metrics: observed,
-                    verified_distance_limit: maximum_edit_distance,
+                    verified_distance_limit: maximum_edit_distance
+                        .max(verified_distance_limits[lane]),
                     first_seed: first_seeds[lane],
-                    search: &search,
+                    search: &completion_search,
                     lane,
                 },
-            ));
+            );
         }
-        Ok(results.map(|result| result.expect("single-read continuation resolves every lane")))
+        Ok(core::array::from_fn(|lane| {
+            Self::reconcile_sensitive_result(incumbents[lane], completed[lane], reads[lane].len())
+        }))
+    }
+
+    fn reconcile_sensitive_result(
+        incumbent: SingleAlignmentResult,
+        completed: SingleAlignmentResult,
+        read_length: usize,
+    ) -> SingleAlignmentResult {
+        let Some(completed_placement) = completed.placement else {
+            return incumbent
+                .placement
+                .map_or(completed, |placement| SingleAlignmentResult {
+                    status: incumbent.status,
+                    placement: Some(placement),
+                    mapping_quality: incumbent.mapping_quality,
+                    located_rows: completed.located_rows,
+                    verified_placements: completed.verified_placements,
+                });
+        };
+        let Some(incumbent_placement) = incumbent.placement else {
+            return if matches!(completed.status, SingleMappingStatus::Unique)
+                && completed.mapping_quality >= SENSITIVE_REPLACEMENT_MIN_MAPQ
+            {
+                completed
+            } else {
+                SingleAlignmentResult::unmapped(
+                    completed.located_rows,
+                    completed.verified_placements,
+                )
+            };
+        };
+        if placement_origin_key(incumbent_placement, read_length)
+            == placement_origin_key(completed_placement, read_length)
+        {
+            return completed;
+        }
+        if matches!(completed.status, SingleMappingStatus::Unique)
+            && completed.mapping_quality >= SENSITIVE_REPLACEMENT_MIN_MAPQ
+        {
+            return completed;
+        }
+        SingleAlignmentResult {
+            status: SingleMappingStatus::Ambiguous,
+            placement: Some(incumbent_placement),
+            mapping_quality: 0,
+            located_rows: completed.located_rows,
+            verified_placements: completed.verified_placements,
+        }
     }
 
     fn finish_result(

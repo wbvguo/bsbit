@@ -33,10 +33,13 @@ bsbit align \
 ```
 
 Omit `--sensitive` for the low-latency default. With it, single-end alignment
-replays seed intervals admitted only by the wider 4,096-hit bound, completes
-the six-round bounded frontier, and then performs distance-5 verification,
-origin classification, and MAPQ. Pair geometry, mate rescue, and paired
-adapter recovery do not apply to a single read.
+first retains the default result as an incumbent, replays seed intervals
+admitted only by the wider 4,096-hit bound, completes the six-round bounded
+frontier, and performs distance-5 verification. A different-origin replacement
+or new rescue must be unique at MAPQ 20 or above. A lower-confidence conflict
+keeps the incumbent as ambiguous at MAPQ 0, and an uncertified rescue remains
+unmapped. Pair geometry, mate rescue, and paired adapter recovery do not apply
+to a single read.
 
 !!! note "Single-end confidence"
     Unique origins receive numeric Q10/Q15/Q20/Q30/Q40 from evidence retained
@@ -92,8 +95,9 @@ The BAM is written in input order. Inspect it immediately, then follow the
 
 Both layouts expose default and sensitive search. For single-end input,
 default keeps the existing early-resolution d3/d5 path and `--sensitive`
-completes the wider bounded candidate frontier before classification. The
-paired-end path additionally records one of these stable strategies:
+audits that result against the wider bounded candidate frontier with the Q20
+replacement/rescue gate described above. The paired-end path additionally
+records one of these stable strategies:
 
 | Mode | Stable strategy | Main behavior |
 |---|---|---|
@@ -101,8 +105,9 @@ paired-end path additionally records one of these stable strategies:
 | `--sensitive` | `sensitive-bounded-integrated-read-complete-v1` | Additional complete-frontier, adapter, confidence, and bounded-repeat evidence within the published wall-time envelope |
 
 Use default mode for the normal latency/accuracy balance. Use `--sensitive`
-when the documented extra recall is worth the additional runtime. Current
-measurements and their workload boundary live on the
+when its higher single-end confidence separation or the documented paired-end
+extra recall is worth the additional runtime. Current measurements and their
+workload boundary live on the
 [performance page](../performance-evidence.md).
 
 Both modes write one primary record per input read by default. An ambiguous

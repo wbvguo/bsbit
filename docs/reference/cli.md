@@ -80,7 +80,7 @@ bsbit align \
 | `-2`, `--read2 PATH` | None | R2; valid only together with read 1 |
 | `--output-bam PATH` | Required | New BAM destination |
 | `--index PATH` | Required | Opaque index handle created by `bsbit index` |
-| `--sensitive` | Off | Complete the wider bounded candidate frontier before final classification |
+| `--sensitive` | Off | Audit the default result against the wider bounded candidate frontier |
 | `--threads N` | 1 | Mapping workers, 1–64 |
 | `--bam-threads N` | 1 | BGZF output workers; use 0 for synchronous compression |
 | `--bam-compression-level default\|0..9` | 1 | HTSlib/BGZF compression setting |
@@ -108,8 +108,11 @@ Pair-specific options fail explicitly when only read 1 is supplied.
 data row starts with the schema identifier `bsbit-alignment-metrics-v1`.
 
 Default and `--sensitive` are the only public search modes for either layout.
-Single-end sensitive completes the six-round, 4,096-hit bounded seed frontier
-before d5 verification and does not invoke pair-only rescue. Both modes emit
+Single-end sensitive preserves the default result as an incumbent, completes
+the six-round, 4,096-hit bounded seed frontier as a confidence audit, and does
+not invoke pair-only rescue. A different-origin replacement or new rescue must
+be unique at Q20 or above; a lower-confidence conflict retains the incumbent at
+Q0. Both modes emit
 one primary record for each input read unless paired input uses
 `--mapped-only`. The BAM `@PG` line binds the exact reference semantic digest
 and alignment mode. The output still needs coordinate sorting, duplicate
