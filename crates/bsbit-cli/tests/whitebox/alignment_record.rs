@@ -715,6 +715,94 @@ fn direct_fast_path_orients_bidirectional_soft_clips() {
 }
 
 #[test]
+fn direct_single_fast_path_is_exact_and_defers_distance_two_ties() {
+    let reference = reference(&[(b"chr", b"AACCGTGATCTAGGCTTACGGAAT")]);
+    let forward_alignment = exact_alignment(&reference, b"CCGTGA", 2, BisulfiteStrand::OT);
+    let reverse_alignment = exact_alignment(&reference, b"TCCGTA", 16, BisulfiteStrand::CTOT);
+    let forward = normalized(b"CCGTGA");
+    let reverse_full = normalized(b"TCCGTACCCC");
+    let mut batch = AlignmentRecordBatch::new();
+    let mut composer = SingleRecordComposer::new();
+
+    assert!(
+        composer
+            .try_push_ungapped_single(
+                &reference,
+                b"forward-fast",
+                BorrowedAlignmentRead::new(forward.bases(), b"ABCDEF"),
+                AlignmentPlacement::new(
+                    0,
+                    forward_alignment.interval(),
+                    forward_alignment.strand(),
+                    0,
+                ),
+                AlignmentRecordLimits::default(),
+                30,
+            )
+            .expect("exact single fast path succeeds")
+    );
+    assert!(
+        composer
+            .try_push_soft_clipped_ungapped_single(
+                &reference,
+                b"reverse-fast",
+                BorrowedAlignmentRead::new(reverse_full.bases(), b"123456789:"),
+                0..6,
+                AlignmentPlacement::new(
+                    0,
+                    reverse_alignment.interval(),
+                    reverse_alignment.strand(),
+                    0,
+                ),
+                AlignmentRecordLimits::default(),
+                20,
+            )
+            .expect("reverse clipped single fast path succeeds")
+    );
+    assert!(
+        !composer
+            .try_push_ungapped_single(
+                &reference,
+                b"distance-two",
+                BorrowedAlignmentRead::new(forward.bases(), b"ABCDEF"),
+                AlignmentPlacement::new(
+                    0,
+                    forward_alignment.interval(),
+                    forward_alignment.strand(),
+                    2,
+                ),
+                AlignmentRecordLimits::default(),
+                10,
+            )
+            .expect("distance-two placement defers to traceback")
+    );
+    composer
+        .flush_into(&mut batch, AlignmentRecordLimits::default())
+        .expect("single fast paths flush");
+    let records = batch.records().collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].query_name(), b"forward-fast");
+    assert_eq!(records[0].flag(), 0);
+    assert_eq!(records[0].mapping_quality(), 30);
+    assert_eq!(records[0].cigar()[0].length(), 6);
+    assert_eq!(records[1].query_name(), b"reverse-fast");
+    assert_eq!(records[1].flag(), 0x10);
+    assert_eq!(records[1].sequence(), b"GGGGTACGGA");
+    assert_eq!(records[1].quality(), Some(b":987654321".as_slice()));
+    assert_eq!(
+        records[1]
+            .cigar()
+            .iter()
+            .map(|run| (run.operation(), run.length()))
+            .collect::<Vec<_>>(),
+        vec![
+            (AlignmentCigarOp::SoftClip, 4),
+            (AlignmentCigarOp::Match, 6),
+        ]
+    );
+}
+
+#[test]
 fn header_bytes_are_exact_ordered_and_bounded() {
     let reference = reference(&[(b"alpha", b"ACGT"), (b"beta", b"NN")]);
     let header =

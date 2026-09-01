@@ -64,9 +64,10 @@ does not infer `MM/ML` modification probabilities.
   MAPQ or throughput qualification.
 - Preprocessed RRBS and targeted reads are accepted when chemistry and
   orientation match. bsbit can recover an otherwise-unmapped read or pair at a
-  narrowly supported 3' Illumina-adapter boundary; it does not generally
-  pre-trim adapters, model restriction sites, interpret targets, or provide
-  assay-specific QC.
+  narrowly supported 3' Illumina-adapter boundary and can correct the endpoint
+  of an already mapped single read without changing its biological origin; it
+  does not generally pre-trim adapters, model restriction sites, interpret
+  targets, or provide assay-specific QC.
 - PBAT, CRAM, remote/object-store input, native Windows, macOS, and ARM64 Linux
   are unsupported or unqualified.
 - Methylation and SNV callers require study-specific validation. The SNV caller

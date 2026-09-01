@@ -382,6 +382,102 @@ impl DirectRecordComposer {
         Ok(())
     }
 
+    /// Appends one unpaired ungapped alignment directly from its selected
+    /// placement. `false` leaves the batch unchanged and requests the
+    /// traceback path.
+    #[doc(hidden)]
+    pub(crate) fn try_push_ungapped_single(
+        &mut self,
+        reference: &ReferenceIndex,
+        query_name: &[u8],
+        read: BorrowedAlignmentRead<'_>,
+        placement: AlignmentPlacement,
+        _limits: AlignmentRecordLimits,
+        mapping_quality: u8,
+    ) -> Result<bool, RecordBuildError> {
+        // With an equal-length query/reference span, a gapped traceback needs
+        // at least one insertion and one deletion. Distances below two are
+        // therefore the subset whose canonical traceback is necessarily
+        // ungapped; higher distances retain the established tie-breaking path.
+        if placement.distance() >= 2 {
+            return Ok(false);
+        }
+        let Some(inspected) = inspect_ungapped_mapping(reference, read, placement)? else {
+            return Ok(false);
+        };
+        let query_name_start = append_pool_bytes(
+            &mut self.bytes,
+            query_name,
+            AlignmentRecordAllocation::QueryName,
+        )?;
+        let prepared =
+            append_ungapped_mapping(&mut self.bytes, &mut self.cigar_runs, read, inspected)?;
+        self.records
+            .try_reserve_exact(1)
+            .map_err(|_| RecordBuildError::AllocationFailed {
+                allocation: AlignmentRecordAllocation::Sequence,
+                requested: 1,
+            })?;
+        self.records.push(prepared.finish_single(
+            query_name_start,
+            query_name.len(),
+            mapping_quality,
+        ));
+        Ok(true)
+    }
+
+    /// Soft-clipped counterpart of the unpaired ungapped fast path. The full
+    /// read is retained in SEQ/QUAL and omitted terminal bases are represented
+    /// as strand-correct soft clips.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn try_push_soft_clipped_ungapped_single(
+        &mut self,
+        reference: &ReferenceIndex,
+        query_name: &[u8],
+        full_read: BorrowedAlignmentRead<'_>,
+        retained_range: core::ops::Range<usize>,
+        placement: AlignmentPlacement,
+        _limits: AlignmentRecordLimits,
+        mapping_quality: u8,
+    ) -> Result<bool, RecordBuildError> {
+        if placement.distance() >= 2 {
+            return Ok(false);
+        }
+        validate_soft_clipped_range(full_read, &retained_range, 1)?;
+        let retained = BorrowedAlignmentRead::new(
+            &full_read.sequence()[retained_range.clone()],
+            &full_read.quality()[retained_range.clone()],
+        );
+        let Some(inspected) = inspect_ungapped_mapping(reference, retained, placement)? else {
+            return Ok(false);
+        };
+        let query_name_start = append_pool_bytes(
+            &mut self.bytes,
+            query_name,
+            AlignmentRecordAllocation::QueryName,
+        )?;
+        let prepared = append_soft_clipped_ungapped_mapping(
+            &mut self.bytes,
+            &mut self.cigar_runs,
+            full_read,
+            retained_range,
+            inspected,
+        )?;
+        self.records
+            .try_reserve_exact(1)
+            .map_err(|_| RecordBuildError::AllocationFailed {
+                allocation: AlignmentRecordAllocation::Sequence,
+                requested: 1,
+            })?;
+        self.records.push(prepared.finish_single(
+            query_name_start,
+            query_name.len(),
+            mapping_quality,
+        ));
+        Ok(true)
+    }
+
     /// Appends the two primary records for a paired template with no accepted
     /// placement. The input sequence and qualities remain in sequencing
     /// orientation, both records carry MAPQ 0, and neither record has a
@@ -622,10 +718,11 @@ impl DirectRecordComposer {
         _limits: AlignmentRecordLimits,
         mapping_quality: u8,
     ) -> Result<bool, RecordBuildError> {
-        let Some(first) = inspect_ungapped_pair(reference, first_read, first_placement)? else {
+        let Some(first) = inspect_ungapped_mapping(reference, first_read, first_placement)? else {
             return Ok(false);
         };
-        let Some(second) = inspect_ungapped_pair(reference, second_read, second_placement)? else {
+        let Some(second) = inspect_ungapped_mapping(reference, second_read, second_placement)?
+        else {
             return Ok(false);
         };
         let query_name_start = append_pool_bytes(
@@ -633,9 +730,10 @@ impl DirectRecordComposer {
             query_name,
             AlignmentRecordAllocation::QueryName,
         )?;
-        let first = append_ungapped_pair(&mut self.bytes, &mut self.cigar_runs, first_read, first)?;
+        let first =
+            append_ungapped_mapping(&mut self.bytes, &mut self.cigar_runs, first_read, first)?;
         let second =
-            append_ungapped_pair(&mut self.bytes, &mut self.cigar_runs, second_read, second)?;
+            append_ungapped_mapping(&mut self.bytes, &mut self.cigar_runs, second_read, second)?;
         self.finish_direct_pair(
             query_name_start,
             query_name.len(),
@@ -676,10 +774,11 @@ impl DirectRecordComposer {
             &second_read.sequence()[second_retained_range.clone()],
             &second_read.quality()[second_retained_range.clone()],
         );
-        let Some(first) = inspect_ungapped_pair(reference, first_retained, first_placement)? else {
+        let Some(first) = inspect_ungapped_mapping(reference, first_retained, first_placement)?
+        else {
             return Ok(false);
         };
-        let Some(second) = inspect_ungapped_pair(reference, second_retained, second_placement)?
+        let Some(second) = inspect_ungapped_mapping(reference, second_retained, second_placement)?
         else {
             return Ok(false);
         };
@@ -688,14 +787,14 @@ impl DirectRecordComposer {
             query_name,
             AlignmentRecordAllocation::QueryName,
         )?;
-        let first = append_soft_clipped_ungapped_pair(
+        let first = append_soft_clipped_ungapped_mapping(
             &mut self.bytes,
             &mut self.cigar_runs,
             first_read,
             first_retained_range,
             first,
         )?;
-        let second = append_soft_clipped_ungapped_pair(
+        let second = append_soft_clipped_ungapped_mapping(
             &mut self.bytes,
             &mut self.cigar_runs,
             second_read,
@@ -809,7 +908,7 @@ impl DirectRecordComposer {
 }
 
 #[derive(Clone, Copy)]
-struct InspectedUngappedPair {
+struct InspectedUngappedMapping {
     reference_ordinal: u64,
     interval: ReferenceInterval,
     position: u32,
@@ -818,11 +917,11 @@ struct InspectedUngappedPair {
     literal_nm: u32,
 }
 
-fn inspect_ungapped_pair(
+fn inspect_ungapped_mapping(
     reference: &ReferenceIndex,
     read: BorrowedAlignmentRead<'_>,
     placement: AlignmentPlacement,
-) -> Result<Option<InspectedUngappedPair>, RecordBuildError> {
+) -> Result<Option<InspectedUngappedMapping>, RecordBuildError> {
     if placement.interval().len() != storage_len(read.sequence().len()) {
         return Ok(None);
     }
@@ -867,7 +966,7 @@ fn inspect_ungapped_pair(
         field: AlignmentRecordField::Position,
         value: position_u64,
     })?;
-    Ok(Some(InspectedUngappedPair {
+    Ok(Some(InspectedUngappedMapping {
         reference_ordinal: placement.reference_ordinal(),
         interval: placement.interval(),
         position,
@@ -877,11 +976,11 @@ fn inspect_ungapped_pair(
     }))
 }
 
-fn append_ungapped_pair(
+fn append_ungapped_mapping(
     bytes: &mut Vec<u8>,
     cigar_runs: &mut Vec<AlignmentCigarRun>,
     read: BorrowedAlignmentRead<'_>,
-    inspected: InspectedUngappedPair,
+    inspected: InspectedUngappedMapping,
 ) -> Result<DirectPreparedMapping, RecordBuildError> {
     let cigar_start = cigar_runs.len();
     cigar_runs
@@ -946,12 +1045,12 @@ fn append_ungapped_pair(
     })
 }
 
-fn append_soft_clipped_ungapped_pair(
+fn append_soft_clipped_ungapped_mapping(
     bytes: &mut Vec<u8>,
     cigar_runs: &mut Vec<AlignmentCigarRun>,
     read: BorrowedAlignmentRead<'_>,
     retained_range: core::ops::Range<usize>,
-    inspected: InspectedUngappedPair,
+    inspected: InspectedUngappedMapping,
 ) -> Result<DirectPreparedMapping, RecordBuildError> {
     let five_prime_clip = retained_range.start;
     let three_prime_clip = read.sequence().len().saturating_sub(retained_range.end);

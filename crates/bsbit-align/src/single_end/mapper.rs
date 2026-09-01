@@ -357,11 +357,12 @@ impl SingleBatchAligner {
 
     /// Maps complete reads and applies qualified single-end 3' adapter recovery.
     ///
-    /// Only otherwise-unmapped reads with exact supported Illumina adapter
-    /// evidence enter the compact trimmed remap. A tentative unique recovery
-    /// must remain unique at the same strand-aware biological origin after an
-    /// additional eight-base shortening. Accepted clipped mappings retain the
-    /// original read length as output metadata and cap MAPQ at 20.
+    /// Reads with exact supported Illumina adapter evidence enter the compact
+    /// trimmed remap. A tentative unique recovery must remain unique at the
+    /// same strand-aware biological origin after an additional eight-base
+    /// shortening. An otherwise-unmapped read may recover with MAPQ capped at
+    /// 20. An already mapped read may only change its reported endpoint at the
+    /// same biological origin, with classification and MAPQ frozen.
     ///
     /// # Errors
     ///
@@ -385,10 +386,7 @@ impl SingleBatchAligner {
         let mut clipped_reads = Vec::new();
         let mut clipped_metadata = Vec::new();
 
-        for (offset, (read, result)) in reads.iter().zip(&self.results).enumerate() {
-            if !matches!(result.status(), SingleMappingStatus::Unmapped) {
-                continue;
-            }
+        for (offset, read) in reads.iter().enumerate() {
             let Some(retained_end) = supported_three_prime_adapter_start(read)
                 .filter(|&start| start >= MIN_ADAPTER_RETAINED_BASES)
             else {
@@ -479,6 +477,42 @@ impl SingleBatchAligner {
                 self.output_results.push(strict);
                 continue;
             };
+            if !matches!(strict.status(), SingleMappingStatus::Unmapped) {
+                let mut result = strict;
+                result.adapter_attempted = true;
+                result.adapter_status = Some(fallback.final_status);
+                result.adapter_clipped_bases =
+                    reads[offset].len().saturating_sub(fallback.retained_end);
+                result.located_rows = result
+                    .located_rows
+                    .saturating_add(fallback.result.located_rows)
+                    .saturating_add(
+                        fallback
+                            .stability_result
+                            .map_or(0, SingleAlignmentResult::located_rows),
+                    );
+                result.verified_placements = result
+                    .verified_placements
+                    .saturating_add(fallback.result.verified_placements)
+                    .saturating_add(
+                        fallback
+                            .stability_result
+                            .map_or(0, SingleAlignmentResult::verified_placements),
+                    );
+                let same_origin = strict
+                    .placement()
+                    .zip(fallback.result.placement())
+                    .is_some_and(|(selected, endpoint)| {
+                        placement_origin_key(selected, reads[offset].len())
+                            == placement_origin_key(endpoint, fallback.retained_end)
+                    });
+                if matches!(fallback.final_status, SingleMappingStatus::Unique) && same_origin {
+                    result.placement = fallback.result.placement;
+                    result.retained_query_end = fallback.retained_end;
+                }
+                self.output_results.push(result);
+                continue;
+            }
             let mut result = fallback.result;
             result.status = fallback.final_status;
             result.adapter_attempted = true;

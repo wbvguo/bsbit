@@ -241,6 +241,56 @@ error-category, exhaustive native classification, exact/within-5 unique-scope
 PR-AUC, and Q10/Q20/Q30/Q40 error tables, together with BAMs, commands, and
 source provenance, are retained in that local benchmark archive.
 
+### Single-end slab and endpoint follow-up (2026-09-01)
+
+A same-host A/B compared parent `dc4e07d` with the single-end contiguous FASTQ
+slab, conservative direct-record path, and same-origin adapter endpoint policy.
+The 5-million-read R1 input SHA-256 was
+`22c4ba66773e1de2a9c6e503b1938809572f34cf11c32706c03d96d66d9c461f`;
+the opaque catalog SHA-256 was
+`f1d2d2a876b5721f7f86c16649cce6c9432593cc610e6244b359b99d9affb53a`.
+Each run used eight mapping workers, two BAM workers, compression level 1, and
+the same ten pinned logical CPUs. A balanced B/F/F/B/B/F block established the
+effect; after a symbol-only internal cleanup, four final-candidate and four
+baseline controls were retained for the table below. The final candidate
+binary SHA-256 was
+`ace1334745b80771fb9980e3073433d4b701a7149afdbbbb24cd5d11657f5d2a`.
+
+| Variant | Wall runs | Median wall | Median user+sys | Median peak RSS |
+|---|---|---:|---:|---:|
+| Parent baseline | 17.03, 17.26, 16.83, 17.39 s | 17.15 s | 138.33 s | 7.30 GiB |
+| Slab/direct/endpoint candidate | 16.47, 16.66, 16.79, 17.08 s | **16.73 s** | **135.33 s** | 7.30 GiB |
+
+The candidate reduced median wall by 2.45% and aggregate CPU time by 2.17%; RSS
+was unchanged at the displayed precision. Opt-in single-end metrics on the
+retained first 100,000 reads reported 79,985 direct ungapped records, 19,874
+traceback records, and 141 unmapped records. Timers are chunk-scoped and remain
+disabled in normal runs.
+
+The first-100,000 clean BAM was byte-identical before and after the change
+(`ec2812b736e84be46506b47c7d67d59299a81ea0e43417556bc9415b6a4e501f`),
+so its mapped classes, MAPQ distribution, and truth metrics are exactly
+unchanged. Across all 5 million reads, 15 records changed; all 15 had exact
+supported adapter evidence and changed CIGAR, seven also changed literal NM,
+and none changed reference, strand, five-prime biological origin, MAPQ, mapped
+class, query-name order, or record count. Three candidate runs produced the
+same BAM SHA-256,
+`79c47bdd63fd4c637d054dd446dff106668700239dd0b2b44642ffb6b42584ac`.
+
+An independent 100,000-read stress input replaced each final eight bases with
+the supported adapter prefix while retaining the original location truth.
+Correct 8-base adapter soft clips increased from 34,221 to 95,447. Baseline and
+candidate nevertheless had identical location classification (93,870 unique,
+6,032 ambiguous, 98 unmapped), MAPQ counts, representative within-5 precision
+(97.0051%), representative within-5 recall (96.910%), and unique within-5
+precision (99.6218%). This isolates the improvement to endpoint/CIGAR truth;
+the same-origin rule intentionally does not claim increased locus recall.
+
+This follow-up is a local implementation qualification, not a replacement for
+the broader replicated scorecard above. Commands, binaries, BAMs, evaluator
+outputs, and per-record endpoint comparison were retained under
+`/tmp/bsbit-single-hotpath-20260901-codex-01` on the qualification host.
+
 ## Reproduction protocol
 
 Build the audited executable with the release script and verify its recorded
@@ -282,8 +332,9 @@ length, sequencing error, conversion rate, insert distribution, seed, and
 adapter tails. The complete machine-readable matrix is
 [sensitive-promotion-condition-matrix-20260829.tsv](evidence/2026-08-29/sensitive-promotion-condition-matrix-20260829.tsv).
 
-Default v2 is byte-identical to its predecessor on the clean 5M corpus because
-that corpus contains no adapter trigger. Independent adapter-tail truth sets
+Paired Default v2 is byte-identical to its predecessor on the clean 5M-pair
+corpus because that corpus contains no paired adapter trigger. Independent
+adapter-tail truth sets
 exercise the recovery rule; their results are
 [default-adapter-recovery-truth-20260829.tsv](evidence/2026-08-29/default-adapter-recovery-truth-20260829.tsv).
 
