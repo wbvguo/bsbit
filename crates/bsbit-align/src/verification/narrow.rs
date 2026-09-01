@@ -1450,7 +1450,8 @@ unsafe fn narrow_placement_distances_d3_avx2(
     let mut current = &mut current_storage;
     let one = _mm256_set1_epi8(1);
     for (query_position, &query_code) in query.iter().enumerate() {
-        current.fill(cap_vector);
+        // Every current diagonal is overwritten in dependency order; filling
+        // the inactive buffer here only adds seven vector stores per base.
         let reference_mask = reference_masks_by_query
             .get(usize::from(query_code))
             .copied()
@@ -1529,7 +1530,8 @@ unsafe fn narrow_placement_distances_d5_avx2(
     let mut current = &mut current_storage;
     let one = _mm256_set1_epi8(1);
     for (query_position, &query_code) in query.iter().enumerate() {
-        current.fill(cap_vector);
+        // Every current diagonal is overwritten in dependency order; filling
+        // the inactive buffer here only adds eleven vector stores per base.
         let reference_mask = reference_masks_by_query
             .get(usize::from(query_code))
             .copied()
@@ -1727,7 +1729,8 @@ unsafe fn narrow_placement_distances_batch_d3_avx2(
         substitution
     });
     for (query_position, &query_code) in query.iter().enumerate() {
-        current.fill(cap_vector);
+        // Every current diagonal is overwritten in dependency order; filling
+        // the inactive buffer here only adds seven vector stores per base.
         let reference_mask = reference_masks_by_query
             .get(usize::from(query_code))
             .copied()
@@ -1834,7 +1837,8 @@ unsafe fn narrow_placement_distances_batch_d5_avx2(
     ];
     let (first_pattern, second_pattern) = patterns.split_at(pattern_len);
     for (query_position, &query_code) in query.iter().enumerate() {
-        current.fill(cap_vector);
+        // Every current diagonal is overwritten in dependency order; filling
+        // the inactive buffer here only adds eleven vector stores per base.
         let reference_mask = reference_masks_by_query
             .get(usize::from(query_code))
             .copied()
