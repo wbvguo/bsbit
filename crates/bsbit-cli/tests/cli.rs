@@ -317,6 +317,53 @@ fn assert_success(output: &Output) {
     assert!(output.stderr.is_empty());
 }
 
+fn assert_paired_metrics_v2(output: &Output) {
+    assert_success(output);
+    let metrics_text = std::str::from_utf8(&output.stdout).expect("metrics UTF-8");
+    let mut metric_lines = metrics_text.lines();
+    let headers = metric_lines
+        .next()
+        .expect("metrics header")
+        .split('\t')
+        .collect::<Vec<_>>();
+    let values = metric_lines
+        .next()
+        .expect("metrics values")
+        .split('\t')
+        .collect::<Vec<_>>();
+    assert_eq!(headers.len(), values.len());
+    assert!(metric_lines.next().is_none());
+    let field = |name: &str| {
+        values[headers
+            .iter()
+            .position(|header| *header == name)
+            .expect("required metrics field")]
+    };
+    assert_eq!(field("schema"), "bsbit-alignment-metrics-v2");
+    assert_eq!(field("pairs"), "1");
+    assert_eq!(field("bam_records"), "2");
+    assert_eq!(field("alignment_pair_passes"), "1");
+    assert!(
+        field("suffix_search_lanes")
+            .parse::<u64>()
+            .expect("suffix lanes integer")
+            > 0
+    );
+    let locate_calls = field("locate_calls")
+        .parse::<u64>()
+        .expect("locate calls integer");
+    let singleton_locates = field("singleton_locate_calls")
+        .parse::<u64>()
+        .expect("singleton locate calls integer");
+    let multi_hit_locates = field("multi_hit_locate_calls")
+        .parse::<u64>()
+        .expect("multi-hit locate calls integer");
+    assert_eq!(
+        locate_calls,
+        singleton_locates.saturating_add(multi_hit_locates)
+    );
+}
+
 fn take<'a>(bytes: &'a [u8], offset: &mut usize, length: usize) -> &'a [u8] {
     let end = offset
         .checked_add(length)
@@ -993,50 +1040,7 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     assert_success(&align(&index_path, &single_reads, None, &single_bam));
     assert_success(&align(&index_path, &read1, Some(&read2), &paired_bam));
     let metrics_output = align_paired_metrics(&index_path, &read1, &read2, &paired_metrics_bam);
-    assert_success(&metrics_output);
-    let metrics_text = std::str::from_utf8(&metrics_output.stdout).expect("metrics UTF-8");
-    let mut metric_lines = metrics_text.lines();
-    let headers = metric_lines
-        .next()
-        .expect("metrics header")
-        .split('\t')
-        .collect::<Vec<_>>();
-    let values = metric_lines
-        .next()
-        .expect("metrics values")
-        .split('\t')
-        .collect::<Vec<_>>();
-    assert_eq!(headers.len(), values.len());
-    assert!(metric_lines.next().is_none());
-    let field = |name: &str| {
-        values[headers
-            .iter()
-            .position(|header| *header == name)
-            .expect("required metrics field")]
-    };
-    assert_eq!(field("schema"), "bsbit-alignment-metrics-v2");
-    assert_eq!(field("pairs"), "1");
-    assert_eq!(field("bam_records"), "2");
-    assert_eq!(field("alignment_pair_passes"), "1");
-    assert!(
-        field("suffix_search_lanes")
-            .parse::<u64>()
-            .expect("suffix lanes integer")
-            > 0
-    );
-    let locate_calls = field("locate_calls")
-        .parse::<u64>()
-        .expect("locate calls integer");
-    let singleton_locates = field("singleton_locate_calls")
-        .parse::<u64>()
-        .expect("singleton locate calls integer");
-    let multi_hit_locates = field("multi_hit_locate_calls")
-        .parse::<u64>()
-        .expect("multi-hit locate calls integer");
-    assert_eq!(
-        locate_calls,
-        singleton_locates.saturating_add(multi_hit_locates)
-    );
+    assert_paired_metrics_v2(&metrics_output);
 
     let single = decode_process_bam(&single_bam);
     assert_eq!(single.len(), 1);
