@@ -6,6 +6,9 @@ use bsbit_index::storage::fm::ProjectedBase;
 
 use super::mapq::{SingleMapqEvidence, single_mapping_quality_from_evidence};
 use crate::AlignmentError;
+use crate::adapter::{
+    ADAPTER_STABILITY_DELTA, MIN_ADAPTER_RETAINED_BASES, supported_three_prime_adapter_start,
+};
 use crate::placement::{ReadPlacement, placement_origin_key};
 use crate::read_mapping_limits::{
     INITIAL_EDIT_DISTANCE, MAX_EDIT_DISTANCE, MAX_READ_BASES, MIN_SUFFIX_BASES,
@@ -20,6 +23,8 @@ use crate::search::combined_adaptive::{
     continue_combined_two_lane_search, continue_combined_two_lane_search_with_limits,
     prepare_combined_projection,
 };
+
+const SINGLE_ADAPTER_MAX_MAPQ: u8 = 20;
 
 /// Final classification for one directional single read.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -60,9 +65,13 @@ impl SingleSearchMode {
 pub struct SingleAlignmentResult {
     status: SingleMappingStatus,
     placement: Option<ReadPlacement>,
+    retained_query_end: usize,
     mapping_quality: u8,
     located_rows: u64,
     verified_placements: u64,
+    adapter_attempted: bool,
+    adapter_status: Option<SingleMappingStatus>,
+    adapter_clipped_bases: usize,
 }
 
 impl SingleAlignmentResult {
@@ -78,31 +87,60 @@ impl SingleAlignmentResult {
         self.placement
     }
 
+    /// Returns the retained sequencing-orientation query interval.
+    #[must_use]
+    pub const fn retained_query_interval(self) -> core::ops::Range<usize> {
+        0..self.retained_query_end
+    }
+
     /// Returns the calibrated SAM mapping quality, or zero when not unique.
     #[must_use]
     pub const fn mapping_quality(self) -> u8 {
         self.mapping_quality
     }
 
-    /// Returns the suffix rows located by the candidate search.
+    /// Returns suffix rows located across every executed mapping phase.
     #[must_use]
     pub const fn located_rows(self) -> u64 {
         self.located_rows
     }
 
-    /// Returns the complete verified placement count before best-tier selection.
+    /// Returns verified placements across every executed mapping phase before
+    /// per-phase best-tier selection.
     #[must_use]
     pub const fn verified_placements(self) -> u64 {
         self.verified_placements
     }
 
-    const fn unmapped(located_rows: u64, verified_placements: u64) -> Self {
+    /// Reports whether exact adapter support triggered a trimmed remap.
+    #[must_use]
+    pub const fn adapter_attempted(self) -> bool {
+        self.adapter_attempted
+    }
+
+    /// Returns the adapter-remap class after stability verification.
+    #[must_use]
+    pub const fn adapter_status(self) -> Option<SingleMappingStatus> {
+        self.adapter_status
+    }
+
+    /// Returns the number of bases omitted at the supported 3' adapter boundary.
+    #[must_use]
+    pub const fn adapter_clipped_bases(self) -> usize {
+        self.adapter_clipped_bases
+    }
+
+    const fn unmapped(read_length: usize, located_rows: u64, verified_placements: u64) -> Self {
         Self {
             status: SingleMappingStatus::Unmapped,
             placement: None,
+            retained_query_end: read_length,
             mapping_quality: 0,
             located_rows,
             verified_placements,
+            adapter_attempted: false,
+            adapter_status: None,
+            adapter_clipped_bases: 0,
         }
     }
 }
@@ -126,6 +164,14 @@ struct SingleResultEvidence<'a> {
     lane: usize,
 }
 
+#[derive(Clone, Copy)]
+struct SingleAdapterFallback {
+    result: SingleAlignmentResult,
+    stability_result: Option<SingleAlignmentResult>,
+    final_status: SingleMappingStatus,
+    retained_end: usize,
+}
+
 /// Worker-owned batch storage for directional single-read alignment.
 pub struct SingleBatchAligner {
     reads: [ReadWorkspace; 2],
@@ -137,6 +183,7 @@ pub struct SingleBatchAligner {
     initial_candidates: Vec<Vec<ReadCandidate>>,
     origins: Vec<(u64, bsbit_core::bisulfite::BisulfiteStrand, i128)>,
     results: Vec<SingleAlignmentResult>,
+    output_results: Vec<SingleAlignmentResult>,
 }
 
 impl SingleBatchAligner {
@@ -153,6 +200,7 @@ impl SingleBatchAligner {
             initial_candidates: Vec::with_capacity(read_capacity),
             origins: Vec::with_capacity(64),
             results: Vec::with_capacity(read_capacity),
+            output_results: Vec::with_capacity(read_capacity),
         }
     }
 
@@ -180,8 +228,9 @@ impl SingleBatchAligner {
     /// Maps a batch with the selected single-end candidate-search policy.
     ///
     /// Sensitive mode completes the bounded seed frontier before verifying and
-    /// classifying placements. It does not apply paired-only mate rescue,
-    /// template geometry, or adapter-pair recovery.
+    /// classifying placements. It does not apply output-policy adapter
+    /// recovery; callers producing complete records should use
+    /// [`Self::map_reads_for_output`].
     ///
     /// # Errors
     ///
@@ -251,7 +300,8 @@ impl SingleBatchAligner {
         let mut ordinal = 0_usize;
         while ordinal < reads.len() {
             if !self.searchable_reads[ordinal] {
-                self.results.push(SingleAlignmentResult::unmapped(0, 0));
+                self.results
+                    .push(SingleAlignmentResult::unmapped(reads[ordinal].len(), 0, 0));
                 ordinal += 1;
                 continue;
             }
@@ -303,6 +353,209 @@ impl SingleBatchAligner {
             }
         }
         Ok(&self.results)
+    }
+
+    /// Maps complete reads and applies qualified single-end 3' adapter recovery.
+    ///
+    /// Reads with exact supported Illumina adapter evidence enter the compact
+    /// trimmed remap. A tentative unique recovery must remain unique at the
+    /// same strand-aware biological origin after an additional eight-base
+    /// shortening. An otherwise-unmapped read may recover with MAPQ capped at
+    /// 20. An already mapped read may only change its reported endpoint at the
+    /// same biological origin, with classification and MAPQ frozen.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported read/edit domain or combined-index failure from
+    /// any primary, trimmed, or stability mapping phase.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if internally generated stability metadata loses its
+    /// matching adapter result, which violates this method's construction
+    /// invariant.
+    #[allow(clippy::too_many_lines)]
+    pub fn map_reads_for_output<'a>(
+        &'a mut self,
+        reference: &ReferenceIndex,
+        reads: &[&[Base]],
+        maximum_edit_distance: u8,
+        search_mode: SingleSearchMode,
+    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
+        self.map_reads_with_mode(reference, reads, maximum_edit_distance, search_mode)?;
+        let mut clipped_reads = Vec::new();
+        let mut clipped_metadata = Vec::new();
+
+        for (offset, read) in reads.iter().enumerate() {
+            let Some(retained_end) = supported_three_prime_adapter_start(read)
+                .filter(|&start| start >= MIN_ADAPTER_RETAINED_BASES)
+            else {
+                continue;
+            };
+            clipped_reads.push(&read[..retained_end]);
+            clipped_metadata.push((offset, retained_end));
+        }
+
+        if clipped_reads.is_empty() {
+            return Ok(&self.results);
+        }
+
+        let primary = self.results.clone();
+        let mut adapter_results = vec![None; reads.len()];
+        {
+            let remapped = self
+                .map_reads_with_mode(
+                    reference,
+                    &clipped_reads,
+                    maximum_edit_distance,
+                    search_mode,
+                )?
+                .to_vec();
+            for ((offset, retained_end), result) in clipped_metadata.iter().copied().zip(remapped) {
+                adapter_results[offset] = Some(SingleAdapterFallback {
+                    result,
+                    stability_result: None,
+                    final_status: result.status(),
+                    retained_end,
+                });
+            }
+
+            let mut stability_reads = Vec::with_capacity(clipped_reads.len());
+            let mut stability_metadata = Vec::with_capacity(clipped_reads.len());
+            for (offset, fallback) in adapter_results.iter_mut().enumerate() {
+                let Some(fallback) = fallback else {
+                    continue;
+                };
+                if !matches!(fallback.final_status, SingleMappingStatus::Unique) {
+                    continue;
+                }
+                if fallback.retained_end
+                    < MIN_ADAPTER_RETAINED_BASES.saturating_add(ADAPTER_STABILITY_DELTA)
+                {
+                    fallback.final_status = SingleMappingStatus::Ambiguous;
+                    continue;
+                }
+                let stability_end = fallback.retained_end - ADAPTER_STABILITY_DELTA;
+                stability_reads.push(&reads[offset][..stability_end]);
+                stability_metadata.push(offset);
+            }
+
+            if !stability_reads.is_empty() {
+                let stability = self
+                    .map_reads_with_mode(
+                        reference,
+                        &stability_reads,
+                        maximum_edit_distance,
+                        search_mode,
+                    )?
+                    .to_vec();
+                for (offset, stability_result) in stability_metadata.into_iter().zip(stability) {
+                    let fallback = adapter_results[offset]
+                        .as_mut()
+                        .expect("stability metadata refers to an adapter result");
+                    fallback.stability_result = Some(stability_result);
+                    let same_origin = fallback
+                        .result
+                        .placement()
+                        .zip(stability_result.placement())
+                        .is_some_and(|(candidate, stability)| {
+                            placement_origin_key(candidate, fallback.retained_end)
+                                == placement_origin_key(stability, fallback.retained_end)
+                        });
+                    if !matches!(stability_result.status(), SingleMappingStatus::Unique)
+                        || !same_origin
+                    {
+                        fallback.final_status = SingleMappingStatus::Ambiguous;
+                    }
+                }
+            }
+        }
+
+        self.output_results.clear();
+        for (offset, strict) in primary.into_iter().enumerate() {
+            let Some(fallback) = adapter_results[offset] else {
+                self.output_results.push(strict);
+                continue;
+            };
+            if !matches!(strict.status(), SingleMappingStatus::Unmapped) {
+                let mut result = strict;
+                result.adapter_attempted = true;
+                result.adapter_status = Some(fallback.final_status);
+                result.adapter_clipped_bases =
+                    reads[offset].len().saturating_sub(fallback.retained_end);
+                result.located_rows = result
+                    .located_rows
+                    .saturating_add(fallback.result.located_rows)
+                    .saturating_add(
+                        fallback
+                            .stability_result
+                            .map_or(0, SingleAlignmentResult::located_rows),
+                    );
+                result.verified_placements = result
+                    .verified_placements
+                    .saturating_add(fallback.result.verified_placements)
+                    .saturating_add(
+                        fallback
+                            .stability_result
+                            .map_or(0, SingleAlignmentResult::verified_placements),
+                    );
+                let same_origin = strict
+                    .placement()
+                    .zip(fallback.result.placement())
+                    .is_some_and(|(selected, endpoint)| {
+                        placement_origin_key(selected, reads[offset].len())
+                            == placement_origin_key(endpoint, fallback.retained_end)
+                    });
+                if matches!(fallback.final_status, SingleMappingStatus::Unique) && same_origin {
+                    result.placement = fallback.result.placement;
+                    result.retained_query_end = fallback.retained_end;
+                }
+                self.output_results.push(result);
+                continue;
+            }
+            let mut result = fallback.result;
+            result.status = fallback.final_status;
+            result.adapter_attempted = true;
+            result.adapter_status = Some(fallback.final_status);
+            result.adapter_clipped_bases =
+                reads[offset].len().saturating_sub(fallback.retained_end);
+            result.located_rows = strict
+                .located_rows
+                .saturating_add(result.located_rows)
+                .saturating_add(
+                    fallback
+                        .stability_result
+                        .map_or(0, SingleAlignmentResult::located_rows),
+                );
+            result.verified_placements = strict
+                .verified_placements
+                .saturating_add(result.verified_placements)
+                .saturating_add(
+                    fallback
+                        .stability_result
+                        .map_or(0, SingleAlignmentResult::verified_placements),
+                );
+            if result.placement.is_some() {
+                result.retained_query_end = fallback.retained_end;
+            } else {
+                result.retained_query_end = reads[offset].len();
+            }
+            result.mapping_quality = if matches!(fallback.final_status, SingleMappingStatus::Unique)
+            {
+                result
+                    .mapping_quality
+                    .min(
+                        fallback
+                            .stability_result
+                            .map_or(0, SingleAlignmentResult::mapping_quality),
+                    )
+                    .min(SINGLE_ADAPTER_MAX_MAPQ)
+            } else {
+                0
+            };
+            self.output_results.push(result);
+        }
+        Ok(&self.output_results)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -857,6 +1110,7 @@ impl SingleBatchAligner {
             .min()
         else {
             return SingleAlignmentResult::unmapped(
+                read_length,
                 metrics.located_rows,
                 metrics.verified_placements,
             );
@@ -910,9 +1164,13 @@ impl SingleBatchAligner {
         SingleAlignmentResult {
             status,
             placement: representative,
+            retained_query_end: read_length,
             mapping_quality,
             located_rows: metrics.located_rows,
             verified_placements: metrics.verified_placements,
+            adapter_attempted: false,
+            adapter_status: None,
+            adapter_clipped_bases: 0,
         }
     }
 }

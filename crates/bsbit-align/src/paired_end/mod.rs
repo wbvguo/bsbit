@@ -4,6 +4,9 @@
 //! and a worker-owned edit-distance-three verifier.
 
 use crate::AlignmentError;
+use crate::adapter::{
+    ADAPTER_STABILITY_DELTA, MIN_ADAPTER_RETAINED_BASES, THREE_PRIME_ADAPTER_MAX_CLIP_BASES,
+};
 use crate::placement::{
     ReadPlacement, SEMI_GLOBAL_EDIT_PENALTY, placement_net_gap_bases, placement_origin_key,
 };
@@ -117,9 +120,8 @@ const SENSITIVE_ADAPTIVE_BOUNDARY_SHIFTS: [i8; 3] = [-3, 0, 3];
 // The qualified endpoint search is bounded to a 30-base terminal domain so it
 // remains a candidate-local operation rather than an unrestricted local
 // aligner.
-const SEMI_GLOBAL_MAX_CLIP_BASES: usize = 30;
-const SEMI_GLOBAL_MIN_ALIGNED_BASES: usize = 50;
-const ADAPTER_STABILITY_DELTA: usize = 8;
+const SEMI_GLOBAL_MAX_CLIP_BASES: usize = THREE_PRIME_ADAPTER_MAX_CLIP_BASES;
+const SEMI_GLOBAL_MIN_ALIGNED_BASES: usize = MIN_ADAPTER_RETAINED_BASES;
 const SEMI_GLOBAL_ADMISSION_EDIT_PENALTY: u8 = 2;
 const SEMI_GLOBAL_CLIP_PENALTY: u8 = 1;
 // Endpoint representation is selected independently from genomic-locus
@@ -131,8 +133,6 @@ const ORIGIN_ENDPOINT_CLIP_OPEN_PENALTY: u16 = 8;
 const ORIGIN_ENDPOINT_CLIP_EXTENSION_PENALTY: u16 = 7;
 const ORIGIN_ENDPOINT_ADAPTER_CLIP_OPEN_PENALTY: u16 = 2;
 const ORIGIN_ENDPOINT_ADAPTER_CLIP_EXTENSION_PENALTY: u16 = 0;
-const ORIGIN_ENDPOINT_MIN_ADAPTER_SUPPORT: usize = 8;
-const ILLUMINA_UNIVERSAL_ADAPTER: &[u8] = b"AGATCGGAAGAGC";
 const SENSITIVE_CLIP_PENALTY: u8 = 4;
 // A complete terminal mismatch costs seven. Eight makes endpoint selection
 // prefer the full-read placement over removing that mismatch;

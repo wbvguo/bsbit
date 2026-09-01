@@ -96,24 +96,28 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     assert_eq!(parsed.bam_threads, 2);
     assert_eq!(parsed.bam_compression_level, None);
 
-    for arguments in [
-        [
-            single.clone(),
-            vec![
-                OsString::from("--output-contract"),
-                OsString::from("bismark"),
-            ],
-        ]
-        .concat(),
-        [single, vec![OsString::from("--metrics")]].concat(),
-    ] {
-        assert!(
-            parse_options_from(arguments)
-                .expect_err("paired-only option must reject single input")
-                .to_string()
-                .contains("requires paired input via --read2")
-        );
-    }
+    let mut metrics = single.clone();
+    metrics.push(OsString::from("--metrics"));
+    assert!(
+        parse_options_from(metrics)
+            .expect("single-end metrics parse")
+            .emit_metrics
+    );
+
+    let pair_only = [
+        single,
+        vec![
+            OsString::from("--output-contract"),
+            OsString::from("bismark"),
+        ],
+    ]
+    .concat();
+    assert!(
+        parse_options_from(pair_only)
+            .expect_err("paired-only option must reject single input")
+            .to_string()
+            .contains("requires paired input via --read2")
+    );
 }
 
 #[test]

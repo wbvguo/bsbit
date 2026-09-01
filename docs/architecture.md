@@ -243,7 +243,9 @@ and continues only unresolved work. Single-end sensitive mode instead replays
 intervals admitted by the shared 4,096-hit sensitive bound, completes the
 six-round adaptive seed schedule, verifies the accumulated candidates through
 distance 5, and only then groups biological origins and assigns MAPQ. It does
-not enter mate-rescue, template-geometry, or paired adapter stages.
+not enter mate-rescue or template-geometry stages. Otherwise-unmapped reads
+with exact supported 3' adapter evidence enter a compact single-end trimmed
+remap followed by the same-origin stability check described below.
 
 One decode stream reads single-end records; paired input uses two synchronized
 decode streams. Both feed bounded batches to mapping workers with reusable
@@ -306,14 +308,16 @@ effective evidence MAPQ; otherwise the original result is restored. This
 prevents clipping from discovering the first coordinate or laundering a
 partial search frontier into a high-confidence call.
 
-In the fixed adapter-trimmed phase, complete-read unmapped pairs with qualified
-3' adapter evidence enter a compact second batch. A
+In the fixed adapter-trimmed phase, complete-read unmapped reads or pairs with
+qualified 3' adapter evidence enter a compact second batch. A
 window-rescue ambiguity whose nominal baseline had no pair geometry is also
-eligible, so rescue cannot suppress an otherwise valid clipped recovery.
-Tentative unique recoveries use one additional shortened batch to require a
-stable strand-aware 5' origin. Original read bytes remain owned by the input
-batch and are serialized in full; the direct BAM layer adds terminal soft-clip
-CIGAR operations without creating a separately trimmed FASTQ representation.
+eligible on the paired path, so rescue cannot suppress an otherwise valid
+clipped recovery. Tentative unique recoveries use one additional shortened
+batch to require a stable strand-aware 5' origin. Original read bytes remain
+owned by the input batch and are serialized in full; the direct BAM layer adds
+terminal soft-clip CIGAR operations without creating a separately trimmed
+FASTQ representation. Single-end recovered MAPQ is capped at 20 because it
+lacks mate geometry as an independent certificate.
 
 Sensitive mode's qualified endpoint phase stays inside each worker's existing
 strict candidate frontier and uses the targeted gate above. It computes

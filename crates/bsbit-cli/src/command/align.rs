@@ -514,6 +514,7 @@ fn run_standard_single_from_options(options: Options) -> Result<(), Box<dyn Erro
         threads: u64::try_from(options.threads).expect("validated thread count fits u64"),
         bam_threads: options.bam_threads,
         bam_compression_level: options.bam_compression_level,
+        emit_metrics: options.emit_metrics,
     };
     run_single_end(&align_options)
         .map(|_| ())
@@ -1233,8 +1234,6 @@ fn parse_options_from(
             Some("--non-directional")
         } else if read_output_explicit {
             Some("--mapped-only")
-        } else if emit_metrics {
-            Some("--metrics")
         } else {
             [
                 "--batch-pairs",

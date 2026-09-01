@@ -276,6 +276,21 @@ fn align_single_sensitive(snapshot: &Path, read1: &Path, output_bam: &Path) -> O
     ])
 }
 
+fn align_single_metrics(snapshot: &Path, read1: &Path, output_bam: &Path) -> Output {
+    run([
+        OsString::from("align"),
+        OsString::from("--index"),
+        snapshot.as_os_str().to_owned(),
+        OsString::from("-1"),
+        read1.as_os_str().to_owned(),
+        OsString::from("--output-bam"),
+        output_bam.as_os_str().to_owned(),
+        OsString::from("--metrics"),
+        OsString::from("--threads"),
+        OsString::from("2"),
+    ])
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -1014,6 +1029,190 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     let rejected = align(&index_path, &malformed, None, &unpublished);
     assert_eq!(rejected.status.code(), Some(1));
     assert!(!unpublished.exists());
+
+    fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+fn assert_single_adapter_recovery_records(
+    records: &[Vec<Vec<u8>>],
+    supported: &[u8],
+    unsupported: &[u8],
+    clean: &[u8],
+    mapped_supported: &[u8],
+    mapped_retained_bases: usize,
+) {
+    assert_eq!(records.len(), 4);
+    assert_eq!(records[0][0], b"supported");
+    let supported_flag = std::str::from_utf8(&records[0][1])
+        .expect("supported flag UTF-8")
+        .parse::<u16>()
+        .expect("supported flag integer");
+    assert_eq!(
+        supported_flag & 0x5,
+        0,
+        "recovered read is mapped and unpaired"
+    );
+    let supported_mapq = std::str::from_utf8(&records[0][4])
+        .expect("supported MAPQ UTF-8")
+        .parse::<u8>()
+        .expect("supported MAPQ integer");
+    assert!((1..=20).contains(&supported_mapq));
+    assert_eq!(
+        records[0][5],
+        format!("{}M{}S", clean.len(), supported.len() - clean.len()).as_bytes()
+    );
+    assert_eq!(records[0][9], supported);
+    assert_eq!(records[0][10], vec![b'I'; supported.len()]);
+
+    assert_eq!(records[1][0], b"unsupported");
+    let unsupported_flag = std::str::from_utf8(&records[1][1])
+        .expect("unsupported flag UTF-8")
+        .parse::<u16>()
+        .expect("unsupported flag integer");
+    assert_ne!(
+        unsupported_flag & 0x4,
+        0,
+        "non-exact adapter remains unmapped"
+    );
+    assert_eq!(records[1][5], b"*");
+    assert_eq!(records[1][9], unsupported);
+
+    assert_eq!(records[2][0], b"clean");
+    let clean_flag = std::str::from_utf8(&records[2][1])
+        .expect("clean flag UTF-8")
+        .parse::<u16>()
+        .expect("clean flag integer");
+    assert_eq!(
+        clean_flag & 0x5,
+        0,
+        "complete read remains mapped and unpaired"
+    );
+    assert_eq!(records[2][2], records[0][2]);
+    assert_eq!(records[2][3], records[0][3]);
+    assert_eq!(records[2][5], format!("{}M", clean.len()).as_bytes());
+    assert_eq!(records[2][9], clean);
+
+    assert_eq!(records[3][0], b"mapped-supported");
+    let mapped_flag = std::str::from_utf8(&records[3][1])
+        .expect("mapped adapter flag UTF-8")
+        .parse::<u16>()
+        .expect("mapped adapter flag integer");
+    assert_eq!(mapped_flag & 0x5, 0, "mapped adapter remains mapped");
+    assert_eq!(
+        records[3][5],
+        format!(
+            "{}M{}S",
+            mapped_retained_bases,
+            mapped_supported.len() - mapped_retained_bases
+        )
+        .as_bytes()
+    );
+    assert_eq!(records[3][9], mapped_supported);
+    assert_eq!(records[3][10], vec![b'I'; mapped_supported.len()]);
+}
+
+#[test]
+fn single_end_recovers_exact_three_prime_adapter_and_preserves_full_read() {
+    const RETAINED: &[u8] = b"ACGTCAGATGCTACGAGTACCGATGACCTAGCATGCATGATCGTACGATCGTAGCTAGCATGCA";
+    const MAPPED_RETAINED: &[u8] =
+        b"GTCAGTGACCATGCTGACGATCGTACCTGAGTCCAGTACGATGCTAGTCAGGATCGTACGATGC";
+    const ADAPTER: &[u8] = b"AGATCGGAAGAGC";
+    let directory = unique_directory("single-adapter-recovery");
+    fs::create_dir(&directory).expect("fresh directory");
+    let reference = directory.join("reference.fa");
+    let index_path = directory.join("reference.bsbit");
+    let reads = directory.join("single.fq");
+    let output_bam = directory.join("single.bam");
+    let sensitive_bam = directory.join("single-sensitive.bam");
+    let metrics_bam = directory.join("single-metrics.bam");
+
+    let mut reference_bytes = b">chr\n".to_vec();
+    reference_bytes.extend(std::iter::repeat_n(b'G', 40));
+    reference_bytes.extend_from_slice(RETAINED);
+    reference_bytes.extend(std::iter::repeat_n(b'T', 40));
+    reference_bytes.extend(std::iter::repeat_n(b'N', 40));
+    reference_bytes.extend_from_slice(MAPPED_RETAINED);
+    reference_bytes.extend(std::iter::repeat_n(b'A', 8));
+    reference_bytes.extend(std::iter::repeat_n(b'G', 40));
+    reference_bytes.push(b'\n');
+    fs::write(&reference, reference_bytes).expect("reference fixture");
+
+    let retained_read = RETAINED
+        .iter()
+        .map(|base| if *base == b'C' { b'T' } else { *base })
+        .collect::<Vec<_>>();
+    let mut supported = retained_read.clone();
+    supported.extend_from_slice(ADAPTER);
+    let mut unsupported = supported.clone();
+    unsupported[RETAINED.len()] = b'C';
+    let clean = retained_read.clone();
+    let mut mapped_supported = MAPPED_RETAINED
+        .iter()
+        .map(|base| if *base == b'C' { b'T' } else { *base })
+        .collect::<Vec<_>>();
+    mapped_supported.extend_from_slice(&ADAPTER[..8]);
+    let mut fastq = Vec::new();
+    for (name, sequence) in [
+        (b"supported".as_slice(), &supported),
+        (b"unsupported", &unsupported),
+        (b"clean", &clean),
+        (b"mapped-supported", &mapped_supported),
+    ] {
+        fastq.push(b'@');
+        fastq.extend_from_slice(name);
+        fastq.push(b'\n');
+        fastq.extend_from_slice(sequence);
+        fastq.extend_from_slice(b"\n+\n");
+        fastq.extend(std::iter::repeat_n(b'I', sequence.len()));
+        fastq.push(b'\n');
+    }
+    fs::write(&reads, fastq).expect("single adapter reads");
+
+    assert_success(&index(&reference, &index_path));
+    assert_success(&align(&index_path, &reads, None, &output_bam));
+
+    let records = decode_process_bam(&output_bam);
+    assert_single_adapter_recovery_records(
+        &records,
+        &supported,
+        &unsupported,
+        &clean,
+        &mapped_supported,
+        MAPPED_RETAINED.len(),
+    );
+
+    assert_success(&align_single_sensitive(&index_path, &reads, &sensitive_bam));
+    let sensitive = decode_process_bam(&sensitive_bam);
+    assert_single_adapter_recovery_records(
+        &sensitive,
+        &supported,
+        &unsupported,
+        &clean,
+        &mapped_supported,
+        MAPPED_RETAINED.len(),
+    );
+
+    let metrics = align_single_metrics(&index_path, &reads, &metrics_bam);
+    assert_success(&metrics);
+    let stdout = std::str::from_utf8(&metrics.stdout).expect("metrics stdout UTF-8");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2);
+    let header = lines[0].split('\t').collect::<Vec<_>>();
+    let fields = lines[1].split('\t').collect::<Vec<_>>();
+    assert_eq!(header.len(), fields.len());
+    let field = |name: &str| {
+        fields[header
+            .iter()
+            .position(|candidate| *candidate == name)
+            .expect(name)]
+    };
+    assert_eq!(field("schema"), "bsbit-single-alignment-metrics-v1");
+    assert_eq!(field("reads"), "4");
+    assert_eq!(field("unique"), "3");
+    assert_eq!(field("unmapped"), "1");
+    assert_eq!(field("bam_records"), "4");
+    assert_eq!(field("adapter_attempted_reads"), "2");
+    assert_eq!(field("adapter_unique_reads"), "2");
 
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }

@@ -59,10 +59,15 @@ does not infer `MM/ML` modification probabilities.
 - Directional single-end alignment is supported by `bsbit align`, has three
   retained 5M-R1 timing runs, and has exact plus within-5-bp truth evaluation
   on one controlled simulated corpus. That corpus does not qualify other read
-  lengths, assays, references, or hosts.
+  lengths, assays, references, or hosts. Its exact 3' Illumina-adapter recovery
+  has focused process-level regression coverage, not replicated large-corpus
+  MAPQ or throughput qualification.
 - Preprocessed RRBS and targeted reads are accepted when chemistry and
-  orientation match; bsbit does not trim adapters, model restriction sites,
-  interpret targets, or provide assay-specific QC.
+  orientation match. bsbit can recover an otherwise-unmapped read or pair at a
+  narrowly supported 3' Illumina-adapter boundary and can correct the endpoint
+  of an already mapped single read without changing its biological origin; it
+  does not generally pre-trim adapters, model restriction sites, interpret
+  targets, or provide assay-specific QC.
 - PBAT, CRAM, remote/object-store input, native Windows, macOS, and ARM64 Linux
   are unsupported or unqualified.
 - Methylation and SNV callers require study-specific validation. The SNV caller

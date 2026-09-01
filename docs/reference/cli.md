@@ -89,6 +89,7 @@ bsbit align \
 | `--threads N` | 1 | Mapping workers, 1–64 |
 | `--bam-threads N` | 1 | BGZF output workers; use 0 for synchronous compression |
 | `--bam-compression-level default\|0..9` | 1 | HTSlib/BGZF compression setting |
+| `--metrics` | Off | Write a layout-specific profiling TSV to stdout; normal runs keep stdout clean |
 
 Single-end alignment is directional and uses the same persisted combined
 index and bounded exact-reference verification core as paired alignment. Its
@@ -106,12 +107,13 @@ Pair-specific options fail explicitly when only read 1 is supplied.
 | `--alignment-queue-batches N` | 2 | Bounded completed-batch queue depth |
 | `--output-contract minimal\|bismark` | `minimal` | Emit `NM/XG`, or add Bismark-compatible `MD/XM/XR` tags |
 | `--mapped-only` | Off | Omit truly unmapped primary records; retained MAPQ-0 placements remain |
-| `--metrics` | Off | Write the full profiling TSV to stdout; normal runs keep stdout clean |
 | `--min-template-span N` | 0 | Inclusive minimum template span |
 | `--max-template-span N` | 1000 | Inclusive maximum template span |
 
-`--metrics` is optional benchmark diagnostics, not an alignment mode. Its TSV
-data row starts with the schema identifier `bsbit-alignment-metrics-v1`.
+`--metrics` is optional benchmark diagnostics, not an alignment mode. Paired
+TSV rows start with `bsbit-alignment-metrics-v1`; single-end rows start with
+`bsbit-single-alignment-metrics-v1` and report read classes, search work,
+adapter outcomes, and direct-versus-traceback record counts.
 
 Default and `--sensitive` are the only public search modes for either layout.
 Single-end sensitive completes the six-round, 4,096-hit bounded seed frontier
