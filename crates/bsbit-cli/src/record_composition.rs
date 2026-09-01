@@ -9,13 +9,14 @@ use core::mem::size_of;
 
 use bsbit_align::extension::VerifiedAlignment;
 use bsbit_align::materialize::{
-    AlignmentEvaluationError, evaluate_ungapped_alignment, evaluate_verified_alignment,
+    AlignmentEvaluationError, evaluate_certified_ungapped_alignment, evaluate_ungapped_alignment,
+    evaluate_verified_alignment,
 };
 use bsbit_core::alphabet::Base;
 use bsbit_core::bisulfite::{
     AlignmentOrientation, BisulfiteStrand, CytosineStrand, strand_semantics,
 };
-use bsbit_core::cigar::{CoreCigarOp, CoreCigarRun};
+use bsbit_core::cigar::{CoreCigar, CoreCigarOp, CoreCigarRun};
 use bsbit_core::coordinate::ReferenceInterval;
 use bsbit_core::sequence::NormalizedSequence;
 use bsbit_hts::{
@@ -1430,6 +1431,89 @@ pub(crate) fn build_indexed_single_alignment_record(
         limits,
         AlignmentAuxiliaryMode::Minimal,
     )
+}
+
+/// Constructs a single-read record directly from a certified canonical
+/// ungapped placement, or returns `None` when full traceback is still needed.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn try_build_indexed_single_ungapped_alignment_record(
+    reference: &ReferenceIndex,
+    query_name: &[u8],
+    read: AlignmentRead<'_>,
+    placement: AlignmentPlacement,
+    mapping_quality: RecordMappingQuality,
+    limits: AlignmentRecordLimits,
+) -> Result<Option<AlignmentRecord>, RecordBuildError> {
+    if placement.interval().len() != read.sequence().len() {
+        return Ok(None);
+    }
+    let contig_id = reference
+        .contig_id(placement.reference_ordinal())
+        .map_err(|source| RecordBuildError::ReferenceAccess { source })?;
+    let contig = reference
+        .resolve_contig(&contig_id)
+        .map_err(|source| RecordBuildError::ReferenceAccess { source })?;
+    let Ok(start) = usize::try_from(placement.interval().start()) else {
+        return Ok(None);
+    };
+    let Ok(end) = usize::try_from(placement.interval().end()) else {
+        return Ok(None);
+    };
+    let Some(reference_bases) = contig.sequence().bases().get(start..end) else {
+        return Ok(None);
+    };
+    let Some(evaluation) = evaluate_certified_ungapped_alignment(
+        reference_bases,
+        read.sequence().bases(),
+        placement.strand(),
+    )
+    .map_err(|source| RecordBuildError::AlignmentEvaluation { source })?
+    else {
+        return Ok(None);
+    };
+    if evaluation.distance().get() != u64::from(placement.distance()) {
+        return Ok(None);
+    }
+    let literal_nm =
+        u32::try_from(evaluation.literal_nm()).map_err(|_| RecordBuildError::FieldOutOfRange {
+            field: AlignmentRecordField::Nm,
+            value: evaluation.literal_nm(),
+        })?;
+    let semantics = strand_semantics(placement.strand());
+    let record_reference = RecordReference::new(
+        contig.ordinal(),
+        contig.name(),
+        contig.sequence().len(),
+        placement.interval(),
+    )?;
+    let mapping = MappedAlignmentRecord::new(
+        record_reference,
+        semantics.orientation(),
+        placement.strand(),
+        semantics.cytosine_strand(),
+        CoreCigar::all_matches(read.sequence().len()),
+        read.sequence().len(),
+        literal_nm,
+        None,
+        None,
+        limits,
+    )?;
+    let prepared = PreparedRecord {
+        mapping: Some(mapping),
+        sequence: oriented_sequence(read.sequence(), semantics.orientation())?,
+        quality: oriented_quality(read.quality(), semantics.orientation())?,
+    };
+    finish_prepared_record(
+        query_name,
+        RecordSegment::Unpaired,
+        false,
+        mapping_quality,
+        prepared,
+        None,
+        0,
+        limits,
+    )
+    .map(Some)
 }
 
 /// Constructs one deterministic single-read record with an explicit optional

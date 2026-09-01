@@ -7,9 +7,10 @@ use std::thread;
 use super::record_fixture::{SingleFixture, single_fixture};
 use super::{
     PairedRecordComposer, RecordBuildError as AlignmentRecordError, append_u64,
-    bismark_methylation_call, build_sam_header, build_single_alignment_record,
-    build_single_alignment_record_with_auxiliary_mode, checked_add_resource, decimal_digits,
-    storage_len,
+    bismark_methylation_call, build_indexed_single_alignment_record, build_sam_header,
+    build_single_alignment_record, build_single_alignment_record_with_auxiliary_mode,
+    checked_add_resource, decimal_digits, storage_len,
+    try_build_indexed_single_ungapped_alignment_record,
 };
 use bsbit_align::extension::VerifiedAlignment;
 use bsbit_align::materialize::traceback_read_placement;
@@ -64,6 +65,80 @@ fn exact_alignment(
     let contig_id = reference.contig_id(0).expect("fixture contig id exists");
     traceback_read_placement(reference, &query, &contig_id, interval, strand, 0)
         .expect("exact fixture placement materializes")
+}
+
+fn assert_single_ungapped_fast_path_matches_traceback(
+    reference_raw: &[u8],
+    read_raw: &[u8],
+    strand: BisulfiteStrand,
+    distance: u8,
+) {
+    let reference = reference(&[(b"chr1", reference_raw)]);
+    let read = normalized(read_raw);
+    let contig = reference
+        .contig_by_ordinal(0)
+        .expect("fixture contig exists");
+    let interval =
+        ReferenceInterval::new(0, read.len(), ReferenceLength::new(contig.sequence().len()))
+            .expect("fixture interval is bounded");
+    let placement = AlignmentPlacement::new(0, interval, strand, distance);
+    let mapping_quality = RecordMappingQuality::Calibrated(37);
+    let limits = AlignmentRecordLimits::default();
+    let fast = try_build_indexed_single_ungapped_alignment_record(
+        &reference,
+        b"read",
+        AlignmentRead::new(
+            &read,
+            Some(b"IIII".get(..read_raw.len()).expect("short quality")),
+        ),
+        placement,
+        mapping_quality,
+        limits,
+    )
+    .expect("fast-path evaluation succeeds")
+    .expect("fixture is certified ungapped");
+    let contig_id = reference.contig_id(0).expect("fixture contig id");
+    let alignment =
+        traceback_read_placement(&reference, &read, &contig_id, interval, strand, distance)
+            .expect("full traceback succeeds");
+    let expected = build_indexed_single_alignment_record(
+        &reference,
+        b"read",
+        AlignmentRead::new(
+            &read,
+            Some(b"IIII".get(..read_raw.len()).expect("short quality")),
+        ),
+        Some(&alignment),
+        mapping_quality,
+        limits,
+    )
+    .expect("traceback record builds");
+    assert_eq!(fast, expected);
+}
+
+#[test]
+fn indexed_single_ungapped_fast_path_is_record_identical() {
+    assert_single_ungapped_fast_path_matches_traceback(b"ACGT", b"ACGT", BisulfiteStrand::OT, 0);
+    assert_single_ungapped_fast_path_matches_traceback(b"AAAA", b"AACA", BisulfiteStrand::OT, 1);
+    assert_single_ungapped_fast_path_matches_traceback(b"ACGT", b"AGGA", BisulfiteStrand::OT, 2);
+    assert_single_ungapped_fast_path_matches_traceback(b"AACG", b"CGTT", BisulfiteStrand::OB, 0);
+}
+
+#[test]
+fn indexed_single_ungapped_fast_path_declines_shifted_gap_ties() {
+    let reference = reference(&[(b"chr1", b"AC")]);
+    let read = normalized(b"CA");
+    let interval = ReferenceInterval::new(0, 2, ReferenceLength::new(2)).expect("interval");
+    let observed = try_build_indexed_single_ungapped_alignment_record(
+        &reference,
+        b"tie",
+        AlignmentRead::new(&read, Some(b"II")),
+        AlignmentPlacement::new(0, interval, BisulfiteStrand::OT, 2),
+        RecordMappingQuality::Calibrated(37),
+        AlignmentRecordLimits::default(),
+    )
+    .expect("certificate evaluation succeeds");
+    assert!(observed.is_none());
 }
 
 fn single_record(

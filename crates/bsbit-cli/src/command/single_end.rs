@@ -12,9 +12,9 @@ use bsbit_core::coordinate::{ReferenceInterval, ReferenceLength};
 use bsbit_core::reference::ReferenceSemanticDigest;
 use bsbit_hts::TextRecordLimits;
 use bsbit_hts::{
-    AlignmentRead, AlignmentRecord, AlignmentRecordLimits, BamStagingWriter, BsbitAlignmentMode,
-    BsbitProgramProvenance, DecodedFastqReader, FastqRecord, RecordMappingQuality,
-    SAM_MAX_QUERY_NAME_BYTES, SamHeader,
+    AlignmentPlacement, AlignmentRead, AlignmentRecord, AlignmentRecordLimits, BamStagingWriter,
+    BsbitAlignmentMode, BsbitProgramProvenance, DecodedFastqReader, FastqRecord,
+    RecordMappingQuality, SAM_MAX_QUERY_NAME_BYTES, SamHeader,
 };
 use bsbit_index::reference::ReferenceIndex;
 use bsbit_index::storage::combined::load_combined_reference_catalog;
@@ -25,6 +25,7 @@ use crate::parallel::{
 };
 use crate::record_composition::{
     RecordBuildError, build_indexed_single_alignment_record, build_sam_header,
+    try_build_indexed_single_ungapped_alignment_record,
 };
 use crate::{CliError, CliWarning, RunReport};
 
@@ -377,6 +378,67 @@ fn materialize_single_record(
     result: SingleAlignmentResult,
     options: &SingleEndCommandOptions,
 ) -> Result<AlignmentRecord, CliError> {
+    let mapping_quality = match result.status() {
+        SingleMappingStatus::Unmapped => RecordMappingQuality::Unmapped,
+        SingleMappingStatus::Unique => RecordMappingQuality::Calibrated(result.mapping_quality()),
+        SingleMappingStatus::Ambiguous => RecordMappingQuality::Tied,
+    };
+    if let Some(placement) = result.placement() {
+        let contig_id = reference
+            .contig_id(placement.contig_ordinal())
+            .map_err(|error| error.to_string())
+            .map_err(|error| {
+                CliError::operation(format!(
+                    "align: materialize record {} from {}: {error}",
+                    source.ordinal().get(),
+                    options.read1.display()
+                ))
+            })?;
+        let contig = reference
+            .resolve_contig(&contig_id)
+            .map_err(|error| error.to_string())
+            .map_err(|error| {
+                CliError::operation(format!(
+                    "align: materialize record {} from {}: {error}",
+                    source.ordinal().get(),
+                    options.read1.display()
+                ))
+            })?;
+        let interval = ReferenceInterval::new(
+            placement.start(),
+            placement.end(),
+            ReferenceLength::new(contig.sequence().len()),
+        )
+        .map_err(|error| {
+            CliError::operation(format!(
+                "align: materialize record {} from {}: {error}",
+                source.ordinal().get(),
+                options.read1.display()
+            ))
+        })?;
+        if let Some(record) = try_build_indexed_single_ungapped_alignment_record(
+            reference,
+            source.record_name().name(),
+            AlignmentRead::new(source.sequence(), Some(source.quality())),
+            AlignmentPlacement::new(
+                placement.contig_ordinal(),
+                interval,
+                placement.strand(),
+                placement.distance(),
+            ),
+            mapping_quality,
+            AlignmentRecordLimits::default(),
+        )
+        .map_err(|error| {
+            CliError::operation(format!(
+                "align: construct record {} from {}: {error}",
+                source.ordinal().get(),
+                options.read1.display()
+            ))
+        })? {
+            return Ok(record);
+        }
+    }
     let alignment = result
         .placement()
         .map(|placement| {
@@ -410,11 +472,6 @@ fn materialize_single_record(
                 options.read1.display()
             ))
         })?;
-    let mapping_quality = match result.status() {
-        SingleMappingStatus::Unmapped => RecordMappingQuality::Unmapped,
-        SingleMappingStatus::Unique => RecordMappingQuality::Calibrated(result.mapping_quality()),
-        SingleMappingStatus::Ambiguous => RecordMappingQuality::Tied,
-    };
     build_indexed_single_alignment_record(
         reference,
         source.record_name().name(),
