@@ -85,6 +85,7 @@ nav:
   - Developer documentation:
       - Review the architecture: architecture.md
       - Run tests and release checks: testing.md
+      - Review alignment optimization experiments: development/alignment-optimization-branch-ledger.md
       - Follow the repository layout: repository-layout.md
 
 # Exact contracts, binary-format specifications, and maintenance registries
