@@ -1,0 +1,3 @@
+library_profile	reads	unique	ambiguous	unmapped	bam_records	mapping_threads	bam_threads	located_rows	verified_placements	adapter_attempted_reads	adapter_unique_reads	adapter_ambiguous_reads	adapter_unmapped_reads	adapter_clipped_bases	direct_ungapped_records	traceback_records	ab_relation
+directional	5000000	4699139	289884	10977	5000000	8	2	60968707	29615425	16	15	1	0	135	4662526	326497	identical
+non-directional	5000000	4698176	290852	10972	5000000	8	2	125087875	29625112	0	0	0	0	0	4662533	326495	identical

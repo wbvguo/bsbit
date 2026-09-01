@@ -1,0 +1,11 @@
+mode	variant	round	execution_order	mapping_threads	bam_threads	wall_s	user_s	sys_s	peak_rss_kib	output_sha256	validation
+directional-single	baseline	1	1	8	2	14.26	105.12	4.99	9161060	79c47bdd63fd4c637d054dd446dff106668700239dd0b2b44642ffb6b42584ac	byte-identical;quickcheck-ok
+directional-single	candidate	1	2	8	2	13.20	104.54	2.57	9163692	79c47bdd63fd4c637d054dd446dff106668700239dd0b2b44642ffb6b42584ac	byte-identical;quickcheck-ok
+nondirectional-single	baseline	1	1	8	2	44.14	354.28	2.94	9165420	a0a3dd541cae1542f498482f1533bf3d95d048f939106411460b2f5a79ec08b6	byte-identical;quickcheck-ok
+nondirectional-single	candidate	1	2	8	2	43.94	351.74	3.39	9163020	a0a3dd541cae1542f498482f1533bf3d95d048f939106411460b2f5a79ec08b6	byte-identical;quickcheck-ok
+directional-paired	baseline	1	1	10	4	13.25	137.16	3.41	9810400	2d86a537748ffc7a6836bd988b916f44a1bd79b43b15b6c829195af31da7c331	byte-identical;quickcheck-ok
+directional-paired	candidate	1	2	10	4	13.74	141.30	3.88	9810448	2d86a537748ffc7a6836bd988b916f44a1bd79b43b15b6c829195af31da7c331	byte-identical;quickcheck-ok
+directional-paired	candidate	2	1	10	4	13.83	142.14	4.16	9806064	2d86a537748ffc7a6836bd988b916f44a1bd79b43b15b6c829195af31da7c331	byte-identical;quickcheck-ok
+directional-paired	baseline	2	2	10	4	14.23	146.55	4.09	9814228	2d86a537748ffc7a6836bd988b916f44a1bd79b43b15b6c829195af31da7c331	byte-identical;quickcheck-ok
+nondirectional-paired	baseline	1	1	10	4	29.42	296.73	3.59	9806336	87cf57ba3ba8fbba43d851dd088493165d528085095197e8529984c43e669468	byte-identical;quickcheck-ok
+nondirectional-paired	candidate	1	2	10	4	29.66	298.74	4.02	9801432	87cf57ba3ba8fbba43d851dd088493165d528085095197e8529984c43e669468	byte-identical;quickcheck-ok
