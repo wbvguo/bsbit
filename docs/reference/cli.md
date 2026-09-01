@@ -80,6 +80,7 @@ bsbit align \
 | `-2`, `--read2 PATH` | None | R2; valid only together with read 1 |
 | `--output-bam PATH` | Required | New BAM destination |
 | `--index PATH` | Required | Opaque index handle created by `bsbit index` |
+| `--sensitive` | Off | Complete the wider bounded candidate frontier before final classification |
 | `--threads N` | 1 | Mapping workers, 1–64 |
 | `--bam-threads N` | 1 | BGZF output workers; use 0 for synchronous compression |
 | `--bam-compression-level default\|0..9` | 1 | HTSlib/BGZF compression setting |
@@ -90,11 +91,10 @@ unique placements carry numeric Q10/Q15/Q20/Q30/Q40 evidence tiers, while tied
 origins and unmapped records carry Q0. Output declares
 `caller-compatible-directional-single` provenance and is accepted by
 `bsbit call` after the documented sort, index, reference, and tag checks.
-Paired-only options fail explicitly when only read 1 is supplied.
+Pair-specific options fail explicitly when only read 1 is supplied.
 
 | Paired-only option | Default | Meaning |
 |---|---:|---|
-| `--sensitive` | Off | Accuracy-first qualified public mode |
 | `--non-directional` | Off | Make one placement decision across all four bisulfite directions |
 | `--batch-pairs N` | 16384 | Input pairs per mapping batch |
 | `--alignment-queue-batches N` | 2 | Bounded completed-batch queue depth |
@@ -107,12 +107,15 @@ Paired-only options fail explicitly when only read 1 is supplied.
 `--metrics` is optional benchmark diagnostics, not an alignment mode. Its TSV
 data row starts with the schema identifier `bsbit-alignment-metrics-v1`.
 
-Default and `--sensitive` are the only public search modes. Both modes emit
-one primary record for each input read unless `--mapped-only` is set. The BAM
-`@PG` line binds the exact reference semantic digest and alignment mode. The
-output still needs coordinate sorting, duplicate handling, and indexing before
-calling; “caller-compatible” does not mean “already coordinate-ready.” See the
-[alignment guide](../guides/alignment.md#align-paired-reads).
+Default and `--sensitive` are the only public search modes for either layout.
+Single-end sensitive completes the six-round, 4,096-hit bounded seed frontier
+before d5 verification and does not invoke pair-only rescue. Both modes emit
+one primary record for each input read unless paired input uses
+`--mapped-only`. The BAM `@PG` line binds the exact reference semantic digest
+and alignment mode. The output still needs coordinate sorting, duplicate
+handling, and indexing before calling; “caller-compatible” does not mean
+“already coordinate-ready.” See the [alignment
+guide](../guides/alignment.md#choose-an-alignment-mode).
 
 ## Calling options shared by `meth`, `snp`, and `joint`
 

@@ -28,8 +28,15 @@ bsbit align \
   --index GRCh38.bsbit \
   --read1 sample.fastq.gz \
   --output-bam sample.bam \
+  --sensitive \
   --threads 8
 ```
+
+Omit `--sensitive` for the low-latency default. With it, single-end alignment
+replays seed intervals admitted only by the wider 4,096-hit bound, completes
+the six-round bounded frontier, and then performs distance-5 verification,
+origin classification, and MAPQ. Pair geometry, mate rescue, and paired
+adapter recovery do not apply to a single read.
 
 !!! note "Single-end confidence"
     Unique origins receive numeric Q10/Q15/Q20/Q30/Q40 from evidence retained
@@ -41,10 +48,11 @@ Single-end output preserves input order. Coordinate-based analysis still
 requires coordinate sorting. Single-end input currently supports the
 directional library model; non-directional single-end and PBAT are unsupported.
 
-Only shared options such as `--threads` apply to the read-1-only layout.
-Paired-only controls including `--sensitive`, `--non-directional`, template
-span, BAM-worker tuning, `--mapped-only`, and `--metrics` fail explicitly on
-single-end input instead of being ignored.
+Shared options including `--sensitive`, `--threads`, `--bam-threads`, and
+`--bam-compression-level` apply to the read-1-only layout. Paired-only controls
+including `--non-directional`, template span, `--mapped-only`, output-contract
+selection, paired batching, and `--metrics` fail explicitly on single-end
+input instead of being ignored.
 
 ## Align paired reads
 
@@ -82,7 +90,10 @@ The BAM is written in input order. Inspect it immediately, then follow the
 
 ## Choose an alignment mode
 
-The paired-end path exposes two public search modes:
+Both layouts expose default and sensitive search. For single-end input,
+default keeps the existing early-resolution d3/d5 path and `--sensitive`
+completes the wider bounded candidate frontier before classification. The
+paired-end path additionally records one of these stable strategies:
 
 | Mode | Stable strategy | Main behavior |
 |---|---|---|

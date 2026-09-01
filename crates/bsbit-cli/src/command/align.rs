@@ -19,6 +19,7 @@ use bsbit_align::paired_end::{
     PAIRED_ALIGNMENT_BATCH_SIZE, PAIRED_MAX_EDIT_DISTANCE, PairedAlignmentOptions, PairedSearchMode,
 };
 use bsbit_align::paired_end::{PairMappingStatus, PairedBatchAligner};
+use bsbit_align::single_end::SingleSearchMode;
 use bsbit_core::coordinate::{ReferenceInterval, ReferenceLength};
 use bsbit_core::sequence::NormalizedSequence;
 use bsbit_hts::{
@@ -69,12 +70,12 @@ OPTIONAL INPUT:
   -2, --read2 PATH                   R2 FASTQ; requires --read1
 
 OPTIONS FOR BOTH LAYOUTS:
+  --sensitive                        complete a wider bounded candidate frontier
   --threads N                        mapping workers; default: 1
   --bam-threads N                    BGZF workers; default: 1
   --bam-compression-level LEVEL      default|0..9; default: 1
 
 PAIRED-END OPTIONS:
-  --sensitive                        accuracy-first qualified mode
   --batch-pairs N                    default: 16384
   --alignment-queue-batches N        default: 2
   --output-contract CONTRACT         minimal|bismark; default: minimal
@@ -91,8 +92,9 @@ placements use MAPQ 0. Its caller-compatible directional-single BAM is accepted
 by `bsbit call` after coordinate sorting, duplicate handling, and indexing.
 
 Without --sensitive, default mode runs the low-latency d3 pass plus an
-incremental d5 fallback. Qualified release builds retry an unresolved pair only
-when its 3-prime tail has exact Illumina adapter support.
+incremental d5 fallback. For single-end input, --sensitive completes the wider
+bounded seed frontier before d5 verification, classification, and MAPQ. For
+paired-end input it also enables the qualified pair-specific recovery policy.
 Inputs may remain gzip-compressed; pre-decompression is not required or recommended.
 ";
 
@@ -474,10 +476,15 @@ fn write_metrics(
 }
 
 fn run_standard_single_from_options(options: Options) -> Result<(), Box<dyn Error>> {
+    let search_mode = match options.search_mode {
+        PairedSearchMode::Default => SingleSearchMode::Default,
+        PairedSearchMode::Sensitive => SingleSearchMode::Sensitive,
+    };
     let align_options = SingleEndCommandOptions {
         index: options.index,
         read1: options.read1,
         output_bam: options.output_bam,
+        search_mode,
         max_edit_distance: u64::from(PAIRED_MAX_EDIT_DISTANCE),
         batch_records: 1_000,
         threads: u64::try_from(options.threads).expect("validated thread count fits u64"),
@@ -1179,9 +1186,7 @@ fn parse_options_from(
     };
     let output_bam = required(output_bam, "--output-bam")?;
     if matches!(layout, ReadLayout::SingleEnd) {
-        let unsupported_flag = if explicit_search_mode.is_some() {
-            Some("--sensitive")
-        } else if matches!(library_profile, PairedLibraryProfile::NonDirectional) {
+        let unsupported_flag = if matches!(library_profile, PairedLibraryProfile::NonDirectional) {
             Some("--non-directional")
         } else if read_output_explicit {
             Some("--mapped-only")

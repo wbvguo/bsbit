@@ -235,6 +235,13 @@ deterministic directional single-end alignment and preserves FASTQ order. With
 both `--read1` and `--read2`, it runs the paired-end path described below. Both
 layouts publish BAM through the same create-only output contract.
 
+Single-end default mode may classify a verified initial frontier immediately
+and continues only unresolved work. Single-end sensitive mode instead replays
+intervals admitted by the shared 4,096-hit sensitive bound, completes the
+six-round adaptive seed schedule, verifies the accumulated candidates through
+distance 5, and only then groups biological origins and assigns MAPQ. It does
+not enter mate-rescue, template-geometry, or paired adapter stages.
+
 One decode stream reads single-end records; paired input uses two synchronized
 decode streams. Both feed bounded batches to mapping workers with reusable
 workspaces. Completed results pass through a bounded ordered queue to record

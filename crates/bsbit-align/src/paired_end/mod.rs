@@ -68,9 +68,6 @@ pub const PAIRED_MAX_EDIT_DISTANCE: u8 = MAX_EDIT_DISTANCE;
 // for the paired-end edit-distance-three budget: at most three edits can
 // disturb at most three blocks, leaving at least one exact proof block.
 const RESCUE_BLOCKS: usize = INITIAL_EDIT_DISTANCE as usize + 1;
-const SENSITIVE_MAX_SEED_HITS: u64 = 4_096;
-const SENSITIVE_MAX_COMBINED_RESCUE_HITS: u64 = 4_096;
-const SENSITIVE_MAX_SEED_ROUNDS: usize = 6;
 const SENSITIVE_RANKED_BLOCK_HITS: u64 = 512;
 const SENSITIVE_UNMAPPED_RANKED_BLOCK_HITS: u64 = SENSITIVE_RANKED_BLOCK_HITS.saturating_mul(2);
 const SENSITIVE_SELECTIVE_UNMAPPED_RANKED_BLOCK_HITS: u64 =

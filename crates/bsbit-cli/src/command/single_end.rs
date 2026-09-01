@@ -5,7 +5,9 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use bsbit_align::materialize::traceback_read_placement;
-use bsbit_align::single_end::{SingleAlignmentResult, SingleBatchAligner, SingleMappingStatus};
+use bsbit_align::single_end::{
+    SingleAlignmentResult, SingleBatchAligner, SingleMappingStatus, SingleSearchMode,
+};
 use bsbit_core::coordinate::{ReferenceInterval, ReferenceLength};
 use bsbit_core::reference::ReferenceSemanticDigest;
 use bsbit_hts::TextRecordLimits;
@@ -37,6 +39,7 @@ pub(crate) struct SingleEndCommandOptions {
     pub(crate) index: PathBuf,
     pub(crate) read1: PathBuf,
     pub(crate) output_bam: PathBuf,
+    pub(crate) search_mode: SingleSearchMode,
     pub(crate) max_edit_distance: u64,
     pub(crate) batch_records: u64,
     pub(crate) threads: u64,
@@ -349,7 +352,12 @@ fn map_single_records(
         reads.clear();
         reads.extend(chunk.iter().map(|record| record.sequence().bases()));
         let mapped = aligner
-            .map_reads(reference, &reads, maximum_edit_distance)
+            .map_reads_with_mode(
+                reference,
+                &reads,
+                maximum_edit_distance,
+                options.search_mode,
+            )
             .map_err(|error| CliError::operation(format!("align: map single batch: {error}")))?;
         for (source, result) in chunk.iter().zip(mapped.iter().copied()) {
             if cancellation.is_some_and(|flag| flag.load(Ordering::Relaxed)) {

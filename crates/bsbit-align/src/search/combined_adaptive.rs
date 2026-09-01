@@ -22,6 +22,9 @@ pub(crate) const DEFAULT_MINIMUM_MULTI_HIT_SEED_BASES: usize = 16;
 pub(crate) const DEFAULT_MAXIMUM_SEED_HITS: u64 = 1_000;
 pub(crate) const DEFAULT_MAXIMUM_COMBINED_RESCUE_HITS: u64 = 4_096;
 pub(crate) const DEFAULT_MAXIMUM_SEED_ROUNDS: usize = 6;
+const SENSITIVE_MAXIMUM_SEED_HITS: u64 = 4_096;
+const SENSITIVE_MAXIMUM_COMBINED_RESCUE_HITS: u64 = 4_096;
+const SENSITIVE_MAXIMUM_SEED_ROUNDS: usize = 6;
 pub(crate) const EMPTY_SEED_STEP: usize = 8;
 pub(crate) const DIRECT_SINGLETON_PROOF: u8 = 1 << 7;
 pub(crate) const FLEXIBLE_NOMINAL_PROOF: u8 = 1 << 6;
@@ -46,6 +49,13 @@ pub(crate) const DEFAULT_SEARCH_LIMITS: CombinedSearchLimits = CombinedSearchLim
     maximum_seed_hits: DEFAULT_MAXIMUM_SEED_HITS,
     maximum_combined_rescue_hits: DEFAULT_MAXIMUM_COMBINED_RESCUE_HITS,
     maximum_seed_rounds: DEFAULT_MAXIMUM_SEED_ROUNDS,
+};
+
+pub(crate) const SENSITIVE_SEARCH_LIMITS: CombinedSearchLimits = CombinedSearchLimits {
+    minimum_multi_hit_seed_bases: DEFAULT_MINIMUM_MULTI_HIT_SEED_BASES,
+    maximum_seed_hits: SENSITIVE_MAXIMUM_SEED_HITS,
+    maximum_combined_rescue_hits: SENSITIVE_MAXIMUM_COMBINED_RESCUE_HITS,
+    maximum_seed_rounds: SENSITIVE_MAXIMUM_SEED_ROUNDS,
 };
 
 #[derive(Clone, Copy)]
@@ -414,10 +424,34 @@ pub(crate) fn continue_combined_two_lane_search(
     mate1_candidates: &mut Vec<ReadCandidate>,
     mate2_candidates: &mut Vec<ReadCandidate>,
 ) -> Result<[u64; 2], AlignmentError> {
+    continue_combined_two_lane_search_with_limits(
+        reference,
+        reads,
+        reversed_projected,
+        reverse_second_lane_hits,
+        DEFAULT_SEARCH_LIMITS,
+        false,
+        state,
+        mate1_candidates,
+        mate2_candidates,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn continue_combined_two_lane_search_with_limits(
+    reference: &ReferenceIndex,
+    reads: [&[Base]; 2],
+    reversed_projected: [&[ProjectedBase]; 2],
+    reverse_second_lane_hits: bool,
+    limits: CombinedSearchLimits,
+    complete_direct_frontier: bool,
+    state: &mut CombinedTwoLaneSearchState,
+    mate1_candidates: &mut Vec<ReadCandidate>,
+    mate2_candidates: &mut Vec<ReadCandidate>,
+) -> Result<[u64; 2], AlignmentError> {
     let before = state.located;
-    let limits = DEFAULT_SEARCH_LIMITS;
     for (lane, read) in reads.into_iter().enumerate() {
-        if state.direct[lane] {
+        if state.direct[lane] && !complete_direct_frontier {
             continue;
         }
         let candidates = if lane == 0 {

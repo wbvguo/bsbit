@@ -14,9 +14,10 @@ use crate::search::combined_query::{CombinedSearchReferenceExt, CombinedSeedMatc
 
 use crate::read_mapping::{ReadAlignmentMetrics, ReadCandidate, ReadWorkspace, ungapped_distance};
 use crate::search::combined_adaptive::{
-    CombinedTwoLaneSearchState, DEFAULT_MAXIMUM_SEED_ROUNDS, DEFAULT_SEARCH_LIMITS,
+    CombinedSearchLimits, CombinedTwoLaneSearchState, DEFAULT_SEARCH_LIMITS,
     DIRECT_SINGLETON_PROOF, DeferredCombinedSeed, EMPTY_SEED_STEP, FLEXIBLE_NOMINAL_PROOF,
-    INITIAL_SEARCH_LIMITS, combined_seed_round_is_locatable, continue_combined_two_lane_search,
+    INITIAL_SEARCH_LIMITS, SENSITIVE_SEARCH_LIMITS, combined_seed_round_is_locatable,
+    continue_combined_two_lane_search, continue_combined_two_lane_search_with_limits,
     prepare_combined_projection,
 };
 
@@ -29,6 +30,29 @@ pub enum SingleMappingStatus {
     Unique,
     /// Multiple equally good biological origins survived.
     Ambiguous,
+}
+
+/// Candidate-search effort for single-end alignment.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SingleSearchMode {
+    /// Qualified low-latency alignment with an incremental fallback.
+    #[default]
+    Default,
+    /// Bounded candidate-frontier completion before classification and MAPQ.
+    Sensitive,
+}
+
+impl SingleSearchMode {
+    const fn limits(self) -> CombinedSearchLimits {
+        match self {
+            Self::Default => DEFAULT_SEARCH_LIMITS,
+            Self::Sensitive => SENSITIVE_SEARCH_LIMITS,
+        }
+    }
+
+    const fn completes_candidate_frontier(self) -> bool {
+        matches!(self, Self::Sensitive)
+    }
 }
 
 /// Final mapping facts for one directional single read.
@@ -145,6 +169,31 @@ impl SingleBatchAligner {
         reads: &[&[Base]],
         maximum_edit_distance: u8,
     ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
+        self.map_reads_with_mode(
+            reference,
+            reads,
+            maximum_edit_distance,
+            SingleSearchMode::Default,
+        )
+    }
+
+    /// Maps a batch with the selected single-end candidate-search policy.
+    ///
+    /// Sensitive mode completes the bounded seed frontier before verifying and
+    /// classifying placements. It does not apply paired-only mate rescue,
+    /// template geometry, or adapter-pair recovery.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported read/edit domain or combined-index failure.
+    #[allow(clippy::too_many_lines)]
+    pub fn map_reads_with_mode<'a>(
+        &'a mut self,
+        reference: &ReferenceIndex,
+        reads: &[&[Base]],
+        maximum_edit_distance: u8,
+        search_mode: SingleSearchMode,
+    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
         if maximum_edit_distance > MAX_EDIT_DISTANCE {
             return Err(AlignmentError::UnsupportedEditDistance {
                 requested: maximum_edit_distance,
@@ -192,7 +241,12 @@ impl SingleBatchAligner {
                 self.first_seeds.push(None);
             }
         }
-        self.prepare_search_wavefront(reference, reads)?;
+        self.prepare_search_wavefront(
+            reference,
+            reads,
+            search_mode.limits(),
+            search_mode.completes_candidate_frontier(),
+        )?;
         self.results.clear();
         let mut ordinal = 0_usize;
         while ordinal < reads.len() {
@@ -217,7 +271,7 @@ impl SingleBatchAligner {
                     search: &searches[lane],
                     initial_candidates: &initial_candidates[lane],
                 });
-                let mapped = self.map_two(reference, prepared, maximum_edit_distance);
+                let mapped = self.map_two(reference, prepared, maximum_edit_distance, search_mode);
                 let [first_candidates, second_candidates] = initial_candidates;
                 self.initial_candidates[ordinal] = first_candidates;
                 self.initial_candidates[ordinal + 1] = second_candidates;
@@ -240,6 +294,7 @@ impl SingleBatchAligner {
                         initial_candidates: &initial_candidates,
                     },
                     maximum_edit_distance,
+                    search_mode,
                 );
                 self.initial_candidates[ordinal] = initial_candidates;
                 let result = result?;
@@ -255,6 +310,8 @@ impl SingleBatchAligner {
         &mut self,
         reference: &ReferenceIndex,
         reads: &[&[Base]],
+        completion_limits: CombinedSearchLimits,
+        complete_candidate_frontier: bool,
     ) -> Result<(), AlignmentError> {
         const MAX_LANES: usize = 64;
         self.round_matches.clear();
@@ -316,12 +373,11 @@ impl SingleBatchAligner {
                 }
             }
 
-            if INITIAL_SEARCH_LIMITS.maximum_seed_rounds < DEFAULT_MAXIMUM_SEED_ROUNDS {
-                let default_limits = DEFAULT_SEARCH_LIMITS;
+            if INITIAL_SEARCH_LIMITS.maximum_seed_rounds < completion_limits.maximum_seed_rounds {
                 for &ordinal in &active_ordinals[..active_count] {
                     if let Some(seed) = self.round_matches[ordinal]
                         && !combined_seed_round_is_locatable(seed, INITIAL_SEARCH_LIMITS)
-                        && combined_seed_round_is_locatable(seed, default_limits)
+                        && combined_seed_round_is_locatable(seed, completion_limits)
                     {
                         let offset = self.search_states[ordinal].offsets[0];
                         self.search_states[ordinal].defer(
@@ -389,7 +445,8 @@ impl SingleBatchAligner {
                             .located[0]
                             .checked_add(metrics[lane].located_coordinates())
                             .ok_or(AlignmentError::LocatedCountOverflow)?;
-                        self.search_states[ordinal].active[0] &= !direct[lane];
+                        self.search_states[ordinal].active[0] &=
+                            !direct[lane] || complete_candidate_frontier;
                         self.search_states[ordinal].direct[0] |= direct[lane];
                     }
                 } else {
@@ -427,7 +484,7 @@ impl SingleBatchAligner {
                     self.search_states[ordinal].located[0] = self.search_states[ordinal].located[0]
                         .checked_add(metrics.located_coordinates())
                         .ok_or(AlignmentError::LocatedCountOverflow)?;
-                    self.search_states[ordinal].active[0] &= !direct;
+                    self.search_states[ordinal].active[0] &= !direct || complete_candidate_frontier;
                     self.search_states[ordinal].direct[0] |= direct;
                 }
             }
@@ -447,11 +504,13 @@ impl SingleBatchAligner {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn map_one(
         &mut self,
         reference: &ReferenceIndex,
         prepared: PreparedSingleRead<'_>,
         maximum_edit_distance: u8,
+        search_mode: SingleSearchMode,
     ) -> Result<SingleAlignmentResult, AlignmentError> {
         let PreparedSingleRead {
             read,
@@ -475,6 +534,38 @@ impl SingleBatchAligner {
             located_rows: search.located[0],
             ..ReadAlignmentMetrics::default()
         };
+        if search_mode.completes_candidate_frontier() {
+            let additional = continue_combined_two_lane_search_with_limits(
+                reference,
+                [read, &[]],
+                [projection, &[]],
+                false,
+                search_mode.limits(),
+                true,
+                &mut search,
+                &mut read_workspace.candidate_nominals,
+                &mut unused_workspace.candidate_nominals,
+            )?;
+            metrics.located_rows = metrics.located_rows.saturating_add(additional[0]);
+            let (_, observed) = read_workspace.verify_candidates_with_budget(
+                reference,
+                read,
+                metrics,
+                maximum_edit_distance,
+            )?;
+            return Ok(Self::finish_result(
+                read_workspace,
+                origins,
+                SingleResultEvidence {
+                    read_length: read.len(),
+                    metrics: observed,
+                    verified_distance_limit: maximum_edit_distance,
+                    first_seed,
+                    search: &search,
+                    lane: 0,
+                },
+            ));
+        }
         let initial_budget = maximum_edit_distance.min(INITIAL_EDIT_DISTANCE);
         let (_, observed) = read_workspace.verify_candidates_with_budget(
             reference,
@@ -563,6 +654,7 @@ impl SingleBatchAligner {
         reference: &ReferenceIndex,
         prepared: [PreparedSingleRead<'_>; 2],
         maximum_edit_distance: u8,
+        search_mode: SingleSearchMode,
     ) -> Result<[SingleAlignmentResult; 2], AlignmentError> {
         let reads = prepared.map(|input| input.read);
         let projections = prepared.map(|input| input.projection);
@@ -598,6 +690,45 @@ impl SingleBatchAligner {
             located_rows,
             ..ReadAlignmentMetrics::default()
         });
+        if search_mode.completes_candidate_frontier() {
+            let [first_workspace, second_workspace] = &mut *workspaces;
+            let additional = continue_combined_two_lane_search_with_limits(
+                reference,
+                reads,
+                projections,
+                false,
+                search_mode.limits(),
+                true,
+                &mut search,
+                &mut first_workspace.candidate_nominals,
+                &mut second_workspace.candidate_nominals,
+            )?;
+            for lane in 0..2 {
+                metrics[lane].located_rows =
+                    metrics[lane].located_rows.saturating_add(additional[lane]);
+                let (_, observed) = workspaces[lane].verify_candidates_with_budget(
+                    reference,
+                    reads[lane],
+                    metrics[lane],
+                    maximum_edit_distance,
+                )?;
+                metrics[lane] = observed;
+            }
+            return Ok(core::array::from_fn(|lane| {
+                Self::finish_result(
+                    &workspaces[lane],
+                    origins,
+                    SingleResultEvidence {
+                        read_length: reads[lane].len(),
+                        metrics: metrics[lane],
+                        verified_distance_limit: maximum_edit_distance,
+                        first_seed: first_seeds[lane],
+                        search: &search,
+                        lane,
+                    },
+                )
+            }));
+        }
         let initial_budget = maximum_edit_distance.min(INITIAL_EDIT_DISTANCE);
         let mut results = [None; 2];
 
@@ -785,3 +916,7 @@ impl SingleBatchAligner {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/whitebox/single_end.rs"]
+mod whitebox;

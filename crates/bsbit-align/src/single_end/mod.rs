@@ -7,4 +7,6 @@
 mod mapper;
 mod mapq;
 
-pub use mapper::{SingleAlignmentResult, SingleBatchAligner, SingleMappingStatus};
+pub use mapper::{
+    SingleAlignmentResult, SingleBatchAligner, SingleMappingStatus, SingleSearchMode,
+};

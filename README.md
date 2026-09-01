@@ -71,15 +71,19 @@ target/release/bsbit align \
   --bam-threads 2
 ```
 
-For directional single-end input, supply only `--read1` (or `-1`) and no
-paired-only options. The single-end path writes numeric MAPQ from the retained
-search evidence and declares caller-compatible provenance; see the
-[single-end alignment guide](docs/guides/alignment.md).
+For directional single-end input, supply only `--read1` (or `-1`). The
+single-end path accepts the shared runtime/BAM controls and `--sensitive`,
+writes numeric MAPQ from the retained search evidence, and declares
+caller-compatible provenance; see the [single-end alignment
+guide](docs/guides/alignment.md).
 
-Omit a mode flag for the default mode or add `--sensitive` for the qualified
-maximum-recall mode. Search, rescue, reporting, and MAPQ policies are fixed by
-each mode rather than assembled from experimental switches. Use `--help` for
-the exact command surface, and see [indexing](docs/guides/indexing.md),
+Omit a mode flag for the default mode or add `--sensitive` for the wider
+bounded candidate-search mode. The current replicated maximum-recall
+qualification is paired-end; single-end sensitive has focused correctness
+coverage and should be rebenchmarked before performance claims. Search,
+rescue, reporting, and MAPQ policies are fixed by each mode rather than
+assembled from experimental switches. Use `--help` for the exact command
+surface, and see [indexing](docs/guides/indexing.md),
 [alignment](docs/guides/alignment.md) before changing resource or output
 settings.
 

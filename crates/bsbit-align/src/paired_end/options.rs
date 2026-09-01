@@ -1,12 +1,9 @@
 use crate::library::PairedLibraryProfile;
 use crate::search::combined_adaptive::{
-    CombinedSearchLimits, DEFAULT_MINIMUM_MULTI_HIT_SEED_BASES, DEFAULT_SEARCH_LIMITS,
+    CombinedSearchLimits, DEFAULT_SEARCH_LIMITS, SENSITIVE_SEARCH_LIMITS,
 };
 
-use super::{
-    PAIRED_MAX_EDIT_DISTANCE, SEMI_GLOBAL_CLIP_PENALTY, SENSITIVE_CLIP_PENALTY,
-    SENSITIVE_MAX_COMBINED_RESCUE_HITS, SENSITIVE_MAX_SEED_HITS, SENSITIVE_MAX_SEED_ROUNDS,
-};
+use super::{PAIRED_MAX_EDIT_DISTANCE, SEMI_GLOBAL_CLIP_PENALTY, SENSITIVE_CLIP_PENALTY};
 
 /// Candidate-search effort for paired-end alignment.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -88,12 +85,7 @@ impl PairedSearchMode {
     pub(super) const fn limits(self) -> CombinedSearchLimits {
         match self {
             Self::Default => DEFAULT_SEARCH_LIMITS,
-            Self::Sensitive => CombinedSearchLimits {
-                minimum_multi_hit_seed_bases: DEFAULT_MINIMUM_MULTI_HIT_SEED_BASES,
-                maximum_seed_hits: SENSITIVE_MAX_SEED_HITS,
-                maximum_combined_rescue_hits: SENSITIVE_MAX_COMBINED_RESCUE_HITS,
-                maximum_seed_rounds: SENSITIVE_MAX_SEED_ROUNDS,
-            },
+            Self::Sensitive => SENSITIVE_SEARCH_LIMITS,
         }
     }
 

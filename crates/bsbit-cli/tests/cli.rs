@@ -248,6 +248,21 @@ fn align(snapshot: &Path, read1: &Path, read2: Option<&Path>, output_bam: &Path)
     run(arguments)
 }
 
+fn align_single_sensitive(snapshot: &Path, read1: &Path, output_bam: &Path) -> Output {
+    run([
+        OsString::from("align"),
+        OsString::from("--index"),
+        snapshot.as_os_str().to_owned(),
+        OsString::from("-1"),
+        read1.as_os_str().to_owned(),
+        OsString::from("--output-bam"),
+        output_bam.as_os_str().to_owned(),
+        OsString::from("--sensitive"),
+        OsString::from("--threads"),
+        OsString::from("2"),
+    ])
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -970,6 +985,64 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     let rejected = align(&index_path, &malformed, None, &unpublished);
     assert_eq!(rejected.status.code(), Some(1));
     assert!(!unpublished.exists());
+
+    fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+#[test]
+fn single_sensitive_completes_repeat_frontier_above_the_default_hit_cap() {
+    const MOTIF: &[u8] = b"ACGTCAGATGCTACGAGTACCGATGACCTAGCATGCATGA";
+    const COPIES: usize = 1_001;
+    let directory = unique_directory("single-sensitive-repeat-frontier");
+    fs::create_dir(&directory).expect("fresh directory");
+    let reference = directory.join("reference.fa");
+    let index_path = directory.join("reference.bsbit");
+    let reads = directory.join("reads.fq");
+    let default_bam = directory.join("default.bam");
+    let sensitive_bam = directory.join("sensitive.bam");
+
+    let mut reference_contents = b">chr\n".to_vec();
+    for _ in 0..COPIES {
+        reference_contents.extend_from_slice(MOTIF);
+        reference_contents.extend_from_slice(b"NNNNNNNNNN");
+    }
+    reference_contents.push(b'\n');
+    fs::write(&reference, reference_contents).expect("repeat reference");
+    let mut read_records = Vec::new();
+    for ordinal in 0..3 {
+        read_records.extend_from_slice(format!("@repeat-{ordinal}\n").as_bytes());
+        read_records.extend_from_slice(MOTIF);
+        read_records.extend_from_slice(b"\n+\n");
+        read_records.extend(std::iter::repeat_n(b'I', MOTIF.len()));
+        read_records.push(b'\n');
+    }
+    fs::write(&reads, read_records).expect("repeat read");
+
+    assert_success(&index(&reference, &index_path));
+    assert_success(&align(&index_path, &reads, None, &default_bam));
+    assert_success(&align_single_sensitive(&index_path, &reads, &sensitive_bam));
+
+    let default = decode_process_bam(&default_bam);
+    let sensitive = decode_process_bam(&sensitive_bam);
+    assert_eq!(default.len(), 3);
+    assert_eq!(sensitive.len(), 3);
+    for (default, sensitive) in default.iter().zip(&sensitive) {
+        let default_flag = std::str::from_utf8(&default[1])
+            .expect("default flag UTF-8")
+            .parse::<u16>()
+            .expect("default flag integer");
+        let sensitive_flag = std::str::from_utf8(&sensitive[1])
+            .expect("sensitive flag UTF-8")
+            .parse::<u16>()
+            .expect("sensitive flag integer");
+        assert_ne!(
+            default_flag & 0x4,
+            0,
+            "default hit cap leaves read unmapped"
+        );
+        assert_eq!(sensitive_flag & 0x4, 0, "sensitive frontier maps the read");
+        assert_eq!(sensitive[4], b"0", "repeat tie must use MAPQ 0");
+    }
 
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }

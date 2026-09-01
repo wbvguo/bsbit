@@ -72,6 +72,12 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     assert_eq!(parsed.bam_threads, 1);
     assert_eq!(parsed.bam_compression_level, Some(1));
 
+    let mut sensitive = single.clone();
+    sensitive.push(OsString::from("--sensitive"));
+    let parsed = parse_options_from(sensitive).expect("single-end sensitive input parses");
+    assert_eq!(parsed.layout, ReadLayout::SingleEnd);
+    assert_eq!(parsed.search_mode, PairedSearchMode::Sensitive);
+
     let mut threaded = single.clone();
     threaded.extend(["--threads", "4"].map(OsString::from));
     assert_eq!(
@@ -89,7 +95,6 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     assert_eq!(parsed.bam_compression_level, None);
 
     for arguments in [
-        [single.clone(), vec![OsString::from("--sensitive")]].concat(),
         [
             single.clone(),
             vec![
