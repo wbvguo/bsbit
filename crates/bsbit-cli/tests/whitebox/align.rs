@@ -24,6 +24,7 @@ fn help_exposes_only_default_and_sensitive_modes() {
     assert!(HELP.contains("--mapped-only"));
     assert!(HELP.contains("minimal|bismark"));
     assert!(HELP.contains("--non-directional"));
+    assert!(HELP.contains("four-strand SE"));
     assert!(HELP.contains("--read1 only"));
     assert!(HELP.contains("-1, --read1 PATH"));
     assert!(HELP.contains("-2, --read2 PATH"));
@@ -54,7 +55,7 @@ fn help_exposes_only_default_and_sensitive_modes() {
 }
 
 #[test]
-fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
+fn standard_single_input_supports_both_library_profiles_and_pair_only_options_fail_closed() {
     let single = [
         "--index",
         "reference.bsbit",
@@ -77,6 +78,13 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     let parsed = parse_options_from(sensitive).expect("single-end sensitive input parses");
     assert_eq!(parsed.layout, ReadLayout::SingleEnd);
     assert_eq!(parsed.search_mode, PairedSearchMode::Sensitive);
+
+    let mut non_directional = single.clone();
+    non_directional.push(OsString::from("--non-directional"));
+    let parsed =
+        parse_options_from(non_directional).expect("non-directional single-end input parses");
+    assert_eq!(parsed.layout, ReadLayout::SingleEnd);
+    assert_eq!(parsed.library_profile, PairedLibraryProfile::NonDirectional);
 
     let mut threaded = single.clone();
     threaded.extend(["--threads", "4"].map(OsString::from));

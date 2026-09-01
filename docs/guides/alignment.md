@@ -1,8 +1,9 @@
 # Align reads
 
 `bsbit align` is the entry point for both read layouts. Supplying read 1 alone
-selects directional single-end alignment; adding synchronized read 2 selects
-paired-end alignment without changing the command.
+selects single-end alignment; adding synchronized read 2 selects paired-end
+alignment without changing the command. Directional libraries are the default
+for either layout, and `--non-directional` enables four-strand placement.
 
 Both layouts open the opaque index created by `bsbit index`; alignment never
 builds or modifies index data.
@@ -44,18 +45,22 @@ to a single read.
 !!! note "Single-end confidence"
     Unique origins receive numeric Q10/Q15/Q20/Q30/Q40 from evidence retained
     by the selecting search; tied origins remain MAPQ 0. Output declares
-    `caller-compatible-directional-single`. The published truth qualification
-    is scoped to the documented 5M-R1 simulated corpus.
+    `caller-compatible-directional-single` or
+    `caller-compatible-nondirectional-single`, according to the selected
+    library profile. The published single-end truth qualification is scoped to
+    directional reads in the documented 5M-R1 simulated corpus.
 
 Single-end output preserves input order. Coordinate-based analysis still
-requires coordinate sorting. Single-end input currently supports the
-directional library model; non-directional single-end and PBAT are unsupported.
+requires coordinate sorting. Add `--non-directional` to run both the OT/OB and
+CTOT/CTOB passes and make one global decision. An equal-best cross-pass result
+is ambiguous at MAPQ 0; a weaker cross-pass placement contributes to MAPQ
+separation and repeat pressure. PBAT remains unsupported.
 
-Shared options including `--sensitive`, `--threads`, `--bam-threads`, and
-`--bam-compression-level` apply to the read-1-only layout. Paired-only controls
-including `--non-directional`, template span, `--mapped-only`, output-contract
-selection, paired batching, and `--metrics` fail explicitly on single-end
-input instead of being ignored.
+Shared options including `--sensitive`, `--non-directional`, `--threads`,
+`--bam-threads`, and `--bam-compression-level` apply to the read-1-only layout.
+Paired-only controls including template span, `--mapped-only`, output-contract
+selection, paired batching, and `--metrics` fail explicitly on single-end input
+instead of being ignored.
 
 ## Align paired reads
 
@@ -121,10 +126,11 @@ probability-matched to another aligner.
 
 ## Select library orientation
 
-Directional paired libraries are the default. Add `--non-directional` to make
-one placement decision across all four supported directional classes. The
-option does not infer orientation from assay name and does not change the
-output-tag contract.
+Directional libraries are the default for both layouts. Add
+`--non-directional` to make one placement decision across all four supported
+directional classes. For single-end input, use the command above with this flag;
+for paired input, use both mates as shown below. The option does not infer
+orientation from assay name and does not change the output-tag contract.
 
 ```bash
 bsbit align \

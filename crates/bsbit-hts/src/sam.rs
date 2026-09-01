@@ -28,6 +28,8 @@ const PROGRAM_MODE_PREFIX: &[u8] = b";alignment-mode=";
 pub enum BsbitAlignmentMode {
     /// Caller-compatible directional single-end alignment.
     CallerCompatibleDirectionalSingle,
+    /// Caller-compatible non-directional single-end alignment.
+    CallerCompatibleNondirectionalSingle,
     /// Caller-compatible directional paired-end alignment.
     CallerCompatibleDirectionalPaired,
     /// Caller-compatible non-directional paired-end alignment.
@@ -38,6 +40,9 @@ impl BsbitAlignmentMode {
     const fn header_value(self) -> &'static [u8] {
         match self {
             Self::CallerCompatibleDirectionalSingle => b"caller-compatible-directional-single",
+            Self::CallerCompatibleNondirectionalSingle => {
+                b"caller-compatible-nondirectional-single"
+            }
             Self::CallerCompatibleDirectionalPaired => b"caller-compatible-directional-paired",
             Self::CallerCompatibleNondirectionalPaired => {
                 b"caller-compatible-nondirectional-paired"
@@ -49,6 +54,9 @@ impl BsbitAlignmentMode {
         match value {
             b"caller-compatible-directional-single" => {
                 Some(Self::CallerCompatibleDirectionalSingle)
+            }
+            b"caller-compatible-nondirectional-single" => {
+                Some(Self::CallerCompatibleNondirectionalSingle)
             }
             b"caller-compatible-directional-paired" => {
                 Some(Self::CallerCompatibleDirectionalPaired)
@@ -67,6 +75,7 @@ impl BsbitAlignmentMode {
         matches!(
             self,
             Self::CallerCompatibleDirectionalSingle
+                | Self::CallerCompatibleNondirectionalSingle
                 | Self::CallerCompatibleDirectionalPaired
                 | Self::CallerCompatibleNondirectionalPaired
         )
@@ -1417,6 +1426,7 @@ mod tests {
     fn every_alignment_mode_round_trips_and_is_caller_compatible() {
         for mode in [
             BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
+            BsbitAlignmentMode::CallerCompatibleNondirectionalSingle,
             BsbitAlignmentMode::CallerCompatibleDirectionalPaired,
             BsbitAlignmentMode::CallerCompatibleNondirectionalPaired,
         ] {

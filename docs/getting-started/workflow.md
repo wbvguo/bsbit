@@ -32,6 +32,7 @@ Alignment support depends on read layout:
 | Directional paired-end | Qualified path with caller-compatible provenance and published GRCh38 speed, accuracy, and MAPQ evidence |
 | Directional single-end | Caller-compatible numeric MAPQ; published 5M-R1 speed and exact/within-5-bp truth evidence |
 | Non-directional paired-end | Four-strand behavior and compatibility are tested; directional benchmark results do not apply |
+| Non-directional single-end | Four-strand behavior, global cross-pass classification, and caller compatibility are tested; directional single-end benchmark results do not apply |
 
 Directional paired-end WGBS owns the published qualification. Preprocessed
 RRBS and targeted reads are accepted when chemistry and orientation match, but

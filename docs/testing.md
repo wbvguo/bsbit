@@ -137,7 +137,8 @@ region-union planning, deterministic plain/BGZF publication, and VCF, CGmap,
 and bedMethyl schemas. Matrix tests cover strict input validation, missing-cell and
 threshold semantics, common contig-order derivation, bounded parallel merge,
 and rollback-protected `both` publication. Alignment tests also cover the
-complete non-directional four-strand decision and both BAM tag contracts.
+complete non-directional four-strand decision for both read layouts and both
+BAM tag contracts.
 
 ## Formal extended checks
 

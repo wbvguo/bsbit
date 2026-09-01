@@ -12,7 +12,7 @@ presence of the two explicit read paths:
 
 | Command/layout | Stable role | Input and output |
 |---|---|---|
-| `bsbit align` with read 1 only | Caller-compatible directional single-end alignment | One FASTQ to BAM in input order; unique origins receive numeric MAPQ |
+| `bsbit align` with read 1 only | Caller-compatible single-end alignment | One FASTQ to BAM in input order; unique origins receive numeric MAPQ; `--non-directional` enables four-strand placement |
 | `bsbit align` with read 1 and read 2 | Caller-compatible, high-throughput paired-end alignment | Synchronized paired FASTQ to read-complete BAM in input order |
 
 Both layouts accept exactly two search modes: default, selected by omitting a
@@ -21,9 +21,10 @@ profiling summaries record the selected mode and an immutable `strategy_id`;
 current identities and measurements live in [performance
 evidence](performance-evidence.md).
 
-Directional paired libraries are the default. `--non-directional` performs one
-global placement decision across all four supported strand/mate configurations.
-PBAT is not silently approximated.
+Directional libraries are the default for either layout. `--non-directional`
+performs one global placement decision across all four supported strand
+configurations, including mate order for paired input. PBAT is not silently
+approximated.
 
 ## Input and identity
 
@@ -94,15 +95,19 @@ integers are not universally probability-matched to another aligner. Current
 calibration results and their corpus boundary are maintained only on the
 [performance page](performance-evidence.md).
 
-Directional single-end `bsbit align` assigns Q10/Q15/Q20/Q30/Q40 from evidence
-retained by the selecting search or sensitive audit; MAPQ calculation itself
-does not launch another search. Sensitive different-origin replacements and
-new rescues require Q20 or above. Tied or lower-confidence conflicting origins
-remain MAPQ 0. The BAM declares
-`caller-compatible-directional-single` in structured `@PG` provenance and is
-accepted by `bsbit call` after the same sorting, indexing, tag, and reference
-identity checks as paired output. The current exact and within-5-bp calibration
-boundary is reported on the [performance page](performance-evidence.md).
+Single-end `bsbit align` assigns Q10/Q15/Q20/Q30/Q40 from evidence retained by
+the selecting search or sensitive audit; MAPQ calculation itself does not
+launch another search. Non-directional mode merges the OT/OB and CTOT/CTOB
+passes, treats an equal-best cross-pass result as ambiguous, and includes a
+weaker cross-pass result in MAPQ separation and repeat pressure. Sensitive
+different-origin replacements and new rescues require Q20 or above. Tied or
+lower-confidence conflicting origins remain MAPQ 0. The BAM declares the
+matching `caller-compatible-directional-single` or
+`caller-compatible-nondirectional-single` mode in structured `@PG` provenance
+and is accepted by `bsbit call` after the same sorting, indexing, tag, and
+reference identity checks as paired output. The current exact and within-5-bp
+calibration boundary applies to directional single-end and is reported on the
+[performance page](performance-evidence.md).
 
 ## Determinism and publication
 

@@ -71,7 +71,7 @@ bsbit align \
   --read1 READS_OR_R1.fastq.gz \
   [--read2 R2.fastq.gz] \
   --output-bam OUTPUT.bam \
-  [--threads N] [PAIRED_OPTIONS]
+  [OPTIONS]
 ```
 
 | Shared option | Default | Meaning |
@@ -81,21 +81,23 @@ bsbit align \
 | `--output-bam PATH` | Required | New BAM destination |
 | `--index PATH` | Required | Opaque index handle created by `bsbit index` |
 | `--sensitive` | Off | Audit the default result against the wider bounded candidate frontier |
+| `--non-directional` | Off | Make one placement decision across all four bisulfite directions |
 | `--threads N` | 1 | Mapping workers, 1–64 |
 | `--bam-threads N` | 1 | BGZF output workers; use 0 for synchronous compression |
 | `--bam-compression-level default\|0..9` | 1 | HTSlib/BGZF compression setting |
 
-Single-end alignment is directional and uses the same persisted combined
-index and bounded exact-reference verification core as paired alignment. Its
-unique placements carry numeric Q10/Q15/Q20/Q30/Q40 evidence tiers, while tied
-origins and unmapped records carry Q0. Output declares
-`caller-compatible-directional-single` provenance and is accepted by
+Single-end alignment uses the same persisted combined index and bounded
+exact-reference verification core as paired alignment. Directional mode searches
+OT/OB; `--non-directional` also searches CTOT/CTOB and merges both passes before
+classification. Unique placements carry numeric Q10/Q15/Q20/Q30/Q40 evidence
+tiers, while tied origins and unmapped records carry Q0. Output declares the
+matching `caller-compatible-directional-single` or
+`caller-compatible-nondirectional-single` provenance and is accepted by
 `bsbit call` after the documented sort, index, reference, and tag checks.
 Pair-specific options fail explicitly when only read 1 is supplied.
 
 | Paired-only option | Default | Meaning |
 |---|---:|---|
-| `--non-directional` | Off | Make one placement decision across all four bisulfite directions |
 | `--batch-pairs N` | 16384 | Input pairs per mapping batch |
 | `--alignment-queue-batches N` | 2 | Bounded completed-batch queue depth |
 | `--output-contract minimal\|bismark` | `minimal` | Emit `NM/XG`, or add Bismark-compatible `MD/XM/XR` tags |

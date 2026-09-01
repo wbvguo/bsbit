@@ -8,17 +8,27 @@ fn mapped(start: u64, mapping_quality: u8) -> SingleAlignmentResult {
 }
 
 fn mapped_at_distance(start: u64, mapping_quality: u8, edit_distance: u8) -> SingleAlignmentResult {
+    mapped_on_strand(start, mapping_quality, edit_distance, BisulfiteStrand::OT)
+}
+
+fn mapped_on_strand(
+    start: u64,
+    mapping_quality: u8,
+    edit_distance: u8,
+    strand: BisulfiteStrand,
+) -> SingleAlignmentResult {
     SingleAlignmentResult {
         status: SingleMappingStatus::Unique,
         placement: Some(ReadPlacement::strict(
             0,
             start,
             start + 100,
-            BisulfiteStrand::OT,
+            strand,
             edit_distance,
         )),
         mapping_quality,
         located_rows: 1,
+        distinct_candidate_starts: 1,
         verified_placements: 1,
     }
 }
@@ -84,5 +94,49 @@ fn sensitive_strong_incumbent_uses_the_d3_confidence_boundary() {
             5,
         ),
         5
+    );
+}
+
+#[test]
+fn non_directional_merge_selects_the_global_best_pass() {
+    let original = mapped_on_strand(100, 30, 2, BisulfiteStrand::OT);
+    let complementary = mapped_on_strand(500, 40, 0, BisulfiteStrand::CTOT);
+    let merged = merge_non_directional_results(original, complementary);
+    assert_eq!(merged.status(), SingleMappingStatus::Unique);
+    assert_eq!(merged.placement(), complementary.placement());
+    assert_eq!(merged.mapping_quality(), 40);
+    assert_eq!(merged.located_rows(), 2);
+    assert_eq!(merged.verified_placements(), 2);
+}
+
+#[test]
+fn non_directional_equal_best_passes_are_ambiguous() {
+    let original = mapped_on_strand(100, 40, 0, BisulfiteStrand::OT);
+    let complementary = mapped_on_strand(500, 40, 0, BisulfiteStrand::CTOT);
+    let merged = merge_non_directional_results(original, complementary);
+    assert_eq!(merged.status(), SingleMappingStatus::Ambiguous);
+    assert_eq!(merged.placement(), original.placement());
+    assert_eq!(merged.mapping_quality(), 0);
+}
+
+#[test]
+fn non_directional_runner_up_caps_mapq_and_combines_repeat_pressure() {
+    let original = mapped_on_strand(100, 40, 0, BisulfiteStrand::OT);
+    let mut complementary = mapped_on_strand(500, 30, 1, BisulfiteStrand::CTOT);
+    complementary.distinct_candidate_starts = 65;
+    let merged = merge_non_directional_results(original, complementary);
+    assert_eq!(merged.status(), SingleMappingStatus::Unique);
+    assert_eq!(merged.mapping_quality(), 10);
+}
+
+#[test]
+fn complementary_pass_relabels_both_search_strands() {
+    assert_eq!(
+        single_pass_strand(BisulfiteStrand::OT, true),
+        Some(BisulfiteStrand::CTOT)
+    );
+    assert_eq!(
+        single_pass_strand(BisulfiteStrand::OB, true),
+        Some(BisulfiteStrand::CTOB)
     );
 }

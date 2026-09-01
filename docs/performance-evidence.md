@@ -404,10 +404,10 @@ exercise the recovery rule; their results are
   truth-accuracy claim.
 - The frozen matrix broadens regression evidence, but it does not qualify
   every read length, organism, protocol, or error distribution.
-- Non-directional paired-end has functional coverage, not this large-corpus
-  performance/MAPQ qualification. Standard directional single-end has one
-  controlled 5M-R1 performance/truth regression run, but no replicated MAPQ
-  qualification.
+- Non-directional paired-end and single-end have functional coverage, not this
+  large-corpus performance/MAPQ qualification. Standard directional single-end
+  has one controlled 5M-R1 performance/truth regression run, but no replicated
+  MAPQ qualification; that run does not qualify non-directional single-end.
 - Calling and cohort outputs are outside this aligner scorecard and require
   study-specific validation.
 - The benchmark is not an independent third-party study.

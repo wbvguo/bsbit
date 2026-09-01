@@ -32,10 +32,11 @@ ambiguous. Only native-unique evidence can enter Q20 or higher. A consumer that
 requires native-unique paired evidence should therefore use pair-minimum MAPQ
 20, not merely `MAPQ > 0`.
 
-Directional single-end `bsbit align` uses numeric evidence tiers and declares
-caller-compatible provenance. Its Q40 tier is qualified within 5 bp on the
-documented 5M-R1 simulated corpus; exact-coordinate Q40 does not pass the same
-gate and is reported separately rather than hidden.
+Single-end `bsbit align` uses numeric evidence tiers and declares
+caller-compatible directional or non-directional provenance. The directional
+Q40 tier is qualified within 5 bp on the documented 5M-R1 simulated corpus;
+exact-coordinate Q40 does not pass the same gate, and the corpus does not
+qualify non-directional single-end.
 
 ## Reference and output differences
 
@@ -53,9 +54,8 @@ does not infer `MM/ML` modification probabilities.
 
 - Directional paired-end WGBS owns the frozen large-corpus performance and
   MAPQ qualification.
-- Non-directional paired-end alignment has four-strand semantic and
-  Bismark-extractor compatibility coverage, not that large-corpus
-  qualification.
+- Non-directional paired-end and single-end alignment have four-strand semantic
+  and caller-compatibility coverage, not that large-corpus qualification.
 - Directional single-end alignment is supported by `bsbit align`, has three
   retained 5M-R1 timing runs, and has exact plus within-5-bp truth evaluation
   on one controlled simulated corpus. That corpus does not qualify other read

@@ -58,10 +58,11 @@ If the study requires duplicate marking, insert a validated single-end
 duplicate workflow before indexing; do not apply paired-only mate-repair
 assumptions to single-end records.
 
-Current output declares `caller-compatible-directional-single` and carries
-numeric MAPQ, so the caller accepts it after the same reference, `XG`, sort,
-and index checks. Older `standard-directional-single` BAMs used unavailable
-MAPQ 255 and must be realigned rather than relabeled.
+Current output declares `caller-compatible-directional-single` or
+`caller-compatible-nondirectional-single` and carries numeric MAPQ, so the
+caller accepts it after the same reference, `XG`, sort, and index checks. Older
+`standard-directional-single` BAMs used unavailable MAPQ 255 and must be
+realigned rather than relabeled.
 
 ## Next
 

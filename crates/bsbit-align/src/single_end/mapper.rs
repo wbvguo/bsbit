@@ -1,6 +1,7 @@
 //! High-throughput single-end orchestration over the shared combined-index search core.
 
 use bsbit_core::alphabet::Base;
+use bsbit_core::bisulfite::BisulfiteStrand;
 use bsbit_index::reference::ReferenceIndex;
 use bsbit_index::storage::fm::ProjectedBase;
 
@@ -21,7 +22,7 @@ use crate::search::combined_adaptive::{
     prepare_combined_projection,
 };
 
-/// Final classification for one directional single read.
+/// Final classification for one single read.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SingleMappingStatus {
     /// No verified placement survived the bounded search.
@@ -57,13 +58,14 @@ impl SingleSearchMode {
     }
 }
 
-/// Final mapping facts for one directional single read.
+/// Final mapping facts for one single read.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SingleAlignmentResult {
     status: SingleMappingStatus,
     placement: Option<ReadPlacement>,
     mapping_quality: u8,
     located_rows: u64,
+    distinct_candidate_starts: u64,
     verified_placements: u64,
 }
 
@@ -104,6 +106,22 @@ impl SingleAlignmentResult {
             placement: None,
             mapping_quality: 0,
             located_rows,
+            distinct_candidate_starts: 0,
+            verified_placements,
+        }
+    }
+
+    const fn unmapped_with_evidence(
+        located_rows: u64,
+        distinct_candidate_starts: u64,
+        verified_placements: u64,
+    ) -> Self {
+        Self {
+            status: SingleMappingStatus::Unmapped,
+            placement: None,
+            mapping_quality: 0,
+            located_rows,
+            distinct_candidate_starts,
             verified_placements,
         }
     }
@@ -128,7 +146,7 @@ struct SingleResultEvidence<'a> {
     lane: usize,
 }
 
-/// Worker-owned batch storage for directional single-read alignment.
+/// Worker-owned batch storage for single-read alignment.
 pub struct SingleBatchAligner {
     reads: [ReadWorkspace; 2],
     projections: Vec<[ProjectedBase; MAX_READ_BASES]>,
@@ -137,7 +155,7 @@ pub struct SingleBatchAligner {
     round_matches: Vec<Option<CombinedSeedMatches>>,
     search_states: Vec<CombinedTwoLaneSearchState>,
     initial_candidates: Vec<Vec<ReadCandidate>>,
-    origins: Vec<(u64, bsbit_core::bisulfite::BisulfiteStrand, i128)>,
+    origins: Vec<(u64, BisulfiteStrand, i128)>,
     results: Vec<SingleAlignmentResult>,
 }
 
@@ -201,6 +219,48 @@ impl SingleBatchAligner {
         maximum_edit_distance: u8,
         search_mode: SingleSearchMode,
     ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
+        self.map_reads_pass(reference, reads, maximum_edit_distance, search_mode, false)
+    }
+
+    /// Maps each read against OT, OB, CTOT, and CTOB, then makes one global
+    /// single-end placement decision across both directional passes.
+    ///
+    /// Equal-best evidence in the original and complementary passes is
+    /// ambiguous. A weaker cross-pass placement contributes to MAPQ separation
+    /// and repeat pressure for the selected result.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported read/edit domain or combined-index failure.
+    pub fn map_reads_non_directional_with_mode<'a>(
+        &'a mut self,
+        reference: &ReferenceIndex,
+        reads: &[&[Base]],
+        maximum_edit_distance: u8,
+        search_mode: SingleSearchMode,
+    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
+        let original = self
+            .map_reads_pass(reference, reads, maximum_edit_distance, search_mode, false)?
+            .to_vec();
+        let complementary = self
+            .map_reads_pass(reference, reads, maximum_edit_distance, search_mode, true)?
+            .to_vec();
+        self.results.clear();
+        self.results.extend(original.iter().zip(&complementary).map(
+            |(original, complementary)| merge_non_directional_results(*original, *complementary),
+        ));
+        Ok(&self.results)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn map_reads_pass<'a>(
+        &'a mut self,
+        reference: &ReferenceIndex,
+        reads: &[&[Base]],
+        maximum_edit_distance: u8,
+        search_mode: SingleSearchMode,
+        complementary: bool,
+    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
         if maximum_edit_distance > MAX_EDIT_DISTANCE {
             return Err(AlignmentError::UnsupportedEditDistance {
                 requested: maximum_edit_distance,
@@ -220,7 +280,7 @@ impl SingleBatchAligner {
                     <= usize::from(maximum_edit_distance);
             self.searchable_reads.push(searchable);
             if searchable {
-                prepare_combined_projection(read, false, projection)?;
+                prepare_combined_projection(read, complementary, projection)?;
             }
         }
         let searchable = self
@@ -248,7 +308,13 @@ impl SingleBatchAligner {
                 self.first_seeds.push(None);
             }
         }
-        self.prepare_search_wavefront(reference, reads, search_mode.limits(), false)?;
+        self.prepare_search_wavefront(
+            reference,
+            reads,
+            search_mode.limits(),
+            complementary,
+            false,
+        )?;
         self.results.clear();
         let mut ordinal = 0_usize;
         while ordinal < reads.len() {
@@ -273,7 +339,13 @@ impl SingleBatchAligner {
                     search: &searches[lane],
                     initial_candidates: &initial_candidates[lane],
                 });
-                let mapped = self.map_two(reference, prepared, maximum_edit_distance, search_mode);
+                let mapped = self.map_two(
+                    reference,
+                    prepared,
+                    maximum_edit_distance,
+                    search_mode,
+                    complementary,
+                );
                 let [first_candidates, second_candidates] = initial_candidates;
                 self.initial_candidates[ordinal] = first_candidates;
                 self.initial_candidates[ordinal + 1] = second_candidates;
@@ -297,6 +369,7 @@ impl SingleBatchAligner {
                     },
                     maximum_edit_distance,
                     search_mode,
+                    complementary,
                 );
                 self.initial_candidates[ordinal] = initial_candidates;
                 let result = result?;
@@ -313,6 +386,7 @@ impl SingleBatchAligner {
         reference: &ReferenceIndex,
         reads: &[&[Base]],
         completion_limits: CombinedSearchLimits,
+        complementary: bool,
         complete_candidate_frontier: bool,
     ) -> Result<(), AlignmentError> {
         const MAX_LANES: usize = 64;
@@ -422,10 +496,14 @@ impl SingleBatchAligner {
                             }),
                             &mut |lane, hit| {
                                 let ordinal = ordinals[lane];
+                                let Some(strand) = single_pass_strand(hit.strand(), complementary)
+                                else {
+                                    return;
+                                };
                                 let mut candidate = ReadCandidate {
                                     contig_ordinal: hit.contig_ordinal(),
                                     start: hit.start(),
-                                    strand: hit.strand(),
+                                    strand,
                                     proof_mask: FLEXIBLE_NOMINAL_PROOF | (1_u8 << round),
                                 };
                                 if round == 0
@@ -463,10 +541,14 @@ impl SingleBatchAligner {
                                 .unwrap_or(u64::MAX),
                             u64::try_from(reads[ordinal].len()).unwrap_or(u64::MAX),
                             &mut |hit| {
+                                let Some(strand) = single_pass_strand(hit.strand(), complementary)
+                                else {
+                                    return true;
+                                };
                                 let mut candidate = ReadCandidate {
                                     contig_ordinal: hit.contig_ordinal(),
                                     start: hit.start(),
-                                    strand: hit.strand(),
+                                    strand,
                                     proof_mask: FLEXIBLE_NOMINAL_PROOF | (1_u8 << round),
                                 };
                                 if round == 0
@@ -513,6 +595,7 @@ impl SingleBatchAligner {
         prepared: PreparedSingleRead<'_>,
         maximum_edit_distance: u8,
         search_mode: SingleSearchMode,
+        complementary: bool,
     ) -> Result<SingleAlignmentResult, AlignmentError> {
         let PreparedSingleRead {
             read,
@@ -567,7 +650,7 @@ impl SingleBatchAligner {
                 reference,
                 [read, &[]],
                 [projection, &[]],
-                false,
+                [complementary, false],
                 &mut search,
                 &mut read_workspace.candidate_nominals,
                 &mut unused_workspace.candidate_nominals,
@@ -606,7 +689,7 @@ impl SingleBatchAligner {
             reference,
             [read, &[]],
             [projection, &[]],
-            false,
+            [complementary, false],
             search_mode.limits(),
             true,
             &mut completion_search,
@@ -648,6 +731,7 @@ impl SingleBatchAligner {
         prepared: [PreparedSingleRead<'_>; 2],
         maximum_edit_distance: u8,
         search_mode: SingleSearchMode,
+        complementary: bool,
     ) -> Result<[SingleAlignmentResult; 2], AlignmentError> {
         let reads = prepared.map(|input| input.read);
         let projections = prepared.map(|input| input.projection);
@@ -759,7 +843,7 @@ impl SingleBatchAligner {
                 reference,
                 reads,
                 projections,
-                false,
+                [complementary; 2],
                 &mut search,
                 &mut first_workspace.candidate_nominals,
                 &mut second_workspace.candidate_nominals,
@@ -804,7 +888,7 @@ impl SingleBatchAligner {
             reference,
             reads,
             projections,
-            false,
+            [complementary; 2],
             search_mode.limits(),
             true,
             &mut completion_search,
@@ -854,6 +938,7 @@ impl SingleBatchAligner {
                     placement: Some(placement),
                     mapping_quality: incumbent.mapping_quality,
                     located_rows: completed.located_rows,
+                    distinct_candidate_starts: completed.distinct_candidate_starts,
                     verified_placements: completed.verified_placements,
                 });
         };
@@ -863,8 +948,9 @@ impl SingleBatchAligner {
             {
                 completed
             } else {
-                SingleAlignmentResult::unmapped(
+                SingleAlignmentResult::unmapped_with_evidence(
                     completed.located_rows,
+                    completed.distinct_candidate_starts,
                     completed.verified_placements,
                 )
             };
@@ -884,6 +970,7 @@ impl SingleBatchAligner {
             placement: Some(incumbent_placement),
             mapping_quality: 0,
             located_rows: completed.located_rows,
+            distinct_candidate_starts: completed.distinct_candidate_starts,
             verified_placements: completed.verified_placements,
         }
     }
@@ -909,7 +996,7 @@ impl SingleBatchAligner {
 
     fn finish_result(
         workspace: &ReadWorkspace,
-        origins: &mut Vec<(u64, bsbit_core::bisulfite::BisulfiteStrand, i128)>,
+        origins: &mut Vec<(u64, BisulfiteStrand, i128)>,
         evidence: SingleResultEvidence<'_>,
     ) -> SingleAlignmentResult {
         let SingleResultEvidence {
@@ -926,8 +1013,9 @@ impl SingleBatchAligner {
             .map(|value| value.distance())
             .min()
         else {
-            return SingleAlignmentResult::unmapped(
+            return SingleAlignmentResult::unmapped_with_evidence(
                 metrics.located_rows,
+                metrics.distinct_candidate_starts,
                 metrics.verified_placements,
             );
         };
@@ -982,8 +1070,80 @@ impl SingleBatchAligner {
             placement: representative,
             mapping_quality,
             located_rows: metrics.located_rows,
+            distinct_candidate_starts: metrics.distinct_candidate_starts,
             verified_placements: metrics.verified_placements,
         }
+    }
+}
+
+const fn single_pass_strand(
+    strand: BisulfiteStrand,
+    complementary: bool,
+) -> Option<BisulfiteStrand> {
+    if !complementary {
+        return Some(strand);
+    }
+    match strand {
+        BisulfiteStrand::OT => Some(BisulfiteStrand::CTOT),
+        BisulfiteStrand::OB => Some(BisulfiteStrand::CTOB),
+        BisulfiteStrand::CTOT | BisulfiteStrand::CTOB => None,
+    }
+}
+
+fn merge_non_directional_results(
+    original: SingleAlignmentResult,
+    complementary: SingleAlignmentResult,
+) -> SingleAlignmentResult {
+    let original_distance = original.placement.map(ReadPlacement::distance);
+    let complementary_distance = complementary.placement.map(ReadPlacement::distance);
+    let (mut selected, other, tied) = match (original_distance, complementary_distance) {
+        (Some(left), Some(right)) if left < right => (original, complementary, false),
+        (Some(left), Some(right)) if right < left => (complementary, original, false),
+        (Some(_), Some(_)) => (original, complementary, true),
+        (None, Some(_)) => (complementary, original, false),
+        (_, None) => (original, complementary, false),
+    };
+    selected.located_rows = original
+        .located_rows
+        .saturating_add(complementary.located_rows);
+    selected.distinct_candidate_starts = original
+        .distinct_candidate_starts
+        .saturating_add(complementary.distinct_candidate_starts);
+    selected.verified_placements = original
+        .verified_placements
+        .saturating_add(complementary.verified_placements);
+
+    if tied {
+        selected.status = SingleMappingStatus::Ambiguous;
+        selected.mapping_quality = 0;
+    } else if matches!(selected.status, SingleMappingStatus::Unique) {
+        if let (Some(best), Some(runner_up)) = (
+            selected.placement.map(ReadPlacement::distance),
+            other.placement.map(ReadPlacement::distance),
+        ) {
+            selected.mapping_quality = selected
+                .mapping_quality
+                .min(cross_pass_mapping_quality_cap(best, runner_up));
+        }
+        if selected.located_rows > 256
+            || selected.distinct_candidate_starts > 64
+            || selected.verified_placements > 64
+        {
+            selected.mapping_quality = selected.mapping_quality.min(10);
+        }
+    } else {
+        selected.mapping_quality = 0;
+    }
+    selected
+}
+
+const fn cross_pass_mapping_quality_cap(best_distance: u8, runner_up_distance: u8) -> u8 {
+    let separation = runner_up_distance.saturating_sub(best_distance);
+    match (best_distance, separation) {
+        (_, 0) => 0,
+        (5.., _) => 10,
+        (4, _) | (_, 1) => 15,
+        _ => u8::MAX,
     }
 }
 

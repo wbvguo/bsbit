@@ -263,6 +263,29 @@ fn align_single_sensitive(snapshot: &Path, read1: &Path, output_bam: &Path) -> O
     ])
 }
 
+fn align_single_non_directional(
+    snapshot: &Path,
+    read1: &Path,
+    output_bam: &Path,
+    sensitive: bool,
+) -> Output {
+    let mut arguments = [
+        OsString::from("align"),
+        OsString::from("--index"),
+        snapshot.as_os_str().to_owned(),
+        OsString::from("-1"),
+        read1.as_os_str().to_owned(),
+        OsString::from("--output-bam"),
+        output_bam.as_os_str().to_owned(),
+        OsString::from("--non-directional"),
+    ]
+    .to_vec();
+    if sensitive {
+        arguments.push(OsString::from("--sensitive"));
+    }
+    run(arguments)
+}
+
 fn assert_success(output: &Output) {
     assert!(
         output.status.success(),
@@ -985,6 +1008,100 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     let rejected = align(&index_path, &malformed, None, &unpublished);
     assert_eq!(rejected.status.code(), Some(1));
     assert!(!unpublished.exists());
+
+    fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+#[test]
+fn non_directional_single_aligns_both_complementary_strands() {
+    const REFERENCE: &[u8] = b"GATCAACCGTGATCTAGGCTTACGGAATGTCACGATGAGTCCATCGTACGTTAGCATGCA";
+    const CTOT_READ: &[u8] = b"AACATACAATAAACTCATCATAACATTCCATAAACCTAAA";
+    const CTOB_READ: &[u8] = b"TCTAAACTTACAAAATATCACAATAAATCCATCATACATT";
+    let directory = unique_directory("non-directional-single");
+    fs::create_dir(&directory).expect("fresh directory");
+    let reference = directory.join("reference.fa");
+    let index_path = directory.join("reference.bsbit");
+    let reads = directory.join("ctot.fq");
+    let directional_bam = directory.join("directional.bam");
+    let non_directional_bam = directory.join("non-directional.bam");
+    let sensitive_bam = directory.join("non-directional-sensitive.bam");
+
+    let mut fasta = b">chr\n".to_vec();
+    fasta.extend_from_slice(REFERENCE);
+    fasta.push(b'\n');
+    fs::write(&reference, fasta).expect("reference");
+    let mut query_reads = b"@ctot\n".to_vec();
+    query_reads.extend_from_slice(CTOT_READ);
+    query_reads.extend_from_slice(b"\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n@ctob\n");
+    query_reads.extend_from_slice(CTOB_READ);
+    query_reads.extend_from_slice(b"\n+\nIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII\n");
+    fs::write(&reads, query_reads).expect("single reads");
+
+    assert_success(&index(&reference, &index_path));
+    assert_success(&align(&index_path, &reads, None, &directional_bam));
+    assert_success(&align_single_non_directional(
+        &index_path,
+        &reads,
+        &non_directional_bam,
+        false,
+    ));
+    assert_success(&align_single_non_directional(
+        &index_path,
+        &reads,
+        &sensitive_bam,
+        true,
+    ));
+
+    let directional = decode_process_bam(&directional_bam);
+    assert_eq!(directional.len(), 2);
+    assert!(directional.iter().all(|record| record[2] == b"*"));
+
+    let non_directional = decode_process_bam(&non_directional_bam);
+    assert_eq!(non_directional.len(), 2);
+    let reverse_complement_record = &non_directional[0];
+    assert_eq!(reverse_complement_record[0], b"ctot");
+    assert_eq!(reverse_complement_record[2], b"chr");
+    assert_eq!(reverse_complement_record[3], b"13");
+    assert_eq!(reverse_complement_record[5], b"40M");
+    let reverse_flag = std::str::from_utf8(&reverse_complement_record[1])
+        .expect("flag UTF-8")
+        .parse::<u16>()
+        .expect("flag integer");
+    assert_eq!(reverse_flag & 0x11, 0x10);
+    assert!(
+        reverse_complement_record
+            .iter()
+            .any(|field| field == b"XG:Z:CT")
+    );
+
+    let forward_complement_record = &non_directional[1];
+    assert_eq!(forward_complement_record[0], b"ctob");
+    assert_eq!(forward_complement_record[2], b"chr");
+    assert_eq!(forward_complement_record[3], b"13");
+    assert_eq!(forward_complement_record[5], b"40M");
+    let forward_flag = std::str::from_utf8(&forward_complement_record[1])
+        .expect("flag UTF-8")
+        .parse::<u16>()
+        .expect("flag integer");
+    assert_eq!(forward_flag & 0x11, 0);
+    assert!(
+        forward_complement_record
+            .iter()
+            .any(|field| field == b"XG:Z:GA")
+    );
+
+    let sensitive = decode_process_bam(&sensitive_bam);
+    assert_eq!(sensitive.len(), 2);
+    for (sensitive, default) in sensitive.iter().zip(&non_directional) {
+        assert_eq!(sensitive[..11], default[..11]);
+    }
+
+    let header = decode_process_bam_header(&non_directional_bam);
+    assert!(
+        header
+            .windows(b"alignment-mode=caller-compatible-nondirectional-single".len())
+            .any(|window| window == b"alignment-mode=caller-compatible-nondirectional-single")
+    );
 
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }

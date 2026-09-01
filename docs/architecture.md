@@ -1,7 +1,7 @@
 # Architecture
 
-`bsbit` is a Rust workspace with narrow native boundaries. Standard single-end
-and caller-compatible high-throughput paired-end alignment share the compact
+`bsbit` is a Rust workspace with narrow native boundaries. Caller-compatible
+single-end and high-throughput paired-end alignment share the compact
 exact-reference catalog, persisted combined search index, bounded verification
 kernels, and bisulfite rules. The layouts differ only where mate pairing,
 paired rescue, and calibrated MAPQ require it. The design separates alignment,
@@ -26,11 +26,11 @@ compact exact-reference catalog     digest-bound combined SA16 image
                 /              \
                v                v
 bsbit align (single)                bsbit align (paired)
-one directional FASTQ              directional/non-directional paired FASTQ
+directional/non-directional FASTQ   directional/non-directional paired FASTQ
       |                                   |
-ordered BAM, uncalibrated              ordered BAM
-current caller boundary                   |
-                           coordinate sort / mark duplicates / BAI or CSI
+ordered caller-compatible BAM    ordered caller-compatible BAM
+                \                         /
+                 coordinate sort / mark duplicates / BAI or CSI
                                            |
                indexed authoritative FASTA +
                                            v
@@ -231,9 +231,11 @@ data is absent.
 
 `bsbit align` opens the opaque index read-only and chooses the input layout
 explicitly from the supplied read paths. With only `--read1`, it runs the
-deterministic directional single-end alignment and preserves FASTQ order. With
-both `--read1` and `--read2`, it runs the paired-end path described below. Both
-layouts publish BAM through the same create-only output contract.
+deterministic single-end alignment and preserves FASTQ order. Directional mode
+uses OT/OB; `--non-directional` runs the complementary CTOT/CTOB pass and merges
+both decisions globally. With both `--read1` and `--read2`, it runs the
+paired-end path described below. Both layouts publish BAM through the same
+create-only output contract.
 
 Single-end default mode may classify a verified initial frontier immediately
 and continues only unresolved work. Single-end sensitive mode first preserves

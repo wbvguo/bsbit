@@ -40,6 +40,7 @@ pub(crate) struct SingleEndCommandOptions {
     pub(crate) read1: PathBuf,
     pub(crate) output_bam: PathBuf,
     pub(crate) search_mode: SingleSearchMode,
+    pub(crate) non_directional: bool,
     pub(crate) max_edit_distance: u64,
     pub(crate) batch_records: u64,
     pub(crate) threads: u64,
@@ -51,12 +52,17 @@ pub(crate) fn run_single_end(options: &SingleEndCommandOptions) -> Result<RunRep
     validate_output_target(&options.output_bam)?;
     let staging = unused_staging_path(&options.output_bam, "align", "output")?;
     let (reference, semantic_digest) = load_index(options)?;
+    let alignment_mode = if options.non_directional {
+        BsbitAlignmentMode::CallerCompatibleNondirectionalSingle
+    } else {
+        BsbitAlignmentMode::CallerCompatibleDirectionalSingle
+    };
     run_single_align(
         options,
         &reference,
         semantic_digest,
         &staging,
-        BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
+        alignment_mode,
     )
 }
 
@@ -351,14 +357,22 @@ fn map_single_records(
         }
         reads.clear();
         reads.extend(chunk.iter().map(|record| record.sequence().bases()));
-        let mapped = aligner
-            .map_reads_with_mode(
+        let mapped = if options.non_directional {
+            aligner.map_reads_non_directional_with_mode(
                 reference,
                 &reads,
                 maximum_edit_distance,
                 options.search_mode,
             )
-            .map_err(|error| CliError::operation(format!("align: map single batch: {error}")))?;
+        } else {
+            aligner.map_reads_with_mode(
+                reference,
+                &reads,
+                maximum_edit_distance,
+                options.search_mode,
+            )
+        }
+        .map_err(|error| CliError::operation(format!("align: map single batch: {error}")))?;
         for (source, result) in chunk.iter().zip(mapped.iter().copied()) {
             if cancellation.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
                 return Err(CliError::operation("align: single mapping cancelled"));
