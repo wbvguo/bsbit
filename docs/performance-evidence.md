@@ -334,6 +334,24 @@ generation. Raw profiles, process-tree sidecars, pilot timings, frozen binary,
 and reproduction scripts are retained under
 `workspace/benchmark/2026-09-01--sim-wgbs-10m-current-head/single/experiments/431970c/`.
 
+A second address-level follow-up aggregated 22,797 samples inside flexible
+candidate orchestration. Its largest instruction address held 7,239 samples
+(31.75%) and mapped to the already vectorized `Base::storage_code()`
+materialization loop. Replacing that loop with libc `memcpy` or fixed
+32-byte chunks increased 1M user CPU by 4.00% and 3.09%, respectively.
+Unchecked in-band matrix access also increased user CPU by 1.91%. Deferring
+the d3/d5 DP cap was scalar/SIMD matrix-equivalent, but changed LLVM's hot
+kernel inlining and increased user CPU by 3.49–5.16%.
+
+Four-lane locate, pipelined two-lane LF, and sampled-SA prefetch likewise
+increased user CPU by 3.32–4.97%. A narrower d4 audit was the only candidate
+with lower user CPU, but changed ten records from MAPQ 10 to 15 because it
+removed placements used by the repeat-pressure cap. A semantics-preserving
+variant increased user CPU by 10.06%. All ten candidates were therefore
+reverted; no follow-up code was retained. Raw A-B-B-A time sidecars, hashes,
+output equivalence, and the d4 candidate profile are retained in the
+`431970c/follow-up-1m/` benchmark subdirectory.
+
 ## Reproduction protocol
 
 Build the audited executable with the release script and verify its recorded
