@@ -103,6 +103,35 @@ fn sparse_sa_stride_is_bound_to_its_format_minor() {
 }
 
 #[test]
+fn metadata_only_stride_hint_accepts_only_versioned_pairs() {
+    let directory = TestDirectory::new("stride-hint");
+    let prefix = directory.prefix();
+    for (stride, minor, expected) in [
+        (
+            16,
+            META_EXTENSION_MINOR,
+            Some(CombinedIndexSaStride::Sixteen),
+        ),
+        (
+            8,
+            META_EXTENSION_MINOR_SA8,
+            Some(CombinedIndexSaStride::Eight),
+        ),
+        (8, META_EXTENSION_MINOR, None),
+    ] {
+        let mut metadata = [0_u8; META_BYTES];
+        put_u32(&mut metadata, 56, stride);
+        metadata[META_EXTENSION_OFFSET..META_EXTENSION_OFFSET + META_EXTENSION_MAGIC.len()]
+            .copy_from_slice(META_EXTENSION_MAGIC);
+        put_u16(&mut metadata, 76, META_EXTENSION_MAJOR);
+        put_u16(&mut metadata, 78, minor);
+        put_u32(&mut metadata, 80, META_BYTES_U32);
+        std::fs::write(&prefix, metadata).expect("write stride hint metadata");
+        assert_eq!(combined_index_sa_stride_hint(&prefix), expected);
+    }
+}
+
+#[test]
 fn validated_runtime_dimensions_cover_every_hot_access() {
     for suffix_count in 3_u64..=2049 {
         let text_rows = suffix_count - 1;

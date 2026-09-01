@@ -72,8 +72,10 @@ bsbit align \
 ```
 
 On a dedicated host, `--total-threads 14` selects the qualified throughput
-split of 11 mapping workers and 3 BGZF workers and constrains auxiliary work to
-three additional physical cores. It replaces both explicit thread flags:
+split and constrains auxiliary work to its own physical-core pool. A balanced
+stride-16 index uses 11 mapping + 3 BGZF workers; a fast stride-8 index uses
+10 + 4 because its faster mapping exposes more output pressure. The option
+replaces both explicit thread flags:
 
 ```bash
 bsbit align \
@@ -85,8 +87,9 @@ bsbit align \
 ```
 
 Other budgets reserve approximately one fifth of their cores for output,
-bounded to four BGZF workers. Keep explicit `--threads` and `--bam-threads`
-when a scheduler or benchmark requires a particular split.
+bounded to four BGZF workers; fast indexes add one output worker from budgets
+of at least 12 when that bound permits. Keep explicit `--threads` and
+`--bam-threads` when a scheduler or benchmark requires a particular split.
 
 The default run keeps stdout clean. Add `--metrics` and redirect stdout when
 the two-row profiling TSV is useful:

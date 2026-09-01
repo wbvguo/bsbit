@@ -29,7 +29,9 @@ use bsbit_hts::{
     TextRecordLimits,
 };
 use bsbit_index::reference::ReferenceIndex;
-use bsbit_index::storage::combined::load_combined_reference_catalog;
+use bsbit_index::storage::combined::{
+    CombinedIndexSaStride, combined_index_sa_stride_hint, load_combined_reference_catalog,
+};
 
 use super::internal_search_file_prefix;
 use crate::command::single_end::{SingleEndCommandOptions, run_single_end};
@@ -150,6 +152,7 @@ pub(crate) struct Options {
     threads: usize,
     bam_threads: u32,
     auxiliary_core_budget: Option<usize>,
+    total_thread_budget: Option<usize>,
     bam_compression_level: Option<u8>,
     output_contract: AlignmentAuxiliaryMode,
     library_profile: PairedLibraryProfile,
@@ -297,10 +300,22 @@ pub(super) fn parse(arguments: &[String]) -> Result<super::Action, crate::CliErr
         .map_err(|error| crate::CliError::usage(error.to_string()))
 }
 
-pub(crate) fn run(options: Options) -> Result<(), Box<dyn Error>> {
+pub(crate) fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
     let process_started = MetricsTimer::start(options.emit_metrics);
     if matches!(options.layout, ReadLayout::SingleEnd) {
         return run_standard_single_from_options(options);
+    }
+    if let Some(total_threads) = options.total_thread_budget {
+        let internal_prefix = internal_search_file_prefix(&options.index);
+        let fast_index = matches!(
+            combined_index_sa_stride_hint(&internal_prefix),
+            Some(CombinedIndexSaStride::Eight)
+        );
+        let (mapping_threads, bam_threads) = throughput_thread_split(total_threads, fast_index);
+        options.threads = mapping_threads;
+        options.bam_threads = bam_threads;
+        options.auxiliary_core_budget =
+            Some(usize::try_from(bam_threads).expect("BGZF thread count fits usize"));
     }
     let cpu_placement = options.auxiliary_core_budget.map_or_else(
         || CpuPlacement::detect(options.threads),
@@ -1180,7 +1195,7 @@ fn parse_options_from(
         if total_threads == 0 || total_threads > 64 {
             return Err(invalid("--total-threads must be in 1..=64"));
         }
-        let split = throughput_thread_split(total_threads);
+        let split = throughput_thread_split(total_threads, false);
         threads = split.0;
         bam_threads = split.1;
         Some(usize::try_from(bam_threads).expect("BGZF thread count fits usize"))
@@ -1246,6 +1261,7 @@ fn parse_options_from(
         threads,
         bam_threads,
         auxiliary_core_budget,
+        total_thread_budget: total_threads,
         bam_compression_level,
         output_contract,
         library_profile,
@@ -1257,12 +1273,15 @@ fn parse_options_from(
     })
 }
 
-fn throughput_thread_split(total_threads: usize) -> (usize, u32) {
+fn throughput_thread_split(total_threads: usize, fast_index: bool) -> (usize, u32) {
     debug_assert!((1..=64).contains(&total_threads));
     if total_threads == 1 {
         return (1, 0);
     }
-    let output_threads = total_threads.div_ceil(5).clamp(1, 4);
+    let mut output_threads = total_threads.div_ceil(5).clamp(1, 4);
+    if fast_index && total_threads >= 12 {
+        output_threads = output_threads.saturating_add(1).min(4);
+    }
     (
         total_threads - output_threads,
         u32::try_from(output_threads).expect("bounded output thread count fits u32"),

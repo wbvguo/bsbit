@@ -71,6 +71,7 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     assert_eq!(parsed.threads, 1);
     assert_eq!(parsed.bam_threads, 1);
     assert_eq!(parsed.auxiliary_core_budget, None);
+    assert_eq!(parsed.total_thread_budget, None);
     assert_eq!(parsed.bam_compression_level, Some(1));
 
     let mut sensitive = single.clone();
@@ -117,11 +118,13 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
 
 #[test]
 fn paired_total_thread_budget_selects_qualified_mapping_output_splits() {
-    assert_eq!(throughput_thread_split(1), (1, 0));
-    assert_eq!(throughput_thread_split(2), (1, 1));
-    assert_eq!(throughput_thread_split(10), (8, 2));
-    assert_eq!(throughput_thread_split(14), (11, 3));
-    assert_eq!(throughput_thread_split(64), (60, 4));
+    assert_eq!(throughput_thread_split(1, false), (1, 0));
+    assert_eq!(throughput_thread_split(2, false), (1, 1));
+    assert_eq!(throughput_thread_split(10, false), (8, 2));
+    assert_eq!(throughput_thread_split(14, false), (11, 3));
+    assert_eq!(throughput_thread_split(14, true), (10, 4));
+    assert_eq!(throughput_thread_split(64, false), (60, 4));
+    assert_eq!(throughput_thread_split(64, true), (60, 4));
 
     let paired = || {
         [
@@ -143,6 +146,7 @@ fn paired_total_thread_budget_selects_qualified_mapping_output_splits() {
     assert_eq!(automatic.threads, 11);
     assert_eq!(automatic.bam_threads, 3);
     assert_eq!(automatic.auxiliary_core_budget, Some(3));
+    assert_eq!(automatic.total_thread_budget, Some(14));
 
     for explicit in ["--threads", "--bam-threads"] {
         let mut conflicting = paired();

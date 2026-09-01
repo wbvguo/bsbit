@@ -148,6 +148,31 @@ impl CombinedIndexSaStride {
     }
 }
 
+/// Reads only the bounded metadata file to guide non-semantic runtime tuning.
+///
+/// A returned value is a hint, not index validation: [`CombinedIndex::open`]
+/// still reopens and validates the complete immutable bundle before queries.
+/// Missing, changing, malformed, or unsupported metadata returns `None` so a
+/// caller can retain its conservative default without changing error priority.
+#[doc(hidden)]
+pub fn combined_index_sa_stride_hint(prefix: &Path) -> Option<CombinedIndexSaStride> {
+    let mut file = File::open(prefix).ok()?;
+    if file.metadata().ok()?.len() != u64::from(META_BYTES_U32) {
+        return None;
+    }
+    let mut metadata = [0_u8; META_BYTES];
+    file.read_exact(&mut metadata).ok()?;
+    if &metadata[META_EXTENSION_OFFSET..META_EXTENSION_OFFSET + META_EXTENSION_MAGIC.len()]
+        != META_EXTENSION_MAGIC
+        || slice_u16(&metadata, 76) != META_EXTENSION_MAJOR
+        || slice_u32(&metadata, 80) != META_BYTES_U32
+        || metadata[116..120] != [0; 4]
+    {
+        return None;
+    }
+    CombinedIndexSaStride::from_metadata(slice_u32(&metadata, 56), slice_u16(&metadata, 78))
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SameLowBlockRankPlan {
     lines: [u64; 2],
