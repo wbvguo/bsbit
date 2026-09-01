@@ -295,6 +295,45 @@ CPU. Complete formal and replicate process-tree sidecars, BAMs, MAPQ transition
 matrix, evaluator output, and the frozen binary are retained in
 `workspace/benchmark/2026-09-01--sim-wgbs-10m-current-head/single/experiments/7808aa1/`.
 
+### Single-end sensitive narrow-SIMD store elimination
+
+Commit `431970cf89670f2f59b7763767bac92e78382432` removes the per-query-base
+fill of the inactive d3/d5 AVX2 placement buffer. Every diagonal is overwritten
+in dependency order before it is read, so the fill performed seven redundant
+vector stores per d3 base and eleven per d5 base. Search, verification limits,
+placement selection, and MAPQ are unchanged.
+
+A balanced A-B-B-A comparison against `7808aa1` on the same 5M R1 corpus,
+binary options, CPU binding, and process-tree sampler measured:
+
+| Implementation | Wall mean | User CPU mean | Total CPU mean | Peak RSS / I/O |
+|---|---:|---:|---:|---|
+| `7808aa1` | 45.376 s | 361.880 s | 364.570 s | unchanged within sampling precision |
+| `431970c` | 44.192 s | 353.520 s | 356.195 s | unchanged within sampling precision |
+
+The reductions are 2.61% wall, 2.31% user CPU, and 2.30% total CPU. Both
+sensitive BAMs have SHA-256
+`4338702d4cade527c5b2e10f8f2300446612eeb9acff3a7a410002cc797caa09`;
+the corresponding default BAMs are also byte-identical. Thus every mapping,
+accuracy, error, and MAPQ-threshold statistic remains exactly the `7808aa1`
+result.
+
+A full 5M `perf` run attributes 29.73% of sampled task-clock to batched d5
+placement DP, 14.66% to batched d3 DP, 12.74% to flexible-candidate
+verification orchestration, and 18.26% to the three leading FM-index
+search/locate functions. Within the d5 symbol, 97.4% of samples are in the DP
+inner loop, versus 0.7% setup and 1.8% frontier extraction. The next credible
+targets are therefore cross-read d5 tail batching and a wider sampled-SA/LF
+locate wavefront; input normalization and BAM construction are not current
+bottlenecks.
+
+Two output-equivalent experiments were rejected: a four-candidate dual-vector
+d5 kernel increased 1M user CPU by 11.0% because of register pressure, and
+unchecked pattern loads increased it by 33.4% after adverse LLVM code
+generation. Raw profiles, process-tree sidecars, pilot timings, frozen binary,
+and reproduction scripts are retained under
+`workspace/benchmark/2026-09-01--sim-wgbs-10m-current-head/single/experiments/431970c/`.
+
 ## Reproduction protocol
 
 Build the audited executable with the release script and verify its recorded
