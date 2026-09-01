@@ -181,7 +181,7 @@ pub(crate) fn combined_seed_round_is_locatable(
 fn visit_combined_seed_round_two_lanes(
     reference: &ReferenceIndex,
     reads: [&[Base]; 2],
-    reverse_second_lane_hits: bool,
+    relabel_complementary_hits: [bool; 2],
     round: usize,
     offsets: [usize; 2],
     seed_matches: [CombinedSeedMatches; 2],
@@ -206,7 +206,7 @@ fn visit_combined_seed_round_two_lanes(
             offsets.map(|offset| u64::try_from(offset).unwrap_or(u64::MAX)),
             reads.map(|read| u64::try_from(read.len()).unwrap_or(u64::MAX)),
             &mut |lane, hit| {
-                let strand = if lane == 1 && reverse_second_lane_hits {
+                let strand = if relabel_complementary_hits[lane] {
                     match hit.strand() {
                         BisulfiteStrand::OT => BisulfiteStrand::CTOT,
                         BisulfiteStrand::OB => BisulfiteStrand::CTOB,
@@ -257,7 +257,7 @@ pub(crate) fn start_combined_two_lane_search(
     reads: [&[Base]; 2],
     reversed_projected: [&[ProjectedBase]; 2],
     first_seeds: [Option<CombinedSeedMatches>; 2],
-    reverse_second_lane_hits: bool,
+    relabel_complementary_hits: [bool; 2],
     limits: CombinedSearchLimits,
     mate1_candidates: &mut Vec<ReadCandidate>,
     mate2_candidates: &mut Vec<ReadCandidate>,
@@ -269,7 +269,7 @@ pub(crate) fn start_combined_two_lane_search(
         reads,
         reversed_projected,
         first_seeds,
-        reverse_second_lane_hits,
+        relabel_complementary_hits,
         limits,
         &mut state,
         mate1_candidates,
@@ -290,7 +290,7 @@ fn visit_combined_two_lane_search_rounds(
     reads: [&[Base]; 2],
     reversed_projected: [&[ProjectedBase]; 2],
     first_seeds: [Option<CombinedSeedMatches>; 2],
-    reverse_second_lane_hits: bool,
+    relabel_complementary_hits: [bool; 2],
     limits: CombinedSearchLimits,
     state: &mut CombinedTwoLaneSearchState,
     mate1_candidates: &mut Vec<ReadCandidate>,
@@ -363,7 +363,7 @@ fn visit_combined_two_lane_search_rounds(
             let (rows, matched_bases, direct) = visit_combined_seed_round_two_lanes(
                 reference,
                 reads,
-                reverse_second_lane_hits,
+                relabel_complementary_hits,
                 round,
                 state.offsets,
                 [first, second],
@@ -409,8 +409,8 @@ fn visit_combined_two_lane_search_rounds(
                 }
             };
         }
-        consume_lane!(0, mate1_candidates, false);
-        consume_lane!(1, mate2_candidates, reverse_second_lane_hits);
+        consume_lane!(0, mate1_candidates, relabel_complementary_hits[0]);
+        consume_lane!(1, mate2_candidates, relabel_complementary_hits[1]);
     }
     Ok(())
 }
@@ -419,7 +419,7 @@ pub(crate) fn continue_combined_two_lane_search(
     reference: &ReferenceIndex,
     reads: [&[Base]; 2],
     reversed_projected: [&[ProjectedBase]; 2],
-    reverse_second_lane_hits: bool,
+    relabel_complementary_hits: [bool; 2],
     state: &mut CombinedTwoLaneSearchState,
     mate1_candidates: &mut Vec<ReadCandidate>,
     mate2_candidates: &mut Vec<ReadCandidate>,
@@ -428,7 +428,7 @@ pub(crate) fn continue_combined_two_lane_search(
         reference,
         reads,
         reversed_projected,
-        reverse_second_lane_hits,
+        relabel_complementary_hits,
         DEFAULT_SEARCH_LIMITS,
         false,
         state,
@@ -442,7 +442,7 @@ pub(crate) fn continue_combined_two_lane_search_with_limits(
     reference: &ReferenceIndex,
     reads: [&[Base]; 2],
     reversed_projected: [&[ProjectedBase]; 2],
-    reverse_second_lane_hits: bool,
+    relabel_complementary_hits: [bool; 2],
     limits: CombinedSearchLimits,
     complete_direct_frontier: bool,
     state: &mut CombinedTwoLaneSearchState,
@@ -450,6 +450,11 @@ pub(crate) fn continue_combined_two_lane_search_with_limits(
     mate2_candidates: &mut Vec<ReadCandidate>,
 ) -> Result<[u64; 2], AlignmentError> {
     let before = state.located;
+    if complete_direct_frontier {
+        for lane in 0..2 {
+            state.active[lane] |= state.direct[lane];
+        }
+    }
     for (lane, read) in reads.into_iter().enumerate() {
         if state.direct[lane] && !complete_direct_frontier {
             continue;
@@ -466,7 +471,7 @@ pub(crate) fn continue_combined_two_lane_search_with_limits(
             let (rows, _, direct) = visit_combined_seed_round(
                 reference,
                 read,
-                lane == 1 && reverse_second_lane_hits,
+                relabel_complementary_hits[lane],
                 deferred.round,
                 deferred.offset,
                 deferred.matches,
@@ -490,7 +495,7 @@ pub(crate) fn continue_combined_two_lane_search_with_limits(
         reads,
         reversed_projected,
         [None, None],
-        reverse_second_lane_hits,
+        relabel_complementary_hits,
         limits,
         state,
         mate1_candidates,

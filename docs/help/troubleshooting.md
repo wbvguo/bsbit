@@ -112,7 +112,8 @@ samtools view -H sample.analysis.bam | grep '^@PG'
 ### A single-end BAM is rejected
 
 Current `bsbit align` output with read 1 only uses numeric MAPQ and declares
-`caller-compatible-directional-single`. If a single-end BAM is rejected,
+`caller-compatible-directional-single` or
+`caller-compatible-nondirectional-single`. If a single-end BAM is rejected,
 inspect `@PG`: an older `standard-directional-single` BAM predates numeric MAPQ
 and must be realigned rather than having its header or scores rewritten.
 

@@ -1,7 +1,7 @@
 # Architecture
 
-`bsbit` is a Rust workspace with narrow native boundaries. Standard single-end
-and caller-compatible high-throughput paired-end alignment share the compact
+`bsbit` is a Rust workspace with narrow native boundaries. Caller-compatible
+single-end and high-throughput paired-end alignment share the compact
 exact-reference catalog, persisted combined search index, bounded verification
 kernels, and bisulfite rules. The layouts differ only where mate pairing,
 paired rescue, and calibrated MAPQ require it. The design separates alignment,
@@ -26,11 +26,11 @@ compact exact-reference catalog     digest-bound combined sparse-SA image
                 /              \
                v                v
 bsbit align (single)                bsbit align (paired)
-one directional FASTQ              directional/non-directional paired FASTQ
+directional/non-directional FASTQ   directional/non-directional paired FASTQ
       |                                   |
-ordered BAM, uncalibrated              ordered BAM
-current caller boundary                   |
-                           coordinate sort / mark duplicates / BAI or CSI
+ordered caller-compatible BAM    ordered caller-compatible BAM
+                \                         /
+                 coordinate sort / mark duplicates / BAI or CSI
                                            |
                indexed authoritative FASTA +
                                            v
@@ -234,18 +234,30 @@ data is absent.
 
 `bsbit align` opens the opaque index read-only and chooses the input layout
 explicitly from the supplied read paths. With only `--read1`, it runs the
-deterministic directional single-end alignment and preserves FASTQ order. With
-both `--read1` and `--read2`, it runs the paired-end path described below. Both
-layouts publish BAM through the same create-only output contract.
+deterministic single-end alignment and preserves FASTQ order. Directional mode
+uses OT/OB; `--non-directional` runs the complementary CTOT/CTOB pass and merges
+both decisions globally. With both `--read1` and `--read2`, it runs the
+paired-end path described below. Both layouts publish BAM through the same
+create-only output contract.
 
 Single-end default mode may classify a verified initial frontier immediately
-and continues only unresolved work. Single-end sensitive mode instead replays
-intervals admitted by the shared 4,096-hit sensitive bound, completes the
-six-round adaptive seed schedule, verifies the accumulated candidates through
-distance 5, and only then groups biological origins and assigns MAPQ. It does
-not enter mate-rescue or template-geometry stages. Otherwise-unmapped reads
-with exact supported 3' adapter evidence enter a compact single-end trimmed
-remap followed by the same-origin stability check described below.
+and continues only unresolved work. Single-end sensitive mode first preserves
+that exact default result as its incumbent, then replays intervals admitted by
+the shared 4,096-hit sensitive bound and completes the six-round adaptive seed
+schedule. Low-confidence, unmapped, and distance-three incumbents verify that
+frontier through distance 5. A MAPQ-20-or-better incumbent at edit distance two
+or less verifies through distance 3: any placement that can tie it, beat it, or
+reduce its Q20 edit separation is already inside that boundary. Search-level
+repeat pressure from the completed frontier remains available without
+enumerating distance-four/five placements for this already-strong class. A
+different-origin replacement or new rescue is accepted only when the completed
+frontier is unique at MAPQ 20 or above. Lower-confidence conflicts retain the
+default representative, classify it as ambiguous, and emit MAPQ 0; an
+uncertified rescue remains unmapped. The single-end path does not enter
+mate-rescue, template-geometry, or paired adapter stages.
+For directional output, otherwise-unmapped reads with exact supported 3'
+adapter evidence enter a compact single-end trimmed remap followed by the
+same-origin stability check described below.
 
 One decode stream reads single-end records; paired input uses two synchronized
 decode streams. Both feed bounded batches to mapping workers with reusable

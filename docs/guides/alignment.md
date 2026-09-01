@@ -1,8 +1,9 @@
 # Align reads
 
 `bsbit align` is the entry point for both read layouts. Supplying read 1 alone
-selects directional single-end alignment; adding synchronized read 2 selects
-paired-end alignment without changing the command.
+selects single-end alignment; adding synchronized read 2 selects paired-end
+alignment without changing the command. Directional libraries are the default
+for either layout, and `--non-directional` enables four-strand placement.
 
 Both layouts open the opaque index created by `bsbit index`; alignment never
 builds or modifies index data.
@@ -33,14 +34,19 @@ bsbit align \
 ```
 
 Omit `--sensitive` for the low-latency default. With it, single-end alignment
-replays seed intervals admitted only by the wider 4,096-hit bound, completes
-the six-round bounded frontier, and then performs distance-5 verification,
-origin classification, and MAPQ. Pair geometry and mate rescue do not apply to
-a single read. Both single-end modes do, however, inspect the final 30-base
-domain for an exact supported prefix of the Illumina universal adapter.
-Recovery requires at least 8 adapter bases and 50 retained read bases. A
-tentative unique placement must remain unique at the same strand-aware origin
-after 8 additional retained bases are removed.
+first retains the default result as an incumbent, replays seed intervals
+admitted only by the wider 4,096-hit bound, completes the six-round bounded
+frontier, and performs distance-5 verification. A different-origin replacement
+or new rescue must be unique at MAPQ 20 or above. A lower-confidence conflict
+keeps the incumbent as ambiguous at MAPQ 0, and an uncertified rescue remains
+unmapped. Pair geometry, mate rescue, and paired adapter recovery do not apply
+to a single read.
+
+Directional default and sensitive output also inspect the final 30-base domain
+for an exact supported prefix of the Illumina universal adapter. Recovery
+requires at least 8 adapter bases and 50 retained read bases. A tentative unique
+placement must remain unique at the same strand-aware origin after 8 additional
+retained bases are removed.
 
 An accepted recovery preserves the complete input sequence and qualities in
 the BAM and represents the adapter tail as a strand-correct soft clip. Its MAPQ
@@ -52,18 +58,22 @@ exact adapter support are unchanged.
 !!! note "Single-end confidence"
     Unique origins receive numeric Q10/Q15/Q20/Q30/Q40 from evidence retained
     by the selecting search; tied origins remain MAPQ 0. Output declares
-    `caller-compatible-directional-single`. The published truth qualification
-    is scoped to the documented 5M-R1 simulated corpus.
+    `caller-compatible-directional-single` or
+    `caller-compatible-nondirectional-single`, according to the selected
+    library profile. The published single-end truth qualification is scoped to
+    directional reads in the documented 5M-R1 simulated corpus.
 
 Single-end output preserves input order. Coordinate-based analysis still
-requires coordinate sorting. Single-end input currently supports the
-directional library model; non-directional single-end and PBAT are unsupported.
+requires coordinate sorting. Add `--non-directional` to run both the OT/OB and
+CTOT/CTOB passes and make one global decision. An equal-best cross-pass result
+is ambiguous at MAPQ 0; a weaker cross-pass placement contributes to MAPQ
+separation and repeat pressure. PBAT remains unsupported.
 
-Shared options including `--sensitive`, `--threads`, `--bam-threads`,
+Shared options including `--sensitive`, `--non-directional`, `--threads`, `--bam-threads`,
 `--bam-compression-level`, and `--metrics` apply to the read-1-only layout.
 Single-end metrics use the `bsbit-single-alignment-metrics-v1` schema and
 include search work, adapter outcomes, and direct-versus-traceback record
-counts. Paired-only controls including `--non-directional`, template span,
+counts. Paired-only controls including template span,
 `--mapped-only`, output-contract selection, and paired batching fail explicitly
 on single-end input instead of being ignored.
 
@@ -125,10 +135,11 @@ The BAM is written in input order. Inspect it immediately, then follow the
 
 Both layouts expose default and sensitive search. For single-end input,
 default keeps the existing early-resolution d3/d5 path and `--sensitive`
-completes the wider bounded candidate frontier before classification. Both
-single-end modes apply the same exact-adapter recovery after that primary
-decision; sensitive mode is also used for its trimmed and stability remaps.
-The paired-end path additionally records one of these stable strategies:
+audits that result against the wider bounded candidate frontier with the Q20
+replacement/rescue gate described above. Strong incumbents (Q20 or above and
+edit distance at most two) use the sufficient d3 audit boundary; weaker,
+distance-three, and unmapped results retain d5 verification. The paired-end
+path additionally records one of these stable strategies:
 
 | Mode | Stable strategy | Main behavior |
 |---|---|---|
@@ -136,8 +147,9 @@ The paired-end path additionally records one of these stable strategies:
 | `--sensitive` | `sensitive-bounded-integrated-read-complete-v1` | Additional complete-frontier, adapter, confidence, and bounded-repeat evidence within the published wall-time envelope |
 
 Use default mode for the normal latency/accuracy balance. Use `--sensitive`
-when the documented extra recall is worth the additional runtime. Current
-measurements and their workload boundary live on the
+when its higher single-end confidence separation or the documented paired-end
+extra recall is worth the additional runtime. Current measurements and their
+workload boundary live on the
 [performance page](../performance-evidence.md).
 
 Both modes write one primary record per input read by default. An ambiguous
@@ -149,10 +161,11 @@ probability-matched to another aligner.
 
 ## Select library orientation
 
-Directional paired libraries are the default. Add `--non-directional` to make
-one placement decision across all four supported directional classes. The
-option does not infer orientation from assay name and does not change the
-output-tag contract.
+Directional libraries are the default for both layouts. Add
+`--non-directional` to make one placement decision across all four supported
+directional classes. For single-end input, use the command above with this flag;
+for paired input, use both mates as shown below. The option does not infer
+orientation from assay name and does not change the output-tag contract.
 
 ```bash
 bsbit align \

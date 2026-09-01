@@ -71,21 +71,24 @@ target/release/bsbit align \
   --bam-threads 2
 ```
 
-For directional single-end input, supply only `--read1` (or `-1`). The
-single-end path accepts the shared runtime/BAM controls and `--sensitive`,
-writes numeric MAPQ from the retained search evidence, performs conservative
-exact 3' Illumina-adapter recovery for otherwise-unmapped reads, corrects a
-supported adapter endpoint without changing an already selected biological
-origin or MAPQ, supports `--metrics`, and declares caller-compatible
-provenance; see the [single-end alignment
+For single-end input, supply only `--read1` (or `-1`). Directional alignment is
+the default; add `--non-directional` to make one decision across OT, OB, CTOT,
+and CTOB. The single-end path accepts the shared runtime/BAM controls and
+`--sensitive`, writes numeric MAPQ from the retained search evidence, performs
+conservative exact 3' Illumina-adapter recovery for directional output,
+supports `--metrics`, and declares caller-compatible provenance; see the
+[single-end alignment
 guide](docs/guides/alignment.md).
 
 Omit a mode flag for the default mode or add `--sensitive` for the wider
-bounded candidate-search mode. The current replicated maximum-recall
-qualification is paired-end; single-end sensitive has focused correctness
-coverage and should be rebenchmarked before performance claims. Search,
-rescue, reporting, and MAPQ policies are fixed by each mode rather than
-assembled from experimental switches. Use `--help` for the exact command
+bounded candidate-search audit. On single-end input the default result is the
+incumbent: a different-origin replacement or new rescue must be unique at
+MAPQ 20 or above, while a lower-confidence conflict retains the incumbent at
+MAPQ 0. The current replicated maximum-recall qualification remains
+paired-end; directional single-end has one controlled same-binary 5M-R1
+comparison, which does not qualify non-directional reads.
+Search, rescue, reporting, and MAPQ policies are fixed by each mode rather
+than assembled from experimental switches. Use `--help` for the exact command
 surface, and see [indexing](docs/guides/indexing.md),
 [alignment](docs/guides/alignment.md) before changing resource or output
 settings.

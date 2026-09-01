@@ -66,6 +66,7 @@ REQUIRED:
 
 INPUT LAYOUT:
   --read1 only                       directional single-end alignment
+                                      (add --non-directional for four-strand SE)
   --read1 and --read2                synchronized directional paired-end alignment
                                       (add --non-directional for four-strand PE)
 
@@ -73,7 +74,8 @@ OPTIONAL INPUT:
   -2, --read2 PATH                   R2 FASTQ; requires --read1
 
 OPTIONS FOR BOTH LAYOUTS:
-  --sensitive                        complete a wider bounded candidate frontier
+  --sensitive                        audit a wider bounded candidate frontier
+  --non-directional                  search all four bisulfite strands
   --threads N                        mapping workers; default: 1
   --bam-threads N                    BGZF workers; default: 1
   --bam-compression-level LEVEL      default|0..9; default: 1
@@ -84,7 +86,6 @@ PAIRED-END OPTIONS:
   --batch-pairs N                    default: 16384
   --alignment-queue-batches N        default: 2
   --output-contract CONTRACT         minimal|bismark; default: minimal
-  --non-directional                  search all four bisulfite strands
   --mapped-only                      omit truly unmapped primary records
   --metrics                          write the full profiling TSV to stdout
   --min-template-span N              default: 0
@@ -93,13 +94,16 @@ PAIRED-END OPTIONS:
 Single-end alignment uses the same persisted combined index and bounded d3/d5
 verification core as paired-end alignment. Unique single reads receive numeric
 MAPQ from their existing score-separation and repeat evidence; tied best
-placements use MAPQ 0. Its caller-compatible directional-single BAM is accepted
-by `bsbit call` after coordinate sorting, duplicate handling, and indexing.
+placements use MAPQ 0. Directional and non-directional single-end BAM contracts
+are accepted by `bsbit call` after coordinate sorting, duplicate handling, and
+indexing.
 
 Without --sensitive, default mode runs the low-latency d3 pass plus an
-incremental d5 fallback. For single-end input, --sensitive completes the wider
-bounded seed frontier before d5 verification, classification, and MAPQ. For
-paired-end input it also enables the qualified pair-specific recovery policy.
+incremental d5 fallback. For single-end input, --sensitive preserves that
+result as an incumbent and audits it against the wider bounded seed frontier.
+A different-origin replacement or new rescue must be unique at MAPQ 20 or
+above; a lower-confidence conflict retains the incumbent at MAPQ 0. For
+paired-end input --sensitive enables the qualified pair-specific recovery policy.
 Inputs may remain gzip-compressed; pre-decompression is not required or recommended.
 ";
 
@@ -558,6 +562,10 @@ fn run_standard_single_from_options(options: Options) -> Result<(), Box<dyn Erro
         read1: options.read1,
         output_bam: options.output_bam,
         search_mode,
+        non_directional: matches!(
+            options.library_profile,
+            PairedLibraryProfile::NonDirectional
+        ),
         max_edit_distance: u64::from(PAIRED_MAX_EDIT_DISTANCE),
         batch_records: 1_000,
         threads: u64::try_from(options.threads).expect("validated thread count fits u64"),
@@ -1292,9 +1300,7 @@ fn parse_options_from(
     };
     let output_bam = required(output_bam, "--output-bam")?;
     if matches!(layout, ReadLayout::SingleEnd) {
-        let unsupported_flag = if matches!(library_profile, PairedLibraryProfile::NonDirectional) {
-            Some("--non-directional")
-        } else if read_output_explicit {
+        let unsupported_flag = if read_output_explicit {
             Some("--mapped-only")
         } else {
             [

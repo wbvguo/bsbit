@@ -300,27 +300,37 @@ fn reference_backed_call_rejects_same_length_wrong_fasta_even_with_md() {
 fn caller_accepts_calibrated_single_alignment_contracts() {
     let directory = unique_directory("calibrated-single-alignment-contract");
     fs::create_dir(&directory).expect("fixture directory");
-    let input = indexed_bsbit_fixture_with_contract(
-        &directory,
-        AlignmentAuxiliaryMode::Minimal,
-        BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
-    );
-    let reference = indexed_fasta_fixture(&directory);
-    let output = directory.join("single.cgmap");
+    for (name, mode) in [
+        (
+            "directional",
+            BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
+        ),
+        (
+            "non-directional",
+            BsbitAlignmentMode::CallerCompatibleNondirectionalSingle,
+        ),
+    ] {
+        let fixture = directory.join(name);
+        fs::create_dir(&fixture).expect("mode fixture directory");
+        let input =
+            indexed_bsbit_fixture_with_contract(&fixture, AlignmentAuxiliaryMode::Minimal, mode);
+        let reference = indexed_fasta_fixture(&fixture);
+        let output = fixture.join("single.cgmap");
 
-    meth::call(&meth::Options {
-        input,
-        reference,
-        regions: RegionSelection::default(),
-        output: output.clone(),
-        format: meth::OutputFormat::Cgmap,
-        compress: false,
-        threads: 1,
-        parameters: meth::Parameters::default(),
-    })
-    .expect("calibrated single-end alignment is caller-compatible");
+        meth::call(&meth::Options {
+            input,
+            reference,
+            regions: RegionSelection::default(),
+            output: output.clone(),
+            format: meth::OutputFormat::Cgmap,
+            compress: false,
+            threads: 1,
+            parameters: meth::Parameters::default(),
+        })
+        .expect("calibrated single-end alignment is caller-compatible");
 
-    assert!(output.exists());
+        assert!(output.exists());
+    }
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }
 

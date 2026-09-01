@@ -3,9 +3,9 @@
 bsbit reads local FASTA and FASTQ files using strict validation. Malformed
 records and unsupported encodings are reported as errors.
 
-`bsbit align` accepts one FASTQ for standard directional single-end alignment,
-or synchronized paired FASTQ for caller-compatible directional or explicitly
-non-directional alignment. Neither layout requires genome-wide coverage:
+`bsbit align` accepts one FASTQ or synchronized paired FASTQ for
+caller-compatible directional or explicitly non-directional alignment. Neither
+layout requires genome-wide coverage:
 preprocessed WGBS, RRBS, and targeted bisulfite read sets share these input
 contracts. That compatibility does not add RRBS-specific trimming,
 restriction-site handling, target-panel interpretation, or assay-specific QC
@@ -103,11 +103,11 @@ validates every name and pair.
 
 ## Library orientation
 
-`bsbit align` supports directional single-end reads when read 1 is supplied
-alone, directional paired-end reads by default when both mates are provided, and
-non-directional paired-end reads with `--non-directional`. It does not silently
-approximate PBAT. The exact conversion/orientation relations are defined in the
-[scientific contract](../scientific-contract.md).
+`bsbit align` supports directional single-end or paired-end reads by default.
+With `--non-directional`, either layout makes one placement decision across all
+four supported bisulfite directions. It does not silently approximate PBAT. The
+exact conversion/orientation relations are defined in the [scientific
+contract](../scientific-contract.md).
 
 Do not infer library orientation from coverage design. WGBS, RRBS, and targeted
 bisulfite experiments may each produce libraries with different orientation or

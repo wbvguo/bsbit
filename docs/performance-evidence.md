@@ -302,6 +302,117 @@ reference counters and paired work aggregation disabled. These diagnostics
 identify future optimization targets; they do not extend the qualified speed
 or accuracy claims above.
 
+### Single-end sensitive confidence audit
+
+Commit `7b646e3fdd7171c1615acbb73e6df43bcf46e430` changes directional
+single-end sensitive mode from unconditional completed-frontier selection to a
+default-incumbent confidence audit. A different-origin replacement or new
+rescue must be unique at Q20 or above; a lower-confidence conflict retains the
+default representative at Q0, and an uncertified rescue remains unmapped. This
+policy uses only search evidence and has no access to simulator truth.
+
+A controlled same-binary A/B on the retained 5M-R1 corpus produced the same
+4,989,023 mapped reads in both modes. Sensitive added 208 within-5-bp correct
+placements and removed 208 errors. The main operating points were:
+
+| Mode | Wall | Peak RSS | Q0 correct | Q10 P / R / F1 | Q20 P / R / F1 | Q30 P / R / F1 | Q40 errors / CP95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Default | **16.89 s** | **7.30 GiB** | 4,798,553 | 99.7015 / **93.7022** / 96.6088% | 99.8256 / 88.3361 / 93.7301% | 99.9720 / 70.7423 / 82.8548% | 121 / 77.34 ppm |
+| Sensitive | 50.31 s | 7.31 GiB | **4,798,761** | **99.8094** / 93.6985 / **96.6575%** | **99.9159 / 90.8054 / 95.1431%** | **99.9827 / 72.4801 / 84.0385%** | **53 / 36.67 ppm** |
+
+Thus sensitive improves Q0 placement accuracy and the Q20/Q30 precision,
+recall, and F1 simultaneously. At Q40 it trades 2,611 selected reads for 68
+fewer errors; at Q10 recall changes by -0.0037 percentage points while
+precision and F1 improve. Its observed wall cost is 2.98x. This is one
+controlled observation, not a replicated timing or cross-corpus qualification.
+The complete binary, BAMs, commands, process-tree samples, evaluator output,
+tables, and hashes are retained under the local 2026-09-01 benchmark archive.
+
+### Single-end sensitive sufficient audit boundary
+
+Commit `7808aa1d1f9a66dfa93a24831fead7f20aa99240` keeps the complete
+six-round sensitive seed frontier but avoids distance-four/five verification
+for an incumbent that is already Q20 or better at edit distance two or less.
+Distance three contains every placement that can tie or beat that incumbent or
+reduce its Q20 edit separation. Weak, unmapped, and distance-three incumbents
+retain the full distance-five boundary.
+
+On the same 5M-R1 corpus, every non-MAPQ SAM field was byte-identical to
+`7b646e3`; only 115 reads (0.0023%) moved from Q10 to a higher bin. Q20 gained
+70 correct reads and one error, while the Q30 and Q40 additions were all
+correct. Q0/Q10 results were unchanged, and Q10 through Q40 continued to pass
+the one-sided 95% calibration contract.
+
+Two previous-binary measurements and two optimized measurements used the same
+CPU binding, sampler, warm inputs, index, and output contract:
+
+| Implementation | Wall mean | User CPU mean | Total CPU mean | Peak RSS / I/O |
+|---|---:|---:|---:|---|
+| `7b646e3` | 49.801 s | 390.475 s | 394.680 s | unchanged within sampling precision |
+| `7808aa1` | 47.426 s | 369.850 s | 373.070 s | unchanged within sampling precision |
+
+The observed mean reductions are 4.77% wall, 5.28% user CPU, and 5.48% total
+CPU. Complete formal and replicate process-tree sidecars, BAMs, MAPQ transition
+matrix, evaluator output, and the frozen binary are retained in
+`workspace/benchmark/2026-09-01--sim-wgbs-10m-current-head/single/experiments/7808aa1/`.
+
+### Single-end sensitive narrow-SIMD store elimination
+
+Commit `431970cf89670f2f59b7763767bac92e78382432` removes the per-query-base
+fill of the inactive d3/d5 AVX2 placement buffer. Every diagonal is overwritten
+in dependency order before it is read, so the fill performed seven redundant
+vector stores per d3 base and eleven per d5 base. Search, verification limits,
+placement selection, and MAPQ are unchanged.
+
+A balanced A-B-B-A comparison against `7808aa1` on the same 5M R1 corpus,
+binary options, CPU binding, and process-tree sampler measured:
+
+| Implementation | Wall mean | User CPU mean | Total CPU mean | Peak RSS / I/O |
+|---|---:|---:|---:|---|
+| `7808aa1` | 45.376 s | 361.880 s | 364.570 s | unchanged within sampling precision |
+| `431970c` | 44.192 s | 353.520 s | 356.195 s | unchanged within sampling precision |
+
+The reductions are 2.61% wall, 2.31% user CPU, and 2.30% total CPU. Both
+sensitive BAMs have SHA-256
+`4338702d4cade527c5b2e10f8f2300446612eeb9acff3a7a410002cc797caa09`;
+the corresponding default BAMs are also byte-identical. Thus every mapping,
+accuracy, error, and MAPQ-threshold statistic remains exactly the `7808aa1`
+result.
+
+A full 5M `perf` run attributes 29.73% of sampled task-clock to batched d5
+placement DP, 14.66% to batched d3 DP, 12.74% to flexible-candidate
+verification orchestration, and 18.26% to the three leading FM-index
+search/locate functions. Within the d5 symbol, 97.4% of samples are in the DP
+inner loop, versus 0.7% setup and 1.8% frontier extraction. The next credible
+targets are therefore cross-read d5 tail batching and a wider sampled-SA/LF
+locate wavefront; input normalization and BAM construction are not current
+bottlenecks.
+
+Two output-equivalent experiments were rejected: a four-candidate dual-vector
+d5 kernel increased 1M user CPU by 11.0% because of register pressure, and
+unchecked pattern loads increased it by 33.4% after adverse LLVM code
+generation. Raw profiles, process-tree sidecars, pilot timings, frozen binary,
+and reproduction scripts are retained under
+`workspace/benchmark/2026-09-01--sim-wgbs-10m-current-head/single/experiments/431970c/`.
+
+A second address-level follow-up aggregated 22,797 samples inside flexible
+candidate orchestration. Its largest instruction address held 7,239 samples
+(31.75%) and mapped to the already vectorized `Base::storage_code()`
+materialization loop. Replacing that loop with libc `memcpy` or fixed
+32-byte chunks increased 1M user CPU by 4.00% and 3.09%, respectively.
+Unchecked in-band matrix access also increased user CPU by 1.91%. Deferring
+the d3/d5 DP cap was scalar/SIMD matrix-equivalent, but changed LLVM's hot
+kernel inlining and increased user CPU by 3.49–5.16%.
+
+Four-lane locate, pipelined two-lane LF, and sampled-SA prefetch likewise
+increased user CPU by 3.32–4.97%. A narrower d4 audit was the only candidate
+with lower user CPU, but changed ten records from MAPQ 10 to 15 because it
+removed placements used by the repeat-pressure cap. A semantics-preserving
+variant increased user CPU by 10.06%. All ten candidates were therefore
+reverted; no follow-up code was retained. Raw A-B-B-A time sidecars, hashes,
+output equivalence, and the d4 candidate profile are retained in the
+`431970c/follow-up-1m/` benchmark subdirectory.
+
 ## Reproduction protocol
 
 Build the audited executable with the release script and verify its recorded
@@ -355,11 +466,12 @@ exercise the recovery rule; their results are
   truth-accuracy claim.
 - The frozen matrix broadens regression evidence, but it does not qualify
   every read length, organism, protocol, or error distribution.
-- Non-directional paired-end has functional coverage, not this large-corpus
-  performance/MAPQ qualification. Standard directional single-end has one
-  controlled 5M-R1 performance/truth regression run, but no replicated MAPQ
-  qualification. Single-end exact-adapter recovery has focused functional
-  regression coverage and is not included in those retained timing claims.
+- Non-directional paired-end and single-end have functional coverage, not this
+  large-corpus performance/MAPQ qualification. Standard directional single-end
+  has one controlled 5M-R1 performance/truth regression run, but no replicated
+  MAPQ qualification; that run does not qualify non-directional single-end.
+  Single-end exact-adapter recovery has focused functional regression coverage
+  and is not included in those retained timing claims.
 - Calling and cohort outputs are outside this aligner scorecard and require
   study-specific validation.
 - The benchmark is not an independent third-party study.
