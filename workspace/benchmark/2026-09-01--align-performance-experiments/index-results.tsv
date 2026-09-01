@@ -1,0 +1,3 @@
+index	main_bytes	bwt_bytes	occ_bytes	sa_bytes	sa_delta_vs_stride16_bytes	build_wall_s	build_user_s	build_sys_s	build_peak_rss_kib
+stride16	1162430432	2152577826	1513560	2518547488	0	NA	NA	NA	NA
+stride8	1162430432	2152577826	1513560	4068422848	1549875360	703.17	2896.98	76.24	8964080
