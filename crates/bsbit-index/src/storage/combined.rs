@@ -156,6 +156,7 @@ impl CombinedIndexSaStride {
 /// Missing, changing, malformed, or unsupported metadata returns `None` so a
 /// caller can retain its conservative default without changing error priority.
 #[doc(hidden)]
+#[must_use]
 pub fn combined_index_sa_stride_hint(prefix: &Path) -> Option<CombinedIndexSaStride> {
     let mut file = File::open(prefix).ok()?;
     if file.metadata().ok()?.len() != u64::from(META_BYTES_U32) {

@@ -1555,7 +1555,7 @@ impl NativeErrorBuffer {
     }
 
     const fn len(&self) -> usize {
-        ERROR_CAPACITY
+        core::mem::size_of_val(&self.0)
     }
 
     fn message_bytes(&self) -> &[u8] {

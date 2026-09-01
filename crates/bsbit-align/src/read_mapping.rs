@@ -218,6 +218,7 @@ impl PlacementVerifier {
         Ok(output[0])
     }
 
+    #[allow(clippy::too_many_lines)]
     fn verify_flexible_nominal_batch(
         &mut self,
         reference: &ReferenceIndex,

@@ -372,6 +372,7 @@ fn map_single_records(
     Ok(output)
 }
 
+#[allow(clippy::too_many_lines)]
 fn materialize_single_record(
     reference: &ReferenceIndex,
     source: &FastqRecord,

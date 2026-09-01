@@ -300,6 +300,7 @@ pub(super) fn parse(arguments: &[String]) -> Result<super::Action, crate::CliErr
         .map_err(|error| crate::CliError::usage(error.to_string()))
 }
 
+#[allow(clippy::too_many_lines)]
 pub(crate) fn run(mut options: Options) -> Result<(), Box<dyn Error>> {
     let process_started = MetricsTimer::start(options.emit_metrics);
     if matches!(options.layout, ReadLayout::SingleEnd) {

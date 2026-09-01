@@ -553,6 +553,7 @@ pub fn narrow_banded_placement_distances_batch_d3(
 ///
 /// Rejects an empty query, a batch outside two through four candidates, or a
 /// slab whose length is not exactly four times the candidate pattern length.
+#[allow(clippy::trivially_copy_pass_by_ref)]
 pub(crate) fn narrow_banded_placement_distances_interleaved_batch_d3(
     reference_masks_by_query: &[u8; 5],
     query: &[u8],
@@ -1901,7 +1902,11 @@ unsafe fn narrow_placement_distances_batch_d3_avx2(
 
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "avx2")]
-#[allow(clippy::cast_ptr_alignment, clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_ptr_alignment,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines
+)]
 unsafe fn narrow_placement_distances_interleaved_batch_d3_avx2(
     reference_masks_by_query: &[u8; 5],
     query: &[u8],
