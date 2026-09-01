@@ -241,6 +241,32 @@ error-category, exhaustive native classification, exact/within-5 unique-scope
 PR-AUC, and Q10/Q20/Q30/Q40 error tables, together with BAMs, commands, and
 source provenance, are retained in that local benchmark archive.
 
+### Single-end sensitive confidence audit
+
+Commit `7b646e3fdd7171c1615acbb73e6df43bcf46e430` changes directional
+single-end sensitive mode from unconditional completed-frontier selection to a
+default-incumbent confidence audit. A different-origin replacement or new
+rescue must be unique at Q20 or above; a lower-confidence conflict retains the
+default representative at Q0, and an uncertified rescue remains unmapped. This
+policy uses only search evidence and has no access to simulator truth.
+
+A controlled same-binary A/B on the retained 5M-R1 corpus produced the same
+4,989,023 mapped reads in both modes. Sensitive added 208 within-5-bp correct
+placements and removed 208 errors. The main operating points were:
+
+| Mode | Wall | Peak RSS | Q0 correct | Q10 P / R / F1 | Q20 P / R / F1 | Q30 P / R / F1 | Q40 errors / CP95 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Default | **16.89 s** | **7.30 GiB** | 4,798,553 | 99.7015 / **93.7022** / 96.6088% | 99.8256 / 88.3361 / 93.7301% | 99.9720 / 70.7423 / 82.8548% | 121 / 77.34 ppm |
+| Sensitive | 50.31 s | 7.31 GiB | **4,798,761** | **99.8094** / 93.6985 / **96.6575%** | **99.9159 / 90.8054 / 95.1431%** | **99.9827 / 72.4801 / 84.0385%** | **53 / 36.67 ppm** |
+
+Thus sensitive improves Q0 placement accuracy and the Q20/Q30 precision,
+recall, and F1 simultaneously. At Q40 it trades 2,611 selected reads for 68
+fewer errors; at Q10 recall changes by -0.0037 percentage points while
+precision and F1 improve. Its observed wall cost is 2.98x. This is one
+controlled observation, not a replicated timing or cross-corpus qualification.
+The complete binary, BAMs, commands, process-tree samples, evaluator output,
+tables, and hashes are retained under the local 2026-09-01 benchmark archive.
+
 ## Reproduction protocol
 
 Build the audited executable with the release script and verify its recorded
