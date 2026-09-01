@@ -76,6 +76,8 @@ OPTIONS FOR BOTH LAYOUTS:
   --bam-compression-level LEVEL      default|0..9; default: 1
 
 PAIRED-END OPTIONS:
+  --total-threads N                  split one 1..64 core budget between mapping
+                                      and output; conflicts with both thread flags
   --batch-pairs N                    default: 16384
   --alignment-queue-batches N        default: 2
   --output-contract CONTRACT         minimal|bismark; default: minimal
@@ -147,6 +149,7 @@ pub(crate) struct Options {
     alignment_queue_batches: usize,
     threads: usize,
     bam_threads: u32,
+    auxiliary_core_budget: Option<usize>,
     bam_compression_level: Option<u8>,
     output_contract: AlignmentAuxiliaryMode,
     library_profile: PairedLibraryProfile,
@@ -299,7 +302,12 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     if matches!(options.layout, ReadLayout::SingleEnd) {
         return run_standard_single_from_options(options);
     }
-    let cpu_placement = CpuPlacement::detect(options.threads);
+    let cpu_placement = options.auxiliary_core_budget.map_or_else(
+        || CpuPlacement::detect(options.threads),
+        |auxiliary_cores| {
+            CpuPlacement::detect_with_auxiliary_cores(options.threads, auxiliary_cores)
+        },
+    );
     let (sender, receiver) = sync_channel(32);
     let read1 = options.read1.clone();
     let read2 = options
@@ -1036,6 +1044,7 @@ fn option_takes_value(flag: &str) -> bool {
             | "--output-bam"
             | "--batch-pairs"
             | "--alignment-queue-batches"
+            | "--total-threads"
             | "--threads"
             | "--bam-threads"
             | "--bam-compression-level"
@@ -1058,6 +1067,7 @@ fn parse_options_from(
     let mut batch_pairs = 16_384_usize;
     let mut alignment_queue_batches = 2_usize;
     let mut threads = 1_usize;
+    let mut total_threads = None;
     // One BGZF worker lets record compression overlap mapping.  Zero remains
     // available for callers that require a strictly synchronous writer.
     let mut bam_threads = 1_u32;
@@ -1136,6 +1146,7 @@ fn parse_options_from(
             "--alignment-queue-batches" => {
                 alignment_queue_batches = parse_usize(flag, &value)?;
             }
+            "--total-threads" => total_threads = Some(parse_usize(flag, &value)?),
             "--threads" => threads = parse_usize(flag, &value)?,
             "--bam-threads" => bam_threads = parse_u32(flag, &value)?,
             "--bam-compression-level" => {
@@ -1160,6 +1171,22 @@ fn parse_options_from(
             _ => unreachable!("value-bearing option was validated above"),
         }
     }
+    let auxiliary_core_budget = if let Some(total_threads) = total_threads {
+        if seen_value_flags.contains("--threads") || seen_value_flags.contains("--bam-threads") {
+            return Err(invalid(
+                "--total-threads conflicts with --threads and --bam-threads",
+            ));
+        }
+        if total_threads == 0 || total_threads > 64 {
+            return Err(invalid("--total-threads must be in 1..=64"));
+        }
+        let split = throughput_thread_split(total_threads);
+        threads = split.0;
+        bam_threads = split.1;
+        Some(usize::try_from(bam_threads).expect("BGZF thread count fits usize"))
+    } else {
+        None
+    };
     if threads == 0 || threads > 64 {
         return Err(invalid("--threads must be in 1..=64"));
     }
@@ -1196,6 +1223,7 @@ fn parse_options_from(
             [
                 "--batch-pairs",
                 "--alignment-queue-batches",
+                "--total-threads",
                 "--output-contract",
                 "--min-template-span",
                 "--max-template-span",
@@ -1217,6 +1245,7 @@ fn parse_options_from(
         alignment_queue_batches,
         threads,
         bam_threads,
+        auxiliary_core_budget,
         bam_compression_level,
         output_contract,
         library_profile,
@@ -1226,6 +1255,18 @@ fn parse_options_from(
         maximum_template_span,
         emit_metrics,
     })
+}
+
+fn throughput_thread_split(total_threads: usize) -> (usize, u32) {
+    debug_assert!((1..=64).contains(&total_threads));
+    if total_threads == 1 {
+        return (1, 0);
+    }
+    let output_threads = total_threads.div_ceil(5).clamp(1, 4);
+    (
+        total_threads - output_threads,
+        u32::try_from(output_threads).expect("bounded output thread count fits u32"),
+    )
 }
 
 fn parse_output_contract(

@@ -71,6 +71,23 @@ bsbit align \
   --max-template-span 1000
 ```
 
+On a dedicated host, `--total-threads 14` selects the qualified throughput
+split of 11 mapping workers and 3 BGZF workers and constrains auxiliary work to
+three additional physical cores. It replaces both explicit thread flags:
+
+```bash
+bsbit align \
+  --index GRCh38.bsbit \
+  --read1 sample_R1.fastq.gz \
+  --read2 sample_R2.fastq.gz \
+  --output-bam sample.bam \
+  --total-threads 14
+```
+
+Other budgets reserve approximately one fifth of their cores for output,
+bounded to four BGZF workers. Keep explicit `--threads` and `--bam-threads`
+when a scheduler or benchmark requires a particular split.
+
 The default run keeps stdout clean. Add `--metrics` and redirect stdout when
 the two-row profiling TSV is useful:
 

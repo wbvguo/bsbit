@@ -6,7 +6,7 @@
 use super::{
     AlignmentAuxiliaryMode, HELP, MetricsTimer, PairedLibraryProfile, PairedSearchMode, ReadLayout,
     ReadOutputMode, parse_options_from, sensitive_mapq_zero_strategy_id,
-    sensitive_read_complete_strategy_id, strategy_id,
+    sensitive_read_complete_strategy_id, strategy_id, throughput_thread_split,
 };
 use std::ffi::OsString;
 
@@ -70,6 +70,7 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     assert!(parsed.read2.is_none());
     assert_eq!(parsed.threads, 1);
     assert_eq!(parsed.bam_threads, 1);
+    assert_eq!(parsed.auxiliary_core_budget, None);
     assert_eq!(parsed.bam_compression_level, Some(1));
 
     let mut sensitive = single.clone();
@@ -110,6 +111,47 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
                 .expect_err("paired-only option must reject single input")
                 .to_string()
                 .contains("requires paired input via --read2")
+        );
+    }
+}
+
+#[test]
+fn paired_total_thread_budget_selects_qualified_mapping_output_splits() {
+    assert_eq!(throughput_thread_split(1), (1, 0));
+    assert_eq!(throughput_thread_split(2), (1, 1));
+    assert_eq!(throughput_thread_split(10), (8, 2));
+    assert_eq!(throughput_thread_split(14), (11, 3));
+    assert_eq!(throughput_thread_split(64), (60, 4));
+
+    let paired = || {
+        [
+            "--index",
+            "reference.bsbit",
+            "--read1",
+            "r1.fastq.gz",
+            "--read2",
+            "r2.fastq.gz",
+            "--output-bam",
+            "output.bam",
+        ]
+        .map(OsString::from)
+        .to_vec()
+    };
+    let mut automatic = paired();
+    automatic.extend(["--total-threads", "14"].map(OsString::from));
+    let automatic = parse_options_from(automatic).expect("total budget parses");
+    assert_eq!(automatic.threads, 11);
+    assert_eq!(automatic.bam_threads, 3);
+    assert_eq!(automatic.auxiliary_core_budget, Some(3));
+
+    for explicit in ["--threads", "--bam-threads"] {
+        let mut conflicting = paired();
+        conflicting.extend(["--total-threads", "14", explicit, "2"].map(OsString::from));
+        assert_eq!(
+            parse_options_from(conflicting)
+                .expect_err("automatic and explicit thread controls conflict")
+                .to_string(),
+            "--total-threads conflicts with --threads and --bam-threads"
         );
     }
 }

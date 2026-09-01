@@ -100,6 +100,7 @@ Pair-specific options fail explicitly when only read 1 is supplied.
 
 | Paired-only option | Default | Meaning |
 |---|---:|---|
+| `--total-threads N` | None | Split one 1–64 physical-core budget between mapping and output; conflicts with `--threads` and `--bam-threads` |
 | `--non-directional` | Off | Make one placement decision across all four bisulfite directions |
 | `--batch-pairs N` | 16384 | Input pairs per mapping batch |
 | `--alignment-queue-batches N` | 2 | Bounded completed-batch queue depth |
