@@ -13,7 +13,7 @@ use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
 use std::time::Instant;
 
-use bsbit_align::library::{PairedLibraryProfile, TemplateSpan, TemplateSpanBounds};
+use bsbit_align::library::{LibraryProfile, TemplateSpan, TemplateSpanBounds};
 use bsbit_align::materialize::traceback_read_placement;
 use bsbit_align::paired_end::{
     PAIRED_ALIGNMENT_BATCH_SIZE, PAIRED_MAX_EDIT_DISTANCE, PairedAlignmentOptions,
@@ -160,7 +160,7 @@ pub(crate) struct Options {
     total_thread_budget: Option<usize>,
     bam_compression_level: Option<u8>,
     output_contract: AlignmentAuxiliaryMode,
-    library_profile: PairedLibraryProfile,
+    library_profile: LibraryProfile,
     search_mode: PairedSearchMode,
     read_output: ReadOutputMode,
     minimum_template_span: u64,
@@ -451,10 +451,8 @@ fn load_alignment_reference(
     let semantic_digest = loaded.summary().semantic_digest();
     let reference = loaded.into_index();
     let alignment_mode = match options.library_profile {
-        PairedLibraryProfile::Directional => BsbitAlignmentMode::CallerCompatibleDirectionalPaired,
-        PairedLibraryProfile::NonDirectional => {
-            BsbitAlignmentMode::CallerCompatibleNondirectionalPaired
-        }
+        LibraryProfile::Directional => BsbitAlignmentMode::CallerCompatibleDirectionalPaired,
+        LibraryProfile::NonDirectional => BsbitAlignmentMode::CallerCompatibleNondirectionalPaired,
     };
     let header = build_sam_header(&reference, limits)?.with_bsbit_provenance(
         BsbitProgramProvenance::new(semantic_digest.into_bytes(), alignment_mode),
@@ -562,10 +560,7 @@ fn run_standard_single_from_options(options: Options) -> Result<(), Box<dyn Erro
         read1: options.read1,
         output_bam: options.output_bam,
         search_mode,
-        non_directional: matches!(
-            options.library_profile,
-            PairedLibraryProfile::NonDirectional
-        ),
+        library_profile: options.library_profile,
         max_edit_distance: u64::from(PAIRED_MAX_EDIT_DISTANCE),
         batch_records: 1_000,
         threads: u64::try_from(options.threads).expect("validated thread count fits u64"),
@@ -587,7 +582,7 @@ fn consume_batches(
     bounds: TemplateSpanBounds,
     limits: AlignmentRecordLimits,
     output_contract: AlignmentAuxiliaryMode,
-    library_profile: PairedLibraryProfile,
+    library_profile: LibraryProfile,
     search_mode: PairedSearchMode,
     read_output: ReadOutputMode,
     emit_metrics: bool,
@@ -655,7 +650,7 @@ fn process_paired_batch(
     bounds: TemplateSpanBounds,
     limits: AlignmentRecordLimits,
     output_contract: AlignmentAuxiliaryMode,
-    library_profile: PairedLibraryProfile,
+    library_profile: LibraryProfile,
     search_mode: PairedSearchMode,
     read_output: ReadOutputMode,
     emit_metrics: bool,
@@ -1160,7 +1155,7 @@ fn parse_options_from(
     let mut bam_threads = 1_u32;
     let mut bam_compression_level = Some(1_u8);
     let mut output_contract = AlignmentAuxiliaryMode::Minimal;
-    let mut library_profile = PairedLibraryProfile::Directional;
+    let mut library_profile = LibraryProfile::Directional;
     let mut search_mode = PairedSearchMode::Default;
     let mut explicit_search_mode = None;
     let mut read_output = ReadOutputMode::Complete;
@@ -1194,10 +1189,10 @@ fn parse_options_from(
             continue;
         }
         if flag == "--non-directional" {
-            if matches!(library_profile, PairedLibraryProfile::NonDirectional) {
+            if matches!(library_profile, LibraryProfile::NonDirectional) {
                 return Err(invalid("--non-directional may be specified only once"));
             }
-            library_profile = PairedLibraryProfile::NonDirectional;
+            library_profile = LibraryProfile::NonDirectional;
             continue;
         }
         if flag == "--mapped-only" {
@@ -1376,10 +1371,10 @@ const fn output_contract_name(mode: AlignmentAuxiliaryMode) -> &'static str {
     }
 }
 
-const fn library_profile_name(profile: PairedLibraryProfile) -> &'static str {
+const fn library_profile_name(profile: LibraryProfile) -> &'static str {
     match profile {
-        PairedLibraryProfile::Directional => "directional",
-        PairedLibraryProfile::NonDirectional => "non-directional",
+        LibraryProfile::Directional => "directional",
+        LibraryProfile::NonDirectional => "non-directional",
     }
 }
 

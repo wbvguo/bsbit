@@ -4,7 +4,7 @@ use super::adapter::best_ungapped_semi_global_placement;
 use super::frontier::{append_local_flexible_proof_candidates, balanced_rescue_blocks};
 use super::selection::{counterpart_strand, expected_mate2_strand, is_inward};
 use super::{
-    AlignmentError, Base, BisulfiteStrand, CombinedSearchReferenceExt, CombinedSeedHit,
+    AlignmentError, Base, CombinedSearchReferenceExt, CombinedSeedHit, ConversionPass,
     FLEXIBLE_NOMINAL_PROOF, INITIAL_EDIT_DISTANCE, MAX_READ_BASES, MateRescueWindow,
     PairedPlacement, ProjectedBase, RESCUE_BLOCKS, ReadAlignmentMetrics, ReadCandidate,
     ReadPlacement, ReadWorkspace, ReferenceIndex, SearchBase,
@@ -187,19 +187,18 @@ pub(super) fn rescue_from_combined_exact_blocks(
         ));
     }
 
+    let conversion_pass = if rescuing_mate1 {
+        ConversionPass::Original
+    } else {
+        ConversionPass::Complementary
+    };
     let query_len = u64::try_from(read.len()).expect("bounded read length fits u64");
     let mut located_rows = 0_u64;
     for (matches, query_offset, proof_mask) in exact.into_iter().flatten() {
         let metrics = reference
             .visit_combined_seed(matches, query_offset, query_len, &mut |hit| {
-                let strand = if rescuing_mate1 {
-                    hit.strand()
-                } else {
-                    match hit.strand() {
-                        BisulfiteStrand::OT => BisulfiteStrand::CTOT,
-                        BisulfiteStrand::OB => BisulfiteStrand::CTOB,
-                        BisulfiteStrand::CTOT | BisulfiteStrand::CTOB => return true,
-                    }
+                let Some(strand) = conversion_pass.relabel_combined_hit(hit.strand()) else {
+                    return true;
                 };
                 let candidate = ReadCandidate {
                     contig_ordinal: hit.contig_ordinal(),
@@ -379,15 +378,12 @@ pub(super) fn relabel_exact_retained_hit(
     hit: CombinedSeedHit,
     lane: usize,
 ) -> Option<ReadCandidate> {
-    let strand = if lane == 1 {
-        match hit.strand() {
-            BisulfiteStrand::OT => BisulfiteStrand::CTOT,
-            BisulfiteStrand::OB => BisulfiteStrand::CTOB,
-            BisulfiteStrand::CTOT | BisulfiteStrand::CTOB => return None,
-        }
+    let conversion_pass = if lane == 1 {
+        ConversionPass::Complementary
     } else {
-        hit.strand()
+        ConversionPass::Original
     };
+    let strand = conversion_pass.relabel_combined_hit(hit.strand())?;
     Some(ReadCandidate {
         contig_ordinal: hit.contig_ordinal(),
         start: hit.start(),

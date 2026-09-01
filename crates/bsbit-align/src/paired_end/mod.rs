@@ -37,7 +37,9 @@ use self::mapq::{
     paired_mapping_quality, stable_rescue_q20_certified as sensitive_stable_rescue_q20_certified,
     two_way_parsimony_q20_certified as sensitive_two_way_parsimony_q20_certified,
 };
-use crate::library::PairedLibraryProfile;
+use crate::library::ConversionPass;
+#[cfg(test)]
+use crate::library::LibraryProfile;
 use crate::search::combined_adaptive::{
     CombinedSearchLimits, CombinedTwoLaneSearchState, DIRECT_SINGLETON_PROOF,
     FLEXIBLE_NOMINAL_PROOF, INITIAL_SEARCH_LIMITS, continue_combined_two_lane_search,

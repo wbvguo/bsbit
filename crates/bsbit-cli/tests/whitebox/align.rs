@@ -4,7 +4,7 @@
 //! invariants can be tested without widening the crate API.
 
 use super::{
-    AlignmentAuxiliaryMode, HELP, MetricsTimer, PairedLibraryProfile, PairedSearchMode, ReadLayout,
+    AlignmentAuxiliaryMode, HELP, LibraryProfile, MetricsTimer, PairedSearchMode, ReadLayout,
     ReadOutputMode, parse_options_from, sensitive_mapq_zero_strategy_id,
     sensitive_read_complete_strategy_id, strategy_id, throughput_thread_split,
 };
@@ -86,7 +86,7 @@ fn standard_single_input_supports_both_library_profiles_and_pair_only_options_fa
     let parsed =
         parse_options_from(non_directional).expect("non-directional single-end input parses");
     assert_eq!(parsed.layout, ReadLayout::SingleEnd);
-    assert_eq!(parsed.library_profile, PairedLibraryProfile::NonDirectional);
+    assert_eq!(parsed.library_profile, LibraryProfile::NonDirectional);
 
     let mut threaded = single.clone();
     threaded.extend(["--threads", "4"].map(OsString::from));
@@ -279,7 +279,7 @@ fn minimal_is_default_and_bismark_output_is_explicit() {
 
     let defaults = parse_options_from(required()).expect("default output contract");
     assert_eq!(defaults.output_contract, AlignmentAuxiliaryMode::Minimal);
-    assert_eq!(defaults.library_profile, PairedLibraryProfile::Directional);
+    assert_eq!(defaults.library_profile, LibraryProfile::Directional);
     let mut compatible = required();
     compatible.extend(["--output-contract", "bismark"].map(OsString::from));
     assert_eq!(
@@ -294,7 +294,7 @@ fn minimal_is_default_and_bismark_output_is_explicit() {
     let non_directional = parse_options_from(non_directional).expect("non-directional defaults");
     assert_eq!(
         non_directional.library_profile,
-        PairedLibraryProfile::NonDirectional
+        LibraryProfile::NonDirectional
     );
     assert_eq!(
         non_directional.output_contract,

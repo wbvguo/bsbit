@@ -1,7 +1,7 @@
 //! Candidate-frontier construction and ranked exact-block proofs.
 
 use super::{
-    AlignmentError, AlignmentOrientation, Base, BisulfiteStrand, CombinedSearchReferenceExt,
+    AlignmentError, AlignmentOrientation, Base, CombinedSearchReferenceExt, ConversionPass,
     FLEXIBLE_NOMINAL_PROOF, MAX_EDIT_DISTANCE, MAX_READ_BASES, MateRescueWindow,
     PairAlignmentMetrics, ProjectedBase, ProofBlock, RESCUE_BLOCKS, RankedBlockPartition,
     RankedBlockSeed, RankedBlockSelection, ReadCandidate, ReferenceIndex,
@@ -472,19 +472,18 @@ pub(super) fn append_ranked_block_candidates(
     seeds: &[Option<RankedBlockSeed>; SENSITIVE_PROOF_BLOCKS],
     candidates: &mut Vec<ReadCandidate>,
 ) -> Result<u64, AlignmentError> {
+    let conversion_pass = if mate1 {
+        ConversionPass::Original
+    } else {
+        ConversionPass::Complementary
+    };
     let query_len = u64::try_from(read_len).expect("bounded read length fits u64");
     let mut located_rows = 0_u64;
     for seed in seeds.iter().flatten() {
         let metrics = reference
             .visit_combined_seed(seed.matches, seed.query_offset, query_len, &mut |hit| {
-                let strand = if mate1 {
-                    hit.strand()
-                } else {
-                    match hit.strand() {
-                        BisulfiteStrand::OT => BisulfiteStrand::CTOT,
-                        BisulfiteStrand::OB => BisulfiteStrand::CTOB,
-                        BisulfiteStrand::CTOT | BisulfiteStrand::CTOB => return true,
-                    }
+                let Some(strand) = conversion_pass.relabel_combined_hit(hit.strand()) else {
+                    return true;
                 };
                 candidates.push(ReadCandidate {
                     contig_ordinal: hit.contig_ordinal(),

@@ -240,6 +240,18 @@ both decisions globally. With both `--read1` and `--read2`, it runs the
 paired-end path described below. Both layouts publish BAM through the same
 create-only output contract.
 
+Directionality is represented once as a shared library profile rather than as
+four layout-specific command paths. The profile expands to a static conversion
+pass plan: directional alignment runs the original two-strand pass, while
+non-directional alignment additionally runs the complementary two-strand pass.
+Each pass owns query projection and OT/OB-to-CTOT/CTOB hit relabelling. The
+single-end executor still owns read-level distance, classification, and MAPQ;
+the paired-end executor still owns mate permutation, template geometry, pair
+score, rescue, and paired MAPQ. Their result reducers merge cross-pass evidence
+only after each layout-specific pass is complete. This keeps profile selection
+outside candidate hot loops and does not widen the qualified two-lane search
+kernel into a four-lane implementation.
+
 Single-end default mode may classify a verified initial frontier immediately
 and continues only unresolved work. Single-end sensitive mode first preserves
 that exact default result as its incumbent, then replays intervals admitted by

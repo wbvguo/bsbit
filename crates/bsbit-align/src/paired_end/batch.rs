@@ -21,15 +21,14 @@ use super::{
     ADAPTER_STABILITY_DELTA, AdapterFallbackResult, AffineScoreWorkspace, AlignmentError,
     BWA_MATCH_SCORE, BWA_MISMATCH_PENALTY, BWA_NEAR_SUBOPTIMAL_DELTA, Base, BisulfiteStrand,
     CombinedSearchLimits, CombinedSearchReferenceExt, CombinedSeedMatches,
-    CombinedTwoLaneSearchState, DIRECT_SINGLETON_PROOF, INITIAL_EDIT_DISTANCE,
+    CombinedTwoLaneSearchState, ConversionPass, DIRECT_SINGLETON_PROOF, INITIAL_EDIT_DISTANCE,
     INITIAL_SEARCH_LIMITS, MAX_EDIT_DISTANCE, MAX_READ_BASES, MIN_SUFFIX_BASES,
     PAIRED_MAX_EDIT_DISTANCE, PairAlignmentMetrics, PairMappingStatus, PairWorkspace,
     PairedAlignmentOptions, PairedAlignmentResult, PairedAlignmentWorkMetrics, PairedBatchAligner,
-    PairedBatchResult, PairedLibraryProfile, PairedPlacement, PairedSearchMode, ProjectedBase,
-    RankedBlockSeed, RankedBlockSelection, ReadAlignmentMetrics, ReadCandidate, ReadWorkspace,
-    ReferenceIndex, SEMI_GLOBAL_CLIP_PENALTY, SEMI_GLOBAL_MAX_EXACT_ANCHOR_HITS,
-    SEMI_GLOBAL_MIN_ALIGNED_BASES, SENSITIVE_MIN_EVENT_PENALTY,
-    SENSITIVE_POSITIVE_MAPQ_REPORTING_MAX_RETAINED_HITS,
+    PairedBatchResult, PairedPlacement, PairedSearchMode, ProjectedBase, RankedBlockSeed,
+    RankedBlockSelection, ReadAlignmentMetrics, ReadCandidate, ReadWorkspace, ReferenceIndex,
+    SEMI_GLOBAL_CLIP_PENALTY, SEMI_GLOBAL_MAX_EXACT_ANCHOR_HITS, SEMI_GLOBAL_MIN_ALIGNED_BASES,
+    SENSITIVE_MIN_EVENT_PENALTY, SENSITIVE_POSITIVE_MAPQ_REPORTING_MAX_RETAINED_HITS,
     SENSITIVE_POSITIVE_MAPQ_REPORTING_MIN_RETAINED_HITS, SENSITIVE_PROOF_BLOCKS,
     SENSITIVE_RANKED_BLOCK_HITS, SENSITIVE_REPEAT_RECHECK_ROWS,
     SENSITIVE_SELECTIVE_UNMAPPED_RANKED_BLOCK_HITS, SENSITIVE_UNMAPPED_RANKED_BLOCK_HITS,
@@ -119,29 +118,38 @@ impl PairedBatchAligner {
         options: PairedAlignmentOptions,
     ) -> Result<&'a [PairedBatchResult], AlignmentError> {
         let (maximum_edit_distance, window_rescue, semi_global) = options.derived_policy();
-        match options.library_profile {
-            PairedLibraryProfile::Directional => self.map_directional_pairs_combined_inner(
-                reference,
-                reads,
-                maximum_edit_distance,
-                options.minimum_template_span,
-                options.maximum_template_span,
-                window_rescue,
-                semi_global,
-                options.search_mode,
-            ),
-            PairedLibraryProfile::NonDirectional => self
-                .map_non_directional_pairs_combined_with_search_mode(
-                    reference,
-                    reads,
-                    maximum_edit_distance,
-                    options.minimum_template_span,
-                    options.maximum_template_span,
-                    window_rescue,
-                    semi_global,
-                    options.search_mode,
-                ),
+        let passes = options.library_profile.conversion_passes();
+        self.map_pair_conversion_pass(
+            reference,
+            reads,
+            maximum_edit_distance,
+            options.minimum_template_span,
+            options.maximum_template_span,
+            window_rescue,
+            semi_global,
+            options.search_mode,
+            passes[0],
+        )?;
+        if passes.len() == 1 {
+            return Ok(&self.results);
         }
+
+        let original = self.results.clone();
+        self.map_pair_conversion_pass(
+            reference,
+            reads,
+            maximum_edit_distance,
+            options.minimum_template_span,
+            options.maximum_template_span,
+            window_rescue,
+            semi_global,
+            options.search_mode,
+            passes[1],
+        )?;
+        for (complementary, original) in self.results.iter_mut().zip(&original) {
+            *complementary = merge_non_directional_batch_results(original, complementary);
+        }
+        Ok(&self.results)
     }
 
     /// Maps a paired-read batch through the complete qualified output policy.
@@ -170,10 +178,8 @@ impl PairedBatchAligner {
         options: PairedAlignmentOptions,
     ) -> Result<Vec<PairedAlignmentResult>, AlignmentError> {
         self.last_work_metrics = PairedAlignmentWorkMetrics::default();
-        let directional_passes_per_pair = match options.library_profile {
-            PairedLibraryProfile::Directional => 1,
-            PairedLibraryProfile::NonDirectional => 2,
-        };
+        let directional_passes_per_pair =
+            u64::from(options.library_profile.conversion_pass_count());
         let primary = self.map_pairs_combined(reference, reads, options)?.to_vec();
         self.observe_work_metrics(&primary, directional_passes_per_pair);
         let mut adapter_results = vec![None; reads.len()];
@@ -445,7 +451,7 @@ impl PairedBatchAligner {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn map_non_directional_pairs_combined_with_search_mode<'a>(
+    fn map_pair_conversion_pass<'a>(
         &'a mut self,
         reference: &ReferenceIndex,
         reads: &[[&[Base]; 2]],
@@ -455,9 +461,10 @@ impl PairedBatchAligner {
         window_rescue: bool,
         semi_global: bool,
         search_mode: PairedSearchMode,
+        conversion_pass: ConversionPass,
     ) -> Result<&'a [PairedBatchResult], AlignmentError> {
-        let original = self
-            .map_directional_pairs_combined_inner(
+        if !conversion_pass.swaps_mates() {
+            return self.map_directional_pairs_combined_inner(
                 reference,
                 reads,
                 maximum_edit_distance,
@@ -466,33 +473,26 @@ impl PairedBatchAligner {
                 window_rescue,
                 semi_global,
                 search_mode,
-            )?
-            .to_vec();
+            );
+        }
+
         let swapped_reads = reads
             .iter()
             .map(|pair| [pair[1], pair[0]])
             .collect::<Vec<_>>();
-        let complementary = self
-            .map_directional_pairs_combined_inner(
-                reference,
-                &swapped_reads,
-                maximum_edit_distance,
-                minimum_template_span,
-                maximum_template_span,
-                window_rescue,
-                semi_global,
-                search_mode,
-            )?
-            .iter()
-            .copied()
-            .map(swap_batch_result_mates)
-            .collect::<Vec<_>>();
-        self.results.clear();
-        self.results.extend(original.iter().zip(&complementary).map(
-            |(original, complementary)| {
-                merge_non_directional_batch_results(original, complementary)
-            },
-        ));
+        self.map_directional_pairs_combined_inner(
+            reference,
+            &swapped_reads,
+            maximum_edit_distance,
+            minimum_template_span,
+            maximum_template_span,
+            window_rescue,
+            semi_global,
+            search_mode,
+        )?;
+        for result in &mut self.results {
+            *result = swap_batch_result_mates(*result);
+        }
         Ok(&self.results)
     }
 
@@ -530,8 +530,12 @@ impl PairedBatchAligner {
         self.projections
             .resize(reads.len(), [[ProjectedBase::A; MAX_READ_BASES]; 2]);
         for (projection, pair) in self.projections.iter_mut().zip(reads) {
-            prepare_combined_projection(pair[0], false, &mut projection[0])?;
-            prepare_combined_projection(pair[1], true, &mut projection[1])?;
+            prepare_combined_projection(pair[0], ConversionPass::Original, &mut projection[0])?;
+            prepare_combined_projection(
+                pair[1],
+                ConversionPass::Complementary,
+                &mut projection[1],
+            )?;
         }
         let patterns = self
             .projections
@@ -1253,7 +1257,7 @@ impl PairWorkspace {
             [read1, read2],
             projected,
             first_seeds,
-            [false, true],
+            [ConversionPass::Original, ConversionPass::Complementary],
             search_limits,
             &mut self.mate1.candidate_nominals,
             &mut self.mate2.candidate_nominals,
@@ -1550,7 +1554,7 @@ impl PairWorkspace {
             reference,
             [read1, read2],
             projected,
-            [false, true],
+            [ConversionPass::Original, ConversionPass::Complementary],
             &mut self.combined_search_state,
             &mut self.mate1.candidate_nominals,
             &mut self.mate2.candidate_nominals,
@@ -2197,8 +2201,16 @@ impl PairWorkspace {
         let retained = [&read1[ranges[0].clone()], &read2[ranges[1].clone()]];
         let mut first_projected = [SearchBase::A; MAX_READ_BASES];
         let mut second_projected = [SearchBase::A; MAX_READ_BASES];
-        prepare_combined_search_projection(retained[0], false, &mut first_projected)?;
-        prepare_combined_search_projection(retained[1], true, &mut second_projected)?;
+        prepare_combined_search_projection(
+            retained[0],
+            ConversionPass::Original,
+            &mut first_projected,
+        )?;
+        prepare_combined_search_projection(
+            retained[1],
+            ConversionPass::Complementary,
+            &mut second_projected,
+        )?;
         let projected = [
             &first_projected[..retained[0].len()],
             &second_projected[..retained[1].len()],

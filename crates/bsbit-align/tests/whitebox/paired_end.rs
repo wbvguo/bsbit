@@ -87,19 +87,19 @@ fn sensitive_profile_is_separate_and_prefers_whole_read_edits() {
 #[test]
 fn mapping_options_fix_primary_and_adapter_trimmed_policies() {
     let default = PairedAlignmentOptions::primary(
-        PairedLibraryProfile::Directional,
+        LibraryProfile::Directional,
         PairedSearchMode::Default,
         0,
         1_000,
     );
     let sensitive = PairedAlignmentOptions::primary(
-        PairedLibraryProfile::Directional,
+        LibraryProfile::Directional,
         PairedSearchMode::Sensitive,
         0,
         1_000,
     );
     let trimmed = PairedAlignmentOptions::adapter_trimmed(
-        PairedLibraryProfile::Directional,
+        LibraryProfile::Directional,
         PairedSearchMode::Sensitive,
         0,
         1_000,

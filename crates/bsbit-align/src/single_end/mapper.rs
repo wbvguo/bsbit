@@ -10,6 +10,7 @@ use crate::AlignmentError;
 use crate::adapter::{
     ADAPTER_STABILITY_DELTA, MIN_ADAPTER_RETAINED_BASES, supported_three_prime_adapter_start,
 };
+use crate::library::{ConversionPass, LibraryProfile};
 use crate::placement::{ReadPlacement, placement_origin_key};
 use crate::read_mapping_limits::{
     INITIAL_EDIT_DISTANCE, MAX_EDIT_DISTANCE, MAX_READ_BASES, MIN_SUFFIX_BASES,
@@ -208,6 +209,7 @@ pub struct SingleBatchAligner {
     initial_candidates: Vec<Vec<ReadCandidate>>,
     origins: Vec<(u64, BisulfiteStrand, i128)>,
     results: Vec<SingleAlignmentResult>,
+    primary_pass_results: Vec<SingleAlignmentResult>,
     output_results: Vec<SingleAlignmentResult>,
 }
 
@@ -225,6 +227,7 @@ impl SingleBatchAligner {
             initial_candidates: Vec::with_capacity(read_capacity),
             origins: Vec::with_capacity(64),
             results: Vec::with_capacity(read_capacity),
+            primary_pass_results: Vec::with_capacity(read_capacity),
             output_results: Vec::with_capacity(read_capacity),
         }
     }
@@ -274,7 +277,53 @@ impl SingleBatchAligner {
         maximum_edit_distance: u8,
         search_mode: SingleSearchMode,
     ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        self.map_reads_pass(reference, reads, maximum_edit_distance, search_mode, false)
+        self.map_reads_with_profile_and_mode(
+            reference,
+            reads,
+            maximum_edit_distance,
+            LibraryProfile::Directional,
+            search_mode,
+        )
+    }
+
+    /// Maps a batch through the conversion passes selected by one shared
+    /// single-end/paired-end library profile.
+    ///
+    /// Directional mode executes the original OT/OB pass. Non-directional mode
+    /// additionally executes the complementary CTOT/CTOB pass and reduces both
+    /// result sets under the single-end global-placement policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported read/edit domain or combined-index failure.
+    pub fn map_reads_with_profile_and_mode<'a>(
+        &'a mut self,
+        reference: &ReferenceIndex,
+        reads: &[&[Base]],
+        maximum_edit_distance: u8,
+        library_profile: LibraryProfile,
+        search_mode: SingleSearchMode,
+    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
+        let passes = library_profile.conversion_passes();
+        let first = passes[0];
+        self.map_reads_pass(reference, reads, maximum_edit_distance, search_mode, first)?;
+        if passes.len() == 1 {
+            return Ok(&self.results);
+        }
+
+        self.primary_pass_results.clear();
+        self.primary_pass_results.extend_from_slice(&self.results);
+        self.map_reads_pass(
+            reference,
+            reads,
+            maximum_edit_distance,
+            search_mode,
+            passes[1],
+        )?;
+        for (complementary, original) in self.results.iter_mut().zip(&self.primary_pass_results) {
+            *complementary = merge_non_directional_results(*original, *complementary);
+        }
+        Ok(&self.results)
     }
 
     /// Maps each read against OT, OB, CTOT, and CTOB, then makes one global
@@ -294,17 +343,13 @@ impl SingleBatchAligner {
         maximum_edit_distance: u8,
         search_mode: SingleSearchMode,
     ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        let original = self
-            .map_reads_pass(reference, reads, maximum_edit_distance, search_mode, false)?
-            .to_vec();
-        let complementary = self
-            .map_reads_pass(reference, reads, maximum_edit_distance, search_mode, true)?
-            .to_vec();
-        self.results.clear();
-        self.results.extend(original.iter().zip(&complementary).map(
-            |(original, complementary)| merge_non_directional_results(*original, *complementary),
-        ));
-        Ok(&self.results)
+        self.map_reads_with_profile_and_mode(
+            reference,
+            reads,
+            maximum_edit_distance,
+            LibraryProfile::NonDirectional,
+            search_mode,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -314,7 +359,7 @@ impl SingleBatchAligner {
         reads: &[&[Base]],
         maximum_edit_distance: u8,
         search_mode: SingleSearchMode,
-        complementary: bool,
+        conversion_pass: ConversionPass,
     ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
         if maximum_edit_distance > MAX_EDIT_DISTANCE {
             return Err(AlignmentError::UnsupportedEditDistance {
@@ -335,7 +380,7 @@ impl SingleBatchAligner {
                     <= usize::from(maximum_edit_distance);
             self.searchable_reads.push(searchable);
             if searchable {
-                prepare_combined_projection(read, complementary, projection)?;
+                prepare_combined_projection(read, conversion_pass, projection)?;
             }
         }
         let searchable = self
@@ -367,7 +412,7 @@ impl SingleBatchAligner {
             reference,
             reads,
             search_mode.limits(),
-            complementary,
+            conversion_pass,
             false,
         )?;
         self.results.clear();
@@ -400,7 +445,7 @@ impl SingleBatchAligner {
                     prepared,
                     maximum_edit_distance,
                     search_mode,
-                    complementary,
+                    conversion_pass,
                 );
                 let [first_candidates, second_candidates] = initial_candidates;
                 self.initial_candidates[ordinal] = first_candidates;
@@ -425,7 +470,7 @@ impl SingleBatchAligner {
                     },
                     maximum_edit_distance,
                     search_mode,
-                    complementary,
+                    conversion_pass,
                 );
                 self.initial_candidates[ordinal] = initial_candidates;
                 let result = result?;
@@ -436,14 +481,46 @@ impl SingleBatchAligner {
         Ok(&self.results)
     }
 
-    /// Maps complete reads and applies qualified single-end 3' adapter recovery.
+    /// Maps directional complete reads and applies qualified single-end 3'
+    /// adapter recovery.
+    ///
+    /// This compatibility entry point preserves the original directional API.
+    /// New orchestration that already owns a library profile should use
+    /// [`Self::map_reads_for_output_with_profile`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an unsupported read/edit domain or combined-index failure from
+    /// any primary, trimmed, or stability mapping phase.
+    pub fn map_reads_for_output<'a>(
+        &'a mut self,
+        reference: &ReferenceIndex,
+        reads: &[&[Base]],
+        maximum_edit_distance: u8,
+        search_mode: SingleSearchMode,
+    ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
+        self.map_reads_for_output_with_profile(
+            reference,
+            reads,
+            maximum_edit_distance,
+            LibraryProfile::Directional,
+            search_mode,
+        )
+    }
+
+    /// Maps complete reads under one shared library profile and applies the
+    /// qualified single-end output policy.
     ///
     /// Reads with exact supported Illumina adapter evidence enter the compact
     /// trimmed remap. A tentative unique recovery must remain unique at the
     /// same strand-aware biological origin after an additional eight-base
     /// shortening. An otherwise-unmapped read may recover with MAPQ capped at
     /// 20. An already mapped read may only change its reported endpoint at the
-    /// same biological origin, with classification and MAPQ frozen.
+    /// same biological origin, with classification and MAPQ frozen. Adapter
+    /// recovery remains explicitly directional until a separate
+    /// non-directional endpoint policy is qualified; non-directional mapping
+    /// still enters through this output-policy boundary rather than bypassing
+    /// it in the CLI.
     ///
     /// # Errors
     ///
@@ -456,14 +533,24 @@ impl SingleBatchAligner {
     /// matching adapter result, which violates this method's construction
     /// invariant.
     #[allow(clippy::too_many_lines)]
-    pub fn map_reads_for_output<'a>(
+    pub fn map_reads_for_output_with_profile<'a>(
         &'a mut self,
         reference: &ReferenceIndex,
         reads: &[&[Base]],
         maximum_edit_distance: u8,
+        library_profile: LibraryProfile,
         search_mode: SingleSearchMode,
     ) -> Result<&'a [SingleAlignmentResult], AlignmentError> {
-        self.map_reads_with_mode(reference, reads, maximum_edit_distance, search_mode)?;
+        self.map_reads_with_profile_and_mode(
+            reference,
+            reads,
+            maximum_edit_distance,
+            library_profile,
+            search_mode,
+        )?;
+        if matches!(library_profile, LibraryProfile::NonDirectional) {
+            return Ok(&self.results);
+        }
         let mut clipped_reads = Vec::new();
         let mut clipped_metadata = Vec::new();
 
@@ -485,10 +572,11 @@ impl SingleBatchAligner {
         let mut adapter_results = vec![None; reads.len()];
         {
             let remapped = self
-                .map_reads_with_mode(
+                .map_reads_with_profile_and_mode(
                     reference,
                     &clipped_reads,
                     maximum_edit_distance,
+                    library_profile,
                     search_mode,
                 )?
                 .to_vec();
@@ -523,10 +611,11 @@ impl SingleBatchAligner {
 
             if !stability_reads.is_empty() {
                 let stability = self
-                    .map_reads_with_mode(
+                    .map_reads_with_profile_and_mode(
                         reference,
                         &stability_reads,
                         maximum_edit_distance,
+                        library_profile,
                         search_mode,
                     )?
                     .to_vec();
@@ -645,7 +734,7 @@ impl SingleBatchAligner {
         reference: &ReferenceIndex,
         reads: &[&[Base]],
         completion_limits: CombinedSearchLimits,
-        complementary: bool,
+        conversion_pass: ConversionPass,
         complete_candidate_frontier: bool,
     ) -> Result<(), AlignmentError> {
         const MAX_LANES: usize = 64;
@@ -755,7 +844,8 @@ impl SingleBatchAligner {
                             }),
                             &mut |lane, hit| {
                                 let ordinal = ordinals[lane];
-                                let Some(strand) = single_pass_strand(hit.strand(), complementary)
+                                let Some(strand) =
+                                    conversion_pass.relabel_combined_hit(hit.strand())
                                 else {
                                     return;
                                 };
@@ -800,7 +890,8 @@ impl SingleBatchAligner {
                                 .unwrap_or(u64::MAX),
                             u64::try_from(reads[ordinal].len()).unwrap_or(u64::MAX),
                             &mut |hit| {
-                                let Some(strand) = single_pass_strand(hit.strand(), complementary)
+                                let Some(strand) =
+                                    conversion_pass.relabel_combined_hit(hit.strand())
                                 else {
                                     return true;
                                 };
@@ -854,7 +945,7 @@ impl SingleBatchAligner {
         prepared: PreparedSingleRead<'_>,
         maximum_edit_distance: u8,
         search_mode: SingleSearchMode,
-        complementary: bool,
+        conversion_pass: ConversionPass,
     ) -> Result<SingleAlignmentResult, AlignmentError> {
         let PreparedSingleRead {
             read,
@@ -909,7 +1000,7 @@ impl SingleBatchAligner {
                 reference,
                 [read, &[]],
                 [projection, &[]],
-                [complementary, false],
+                [conversion_pass, ConversionPass::Original],
                 &mut search,
                 &mut read_workspace.candidate_nominals,
                 &mut unused_workspace.candidate_nominals,
@@ -948,7 +1039,7 @@ impl SingleBatchAligner {
             reference,
             [read, &[]],
             [projection, &[]],
-            [complementary, false],
+            [conversion_pass, ConversionPass::Original],
             search_mode.limits(),
             true,
             &mut completion_search,
@@ -990,7 +1081,7 @@ impl SingleBatchAligner {
         prepared: [PreparedSingleRead<'_>; 2],
         maximum_edit_distance: u8,
         search_mode: SingleSearchMode,
-        complementary: bool,
+        conversion_pass: ConversionPass,
     ) -> Result<[SingleAlignmentResult; 2], AlignmentError> {
         let reads = prepared.map(|input| input.read);
         let projections = prepared.map(|input| input.projection);
@@ -1102,7 +1193,7 @@ impl SingleBatchAligner {
                 reference,
                 reads,
                 projections,
-                [complementary; 2],
+                [conversion_pass; 2],
                 &mut search,
                 &mut first_workspace.candidate_nominals,
                 &mut second_workspace.candidate_nominals,
@@ -1147,7 +1238,7 @@ impl SingleBatchAligner {
             reference,
             reads,
             projections,
-            [complementary; 2],
+            [conversion_pass; 2],
             search_mode.limits(),
             true,
             &mut completion_search,
@@ -1346,20 +1437,6 @@ impl SingleBatchAligner {
             adapter_status: None,
             adapter_clipped_bases: 0,
         }
-    }
-}
-
-const fn single_pass_strand(
-    strand: BisulfiteStrand,
-    complementary: bool,
-) -> Option<BisulfiteStrand> {
-    if !complementary {
-        return Some(strand);
-    }
-    match strand {
-        BisulfiteStrand::OT => Some(BisulfiteStrand::CTOT),
-        BisulfiteStrand::OB => Some(BisulfiteStrand::CTOB),
-        BisulfiteStrand::CTOT | BisulfiteStrand::CTOB => None,
     }
 }
 

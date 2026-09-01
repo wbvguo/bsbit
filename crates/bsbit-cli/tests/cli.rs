@@ -276,6 +276,26 @@ fn align_paired_metrics(snapshot: &Path, read1: &Path, read2: &Path, output_bam:
     ])
 }
 
+fn align_paired_non_directional(
+    snapshot: &Path,
+    read1: &Path,
+    read2: &Path,
+    output_bam: &Path,
+) -> Output {
+    run([
+        OsString::from("align"),
+        OsString::from("--index"),
+        snapshot.as_os_str().to_owned(),
+        OsString::from("-1"),
+        read1.as_os_str().to_owned(),
+        OsString::from("-2"),
+        read2.as_os_str().to_owned(),
+        OsString::from("--output-bam"),
+        output_bam.as_os_str().to_owned(),
+        OsString::from("--non-directional"),
+    ])
+}
+
 fn align_single_sensitive(snapshot: &Path, read1: &Path, output_bam: &Path) -> Output {
     run([
         OsString::from("align"),
@@ -1052,6 +1072,7 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     let read2 = directory.join("r2.fq");
     let single_bam = directory.join("single.bam");
     let paired_bam = directory.join("paired.bam");
+    let paired_non_directional_bam = directory.join("paired-non-directional.bam");
     let paired_metrics_bam = directory.join("paired-metrics.bam");
 
     fs::write(&reference, b">chr\nAACCGTGATCTAGGCTTACGGAAT\n").expect("reference");
@@ -1062,6 +1083,12 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     assert_success(&index(&reference, &index_path));
     assert_success(&align(&index_path, &single_reads, None, &single_bam));
     assert_success(&align(&index_path, &read1, Some(&read2), &paired_bam));
+    assert_success(&align_paired_non_directional(
+        &index_path,
+        &read1,
+        &read2,
+        &paired_non_directional_bam,
+    ));
     let metrics_output = align_paired_metrics(&index_path, &read1, &read2, &paired_metrics_bam);
     assert_paired_metrics_v2(&metrics_output);
 
@@ -1089,6 +1116,11 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     assert_eq!(first_flag & 0x41, 0x41);
     assert_eq!(second_flag & 0x81, 0x81);
 
+    let paired_non_directional = decode_process_bam(&paired_non_directional_bam);
+    assert_eq!(paired_non_directional.len(), 2);
+    assert_eq!(paired_non_directional[0][0], b"pair");
+    assert_eq!(paired_non_directional[1][0], b"pair");
+
     let single_header = decode_process_bam_header(&single_bam);
     assert!(
         single_header
@@ -1100,6 +1132,12 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
         paired_header
             .windows(b"alignment-mode=caller-compatible-directional-paired".len())
             .any(|window| window == b"alignment-mode=caller-compatible-directional-paired")
+    );
+    let paired_non_directional_header = decode_process_bam_header(&paired_non_directional_bam);
+    assert!(
+        paired_non_directional_header
+            .windows(b"alignment-mode=caller-compatible-nondirectional-paired".len())
+            .any(|window| { window == b"alignment-mode=caller-compatible-nondirectional-paired" })
     );
 
     let occupied = directory.join("occupied.bam");

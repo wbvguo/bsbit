@@ -136,11 +136,11 @@ fn non_directional_runner_up_caps_mapq_and_combines_repeat_pressure() {
 #[test]
 fn complementary_pass_relabels_both_search_strands() {
     assert_eq!(
-        single_pass_strand(BisulfiteStrand::OT, true),
+        ConversionPass::Complementary.relabel_combined_hit(BisulfiteStrand::OT),
         Some(BisulfiteStrand::CTOT)
     );
     assert_eq!(
-        single_pass_strand(BisulfiteStrand::OB, true),
+        ConversionPass::Complementary.relabel_combined_hit(BisulfiteStrand::OB),
         Some(BisulfiteStrand::CTOB)
     );
 }

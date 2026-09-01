@@ -5,6 +5,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use bsbit_align::library::LibraryProfile;
 use bsbit_align::materialize::traceback_read_placement;
 use bsbit_align::single_end::{
     SingleAlignmentResult, SingleBatchAligner, SingleMappingStatus, SingleSearchMode,
@@ -144,7 +145,7 @@ pub(crate) struct SingleEndCommandOptions {
     pub(crate) read1: PathBuf,
     pub(crate) output_bam: PathBuf,
     pub(crate) search_mode: SingleSearchMode,
-    pub(crate) non_directional: bool,
+    pub(crate) library_profile: LibraryProfile,
     pub(crate) max_edit_distance: u64,
     pub(crate) batch_records: u64,
     pub(crate) threads: u64,
@@ -160,10 +161,9 @@ pub(crate) fn run_single_end(options: &SingleEndCommandOptions) -> Result<RunRep
     let reference_started = options.emit_metrics.then(Instant::now);
     let (reference, semantic_digest) = load_index(options)?;
     let reference_load_ns = elapsed_ns(reference_started);
-    let alignment_mode = if options.non_directional {
-        BsbitAlignmentMode::CallerCompatibleNondirectionalSingle
-    } else {
-        BsbitAlignmentMode::CallerCompatibleDirectionalSingle
+    let alignment_mode = match options.library_profile {
+        LibraryProfile::Directional => BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
+        LibraryProfile::NonDirectional => BsbitAlignmentMode::CallerCompatibleNondirectionalSingle,
     };
     let completion = run_single_align(
         options,
@@ -455,22 +455,15 @@ fn map_single_records(
                 .sequence()
         }));
         let mapping_started = options.emit_metrics.then(Instant::now);
-        let mapped = if options.non_directional {
-            aligner.map_reads_non_directional_with_mode(
+        let mapped = aligner
+            .map_reads_for_output_with_profile(
                 reference,
                 &reads,
                 maximum_edit_distance,
+                options.library_profile,
                 options.search_mode,
             )
-        } else {
-            aligner.map_reads_for_output(
-                reference,
-                &reads,
-                maximum_edit_distance,
-                options.search_mode,
-            )
-        }
-        .map_err(|error| CliError::operation(format!("align: map single batch: {error}")))?;
+            .map_err(|error| CliError::operation(format!("align: map single batch: {error}")))?;
         observation.mapping_worker_ns = observation
             .mapping_worker_ns
             .saturating_add(elapsed_ns(mapping_started));
