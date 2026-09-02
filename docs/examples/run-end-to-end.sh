@@ -42,6 +42,7 @@ samtools quickcheck -v "$output_dir/alignment.analysis.bam"
   --vcf "$output_dir/variants.vcf" \
   --sample-name demo \
   --compress false \
+  --min-depth 4 \
   --threads 2
 
 "$binary_dir/bsbit" combine \
