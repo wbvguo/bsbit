@@ -19,13 +19,15 @@ use crate::meth::aggregation::{
     DenseMethRegion, accumulate_meth_fragment, meth_dense_bytes_per_block,
 };
 use crate::reference_context::CallReferenceReader;
-use crate::region::CallRegion;
+use crate::region::{CallRegion, RegionAggregation};
 use crate::snp::candidate::{CandidateRegion, CandidateSite, snp_region_bytes_per_block};
 use crate::snp::likelihood::{LikelihoodRegion, likelihood_site_bytes};
-use crate::snp::result::{SnpConfig, VariantCall};
+use crate::snp::result::SnpConfig;
 
 #[cfg(test)]
 use crate::meth::aggregation::{CallKind, SiteCounts, SiteKey};
+#[cfg(test)]
+use crate::snp::result::VariantCall;
 
 const MAX_REGION_BASES: u32 = 1 << 20;
 const MIN_REGION_BASES: u32 = 1 << 12;
@@ -128,12 +130,6 @@ fn likelihood_batch_sites_for(worker_count: usize) -> usize {
             MIN_SNP_LIKELIHOOD_BATCH_SITES,
             MAX_SNP_LIKELIHOOD_BATCH_SITES,
         )
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct RegionAggregation {
-    pub(crate) meth: Option<DenseMethRegion>,
-    pub(crate) variants: Vec<(u32, VariantCall)>,
 }
 
 #[cfg(test)]

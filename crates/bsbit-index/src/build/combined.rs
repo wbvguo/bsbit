@@ -28,14 +28,12 @@ use super::combined_blocks::{
 };
 #[cfg(test)]
 use crate::build::libsais::{libsais_bwt_aux_omp, libsais64_bwt_aux_omp};
-use crate::storage::combined::{
-    BWT_WORDS_PER_128_ROWS, CombinedIndexSaStride, META_BYTES, META_BYTES_U32, META_DIGEST_OFFSET,
-    META_EXTENSION_MAGIC, META_EXTENSION_MAJOR, META_EXTENSION_OFFSET, SA_FLAG_WORDS_PER_256_ROWS,
-    lf_all_boundaries,
-};
 use crate::storage::combined::{CombinedIndex, CombinedIndexError, ReadOnlyMapping};
+use crate::storage::combined::{CombinedIndexSaStride, lf_all_boundaries};
 use crate::storage::combined_format::{
-    HIGH_OCC_STRIDE, LOOKUP_BASES, LOOKUP_ENTRIES, LOOKUP_KEYS_USIZE, OCC_STRIDE, suffixed_path,
+    BWT_WORDS_PER_128_ROWS, HIGH_OCC_STRIDE, LOOKUP_BASES, LOOKUP_ENTRIES, LOOKUP_KEYS_USIZE,
+    META_BYTES, META_BYTES_U32, META_DIGEST_OFFSET, META_EXTENSION_MAGIC, META_EXTENSION_MAJOR,
+    META_EXTENSION_OFFSET, OCC_STRIDE, SA_FLAG_WORDS_PER_256_ROWS, suffixed_path,
 };
 
 /// Default sparse suffix-array stride used by the qualified low-memory index.

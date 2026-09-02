@@ -27,7 +27,7 @@ use crate::storage::reference_catalog::{
 };
 use bsbit_core::reference::ReferenceSemanticDigest;
 
-pub(crate) use super::combined_format::{
+use super::combined_format::{
     BWT_WORDS_PER_128_ROWS, META_BYTES, META_BYTES_U32, META_DIGEST_OFFSET, META_EXTENSION_MAGIC,
     META_EXTENSION_MAJOR, META_EXTENSION_MINOR, META_EXTENSION_MINOR_SA8, META_EXTENSION_OFFSET,
     SA_FLAG_WORDS_PER_256_ROWS,

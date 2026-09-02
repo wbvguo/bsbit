@@ -24,7 +24,7 @@ use bsbit_index::reference::{ContigId, ReferenceIndex};
 use bsbit_index::storage::combined::load_combined_reference_catalog;
 use bsbit_io::validate_create_target;
 
-use super::{ReadOutputMode, output_contract_name};
+use super::{ReadOutputMode, library_profile_name, output_contract_name};
 use crate::parallel::{
     DispatchError, ProducerOutcome, WorkDispatcher, WorkerOutcome, run_ordered_parallel,
 };
@@ -838,10 +838,7 @@ fn write_single_metrics(
         options.threads.to_string(),
         options.bam_threads.to_string(),
         output_contract_name(options.output_contract).to_owned(),
-        match options.library_profile {
-            LibraryProfile::Directional => "directional".to_owned(),
-            LibraryProfile::NonDirectional => "non-directional".to_owned(),
-        },
+        library_profile_name(options.library_profile).to_owned(),
         search_mode.to_owned(),
         reference_load_ns.to_string(),
         process_total_ns.to_string(),

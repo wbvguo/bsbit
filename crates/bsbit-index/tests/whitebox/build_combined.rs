@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::reference::ContigInput;
-use crate::storage::combined::{META_EXTENSION_MINOR, META_EXTENSION_MINOR_SA8};
+use crate::storage::combined_format::{META_EXTENSION_MINOR, META_EXTENSION_MINOR_SA8};
 use bsbit_core::sequence::normalize_dna;
 
 use super::*;

@@ -26,7 +26,7 @@ use bsbit_index::storage::combined::{
     CombinedIndexSaStride, combined_index_sa_stride_hint, load_combined_reference_catalog,
 };
 
-use super::{ReadOutputMode, output_contract_name};
+use super::{ReadOutputMode, library_profile_name, output_contract_name};
 use crate::command::{ReadLayout, caller_compatible_alignment_mode, internal_search_file_prefix};
 use crate::cpu_placement::CpuPlacement;
 use crate::record_composition::{PairedRecordComposer, build_sam_header};
@@ -1017,13 +1017,6 @@ pub(super) fn throughput_thread_split(total_threads: usize, fast_index: bool) ->
         total_threads - output_threads,
         u32::try_from(output_threads).expect("bounded output thread count fits u32"),
     )
-}
-
-const fn library_profile_name(profile: LibraryProfile) -> &'static str {
-    match profile {
-        LibraryProfile::Directional => "directional",
-        LibraryProfile::NonDirectional => "non-directional",
-    }
 }
 
 const fn soft_clip_fallback_name(mode: PairedSearchMode) -> &'static str {

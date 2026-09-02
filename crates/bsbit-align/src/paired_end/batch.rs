@@ -1,6 +1,5 @@
 //! Paired-batch orchestration and reusable worker state.
 
-use super::endpoint::supported_three_prime_adapter_start;
 use super::frontier::{
     append_ranked_block_candidates, collect_ranked_block_seeds,
     selective_unmapped_frontier_deepening_required,
@@ -40,6 +39,7 @@ use super::{
     sensitive_two_way_parsimony_q20_certified, sort_nominal_candidates,
     start_combined_two_lane_search,
 };
+use crate::adapter::supported_three_prime_adapter_start;
 
 impl PairedBatchAligner {
     /// Allocates reusable mapping storage for at least `pair_capacity` pairs.

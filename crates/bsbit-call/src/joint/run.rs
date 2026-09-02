@@ -6,7 +6,7 @@ use super::Options;
 use crate::call_input::{prepare_call_input, resolve_sample_name, validate_explicit_sample_name};
 use crate::meth::output::{UnresolvedContextSummary, render_region as render_meth_region};
 use crate::publication::{create_text_staging, output_write_error, publication_warning};
-use crate::region::workers::{IndexedCallMode, stream_indexed_region_workers_mode};
+use crate::region::{IndexedCallMode, stream_indexed_region_workers_mode};
 use crate::snp::output::{render_header as render_vcf_header, render_region as render_vcf_region};
 use crate::snp::result::SnpConfig;
 use crate::{CallError, CallErrorKind, CallReport};

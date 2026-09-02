@@ -7,6 +7,10 @@ use crate::AlignmentError;
 use crate::adapter::{
     ADAPTER_STABILITY_DELTA, MIN_ADAPTER_RETAINED_BASES, THREE_PRIME_ADAPTER_MAX_CLIP_BASES,
 };
+#[cfg(test)]
+use crate::adapter::{
+    sequencing_three_prime_adapter_supported, supported_three_prime_adapter_start,
+};
 use crate::placement::{
     ReadPlacement, SEMI_GLOBAL_EDIT_PENALTY, placement_net_gap_bases, placement_origin_key,
 };
@@ -70,10 +74,7 @@ use self::batch::{
     sensitive_targeted_semi_global_required, swap_batch_result_mates,
 };
 #[cfg(test)]
-use self::endpoint::{
-    best_ungapped_semi_global_placement, placement_endpoint_cost,
-    sequencing_three_prime_adapter_supported, supported_three_prime_adapter_start,
-};
+use self::endpoint::{best_ungapped_semi_global_placement, placement_endpoint_cost};
 #[cfg(test)]
 use self::frontier::{
     append_local_flexible_proof_candidates, ranked_block_boundaries,

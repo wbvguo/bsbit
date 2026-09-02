@@ -118,6 +118,13 @@ pub(super) const fn output_contract_name(mode: AlignmentAuxiliaryMode) -> &'stat
     }
 }
 
+pub(super) const fn library_profile_name(profile: LibraryProfile) -> &'static str {
+    match profile {
+        LibraryProfile::Directional => "directional",
+        LibraryProfile::NonDirectional => "non-directional",
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ParsedOptions {
     index: PathBuf,

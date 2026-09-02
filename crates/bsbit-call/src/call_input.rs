@@ -7,8 +7,9 @@ use bsbit_core::reference::ReferenceSemanticDigest;
 use bsbit_hts::IndexedBamReader;
 
 use crate::reference_context::CallReferenceReader;
-use crate::region::workers::{IndexedCallMode, region_bases_for};
-use crate::region::{CallRegion, RegionSelection, plan_call_regions};
+use crate::region::{
+    CallRegion, IndexedCallMode, RegionSelection, plan_call_regions, region_bases_for,
+};
 use crate::{CallError, CallErrorKind};
 
 /// One validated entry from the input BAM reference dictionary.

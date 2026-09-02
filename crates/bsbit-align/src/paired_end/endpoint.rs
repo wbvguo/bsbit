@@ -1,9 +1,6 @@
 //! Bounded endpoint-placement policy with shared adapter evidence.
 
-pub(super) use crate::adapter::{
-    read_has_supported_three_prime_adapter, sequencing_three_prime_adapter_supported,
-    supported_three_prime_adapter_start,
-};
+use crate::adapter::sequencing_three_prime_adapter_supported;
 
 use super::{
     Base, BoundedSemiglobalConfig, EndpointKey, ORIGIN_ENDPOINT_ADAPTER_CLIP_EXTENSION_PENALTY,

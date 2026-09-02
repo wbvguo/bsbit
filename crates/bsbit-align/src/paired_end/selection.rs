@@ -2,7 +2,6 @@
 
 use super::endpoint::{
     best_ungapped_origin_endpoint_placement, pair_endpoint_key, placement_endpoint_cost,
-    read_has_supported_three_prime_adapter,
 };
 use super::{
     AffineScoreWorkspace, AlignmentError, AlignmentOrientation, BWA_MISMATCH_PENALTY, Base,
@@ -11,6 +10,7 @@ use super::{
     SENSITIVE_CLIP_PENALTY, banded_affine_score, placement_net_gap_bases, placement_origin_key,
     strand_index, strand_semantics,
 };
+use crate::adapter::read_has_supported_three_prime_adapter;
 
 pub(super) fn candidate_for_origin_endpoint(
     placement: ReadPlacement,
