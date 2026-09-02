@@ -921,11 +921,12 @@ fn parse_program_description(
         .ok_or(BsbitProgramProvenanceError::MalformedDescription)?;
     let (digest_text, mode_text) = digest_text.split_at(delimiter_offset);
     let mode_text = &mode_text[delimiter.len()..];
-    if digest_text.len() != 64 {
+    let mut digest = [0_u8; 32];
+    let (digest_pairs, remainder) = digest_text.as_chunks::<2>();
+    if digest_pairs.len() != digest.len() || !remainder.is_empty() {
         return Err(BsbitProgramProvenanceError::MalformedDescription);
     }
-    let mut digest = [0_u8; 32];
-    for (target, pair) in digest.iter_mut().zip(digest_text.chunks_exact(2)) {
+    for (target, pair) in digest.iter_mut().zip(digest_pairs) {
         *target = (hex_digit(pair[0])? << 4) | hex_digit(pair[1])?;
     }
     let alignment_mode = BsbitAlignmentMode::from_header_value(mode_text)
