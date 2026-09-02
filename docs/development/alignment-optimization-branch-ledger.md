@@ -6,13 +6,17 @@ output-identity gates, integration point, and branch disposition so that an
 experiment does not need to remain as a Git branch merely to preserve its
 result.
 
-## Canonical result and exclusions
+## Integrated result and completed cleanup
 
-The canonical integration branch is `codex/align-optimized-integration`. Its
-qualified code commit is `def3857`; it combines the full optimization branch,
-the single-end hot-path/endpoint branch, the retained metrics-v2 subset from
-the throughput exploration, non-directional single-end support, and the final
-single-end sensitive-accuracy audit.
+The qualified alignment optimization result is retained directly in `dev`.
+Its historical integration commit is `def3857`; it combines the full
+optimization branch, the single-end hot-path/endpoint branch, the retained
+metrics-v2 subset from the throughput exploration, non-directional single-end
+support, and the final single-end sensitive-accuracy audit. The former
+`codex/align-optimized-integration` branch was removed after `def3857` was
+confirmed as an ancestor of `dev`. The later `ba33d5f` merge retained this
+history while completing the call/reference and documentation integration.
+Only the local `main` and `dev` branches remain.
 
 `codex/single-sensitive-accuracy` and `codex/non-directional-single-end` were
 explicitly excluded from the first cleanup snapshot because separate Codex
@@ -21,23 +25,27 @@ worktrees were clean, the non-directional tip `a237f51` was merged by
 `b754ce7`, then the sensitive-accuracy tip `63d0f62` was merged by `def3857`.
 Their worktrees and local branches were removed after the post-merge
 qualification below. The dirty primary checkout and detached
-`align-general-reference` worktree were left untouched.
+`align-general-reference` checkout were initially left untouched. The primary
+checkout now runs `dev`. The detached checkout later lost its registered
+worktree metadata; before removal, all 241 non-`.git` file blobs were verified
+to match the historical `6578c31` and `1d3167b` snapshots, so it contained no
+unique file content. The orphaned directory was then removed.
 
 ## Branch disposition
 
-| Local branch | Recorded tip | Disposition | Reason |
+| Local branch | Recorded tip | Final disposition | Reason |
 | --- | --- | --- | --- |
-| `codex/align-full-optimization` | `5db3aa3` | delete | Fully contained in the integration branch. |
-| `codex/align-performance-experiments` | `a8f4436` | delete | Fully contained in `align-full-optimization`; reports and TSV files remain in the integration branch. |
-| `codex/single-end-hotpath-endpoint` | `adc3fda` | delete | Merged by integration commit `32755d7`. |
-| `codex/single-end-adapter-recovery` | `dc4e07d` | delete | Fully contained in `single-end-hotpath-endpoint`. |
-| `codex/paired-end-modularization` | `183d73e` | delete | Tip is the current `dev` baseline. |
-| `codex/single-end-sensitive` | `6341e6f` | delete | Already an ancestor of `dev` and the integration branch. |
-| `codex/alignment-locate-wavefront` | `76f599a` | delete | All source candidates regressed; only the measurements below were retained. |
-| `codex/alignment-throughput` | `6ee2de0` | delete | Metrics v2 was selectively ported by `8bed5f5` and qualified by `82e4984`; the other source candidates regressed. |
-| `codex/align-optimized-integration` | `def3857` | keep | Canonical qualified optimization result containing both formerly active branches. |
-| `codex/single-sensitive-accuracy` | `63d0f62` | delete | Merged by `def3857`; post-merge tests and 5M validation passed. |
-| `codex/non-directional-single-end` | `a237f51` | delete | Merged by `b754ce7`; post-merge tests and 5M validation passed. |
+| `codex/align-full-optimization` | `5db3aa3` | deleted | Fully contained in the integration history now retained by `dev`. |
+| `codex/align-performance-experiments` | `a8f4436` | deleted | Fully contained in `align-full-optimization`; reports and TSV files remain checked in. |
+| `codex/single-end-hotpath-endpoint` | `adc3fda` | deleted | Merged by integration commit `32755d7`. |
+| `codex/single-end-adapter-recovery` | `dc4e07d` | deleted | Fully contained in `single-end-hotpath-endpoint`. |
+| `codex/paired-end-modularization` | `183d73e` | deleted | Tip is an ancestor of `dev`. |
+| `codex/single-end-sensitive` | `6341e6f` | deleted | Already an ancestor of `dev` and the integration history. |
+| `codex/alignment-locate-wavefront` | `76f599a` | deleted | All source candidates regressed; only the measurements below were retained. |
+| `codex/alignment-throughput` | `6ee2de0` | deleted | Metrics v2 was selectively ported by `8bed5f5` and qualified by `82e4984`; the other source candidates regressed. |
+| `codex/align-optimized-integration` | `def3857` | deleted | Qualified result is retained as an ancestor of `dev`. |
+| `codex/single-sensitive-accuracy` | `63d0f62` | deleted | Merged by `def3857`; post-merge tests and 5M validation passed. |
+| `codex/non-directional-single-end` | `a237f51` | deleted | Merged by `b754ce7`; post-merge tests and 5M validation passed. |
 
 ## Frozen benchmark contract
 
@@ -157,8 +165,9 @@ stride-8 5M validation runs then produced:
 All three BAMs passed `samtools quickcheck`; counts, flag summaries,
 caller-compatible provenance, timings, RSS, input/index hashes, and complete
 built-in metrics are recorded in the merged-integration evidence directory.
-The two source tips were confirmed ancestors of the integration head before
-their clean worktrees and local branches were removed.
+The two source tips were confirmed ancestors of `def3857`, and `def3857` was
+confirmed as an ancestor of `dev`, before their clean worktrees and local
+branches were removed.
 
 ## Checked-in evidence
 
