@@ -129,7 +129,7 @@ cargo test --locked --workspace
 Formal fuzz, native-boundary, platform-publication, and release-soak entry
 points are indexed in [scripts/README.md](scripts/README.md). Large references,
 FASTQ inputs, BAM outputs, profiling data, and benchmark runs remain under
-ignored `workspace/` or `agent/`; they are not required by the default suite.
+ignored `dev/` or `workspace/`; neither is required by the default suite.
 
 ## Project boundaries and evidence
 

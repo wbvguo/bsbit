@@ -13,13 +13,16 @@ previous build output, or benchmark results.
 | `tests/` | Cross-crate fixtures, formal test support, and the independent Rust fuzz workspace | Yes | Tests only |
 | `scripts/` | Reproducible build, release, and formal validation entry points | Yes | No |
 | `docs/` | Final pages published by the MkDocs website | Yes | No |
-| `agent/` | Agent-owned independent worktrees, new algorithm/feature incubation, and complete historical attempt records under `agent/worktree/` | No | Never |
-| `workspace/` | Shared local datasets/tools, reusable or user scripts, local result summaries, manuscript work, and user-owned runs | No | Never |
+| `dev/` | Human-maintained local scripts, notebooks, experiments, source data, manuscript work, and comparison tools | No | Never |
+| `workspace/` | Agent-generated attempts, notes, one-off scripts, logs, benchmark results, and generated data | No | Never |
 | `target/`, `build/`, `dist/`, `artifacts/` | Regenerable output | No | Never |
 
-`agent/` and `workspace/` are intentionally ignored in their entirety. Their
-absence is normal. Locally, every agent attempt uses one informative
-`agent/worktree/YYYY-MM-DD--topic/` directory with a README recording background,
+`dev/` and `workspace/` are intentionally ignored in their entirety, and their
+absence is normal. `dev/` is maintained by people; Agents read it by default
+and modify it only when explicitly requested. `dev/data/` is the local authority
+for large human-maintained source inputs. Locally, every Agent attempt uses one
+informative `workspace/worktree/YYYY-MM-DD--title/` directory with a README
+recording background,
 design, immutable inputs/code state, results, conclusion, and follow-up. Repeated
 measurements, logs, profiles, one-off agent scripts, and generated BAMs remain
 with that attempt. When code isolation is required, the registered detached Git
@@ -28,21 +31,25 @@ worktree lives in that attempt's `checkout/` subdirectory and is removed with
 has exactly one canonical date; cross-day
 activity spans belong in the README. When a successor fully replaces the same
 experiment, only the latest retained result remains top-level and unique
-predecessor evidence moves under its `history/` directory. Shared inputs and
-third-party tools may be referenced from `workspace/` instead of copied.
+predecessor evidence moves under its `history/` directory. Human-maintained
+inputs, benchmark tooling, and third-party tools may be referenced from `dev/`
+instead of copied.
 
-`workspace/` is not a second experiment archive. It is the stable local supply
-surface for `datasets/`, `tools/`, reusable/user-runnable `code/` and `scripts/`,
-cross-attempt summaries and compact evidence under `docs/`, manuscript work,
-and runs explicitly initiated by the user. An agent that runs the same harness
-writes its attempt and outputs under `agent/worktree/`.
+Within `dev/`, `benchmarks/` contains long-lived harness and analysis code,
+`data/` contains authoritative source inputs, `analysis/` contains human-owned
+notebooks, `manuscript/` contains the working preprint, and `tools/` contains
+local comparison-tool installations. Within `workspace/`, `worktree/` is the
+dated experiment archive; `benchmarks/`, `datasets/`, and `docs/` contain
+generated run archives, reusable derivatives, and Agent summaries. An Agent
+that runs a harness writes its attempt and output under
+`workspace/worktree/YYYY-MM-DD--title/`.
 
 ## Dependency direction
 
 Product dependencies flow from the CLI into safe Rust libraries and then into
 the narrow SIMD, filesystem, HTSlib, and libsais boundaries. Formal tests may
 depend on product code and `tests/fixtures/`; release code must not depend on
-tests, scripts, docs, `agent/`, `workspace/`, or generated output. Development
+tests, scripts, docs, `dev/`, `workspace/`, or generated output. Development
 candidates exercise tracked code through stable public/test boundaries or a
 detached worktree; they do not become dependencies of the live workspace.
 
@@ -62,11 +69,12 @@ policy at runtime.
 
 Before adding a file, decide whether it is required by the shipped product, a
 repeatable formal test, current documentation, fixed external source, an
-agent-run attempt, shared local work data/tooling, or generated output. Raw
-agent benchmark rows and complete dated reports belong to their
-`agent/worktree/` attempt; reusable internal summaries belong under
-`workspace/docs/`; user-owned runs may remain under
-`workspace/benchmarks/runs/`. Only final website-facing documentation and the
+agent-run attempt, human-maintained local asset, or generated output.
+Human-maintained scripts, notebooks, experiments, source data, manuscript work,
+and tools belong under `dev/`. Raw Agent benchmark rows and complete dated
+reports belong to their `workspace/worktree/` attempt; reusable internal
+summaries belong under `workspace/docs/`; promoted run archives may remain
+under `workspace/benchmarks/runs/`. Only final website-facing documentation and the
 compact immutable TSV snapshots linked by that documentation belong in
 `docs/`; complete run archives remain local.
 
@@ -76,14 +84,15 @@ unit tests or in `tests/whitebox/`, and local-data checks in
 `tests/qualification/`. Test-only oracles reused by ordinary integration tests
 belong in `tests/support/`; neither support code nor qualification code is a
 product module. All unqualified implementation variants and their switches
-belong in a dated ignored `agent/worktree/` attempt, not under a crate. Once
+belong in a dated ignored `workspace/worktree/` attempt, not under a crate. Once
 qualified, promote only the selected implementation into `src/` under a stable
 name and add the smallest durable test at the appropriate boundary. Once
 rejected or superseded, keep it out of the live feature graph, record its
 verdict and recovery commit in the tracked retired-feature registry, and keep
-any full local snapshot or measurement only in `agent/worktree/`. Git history is
+any full local snapshot or measurement only in `workspace/worktree/`. Git history is
 the durable source archive.
 
 A fixture moves into `tests/fixtures/` only when it is small, stable,
-redistributable, auditable, and required by an automated test. Large FASTQ,
-FASTA, BAM, index images, and profiles remain local work data.
+redistributable, auditable, and required by an automated test. Human-maintained
+large FASTQ/FASTA inputs and reusable indexes remain under `dev/data/`; Agent
+generated BAMs, indexes, and profiles remain under `workspace/`.

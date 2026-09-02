@@ -20,7 +20,7 @@ cargo clippy --locked --workspace --all-targets --all-features \
 cargo build --locked --release -p bsbit-cli --bin bsbit
 ```
 
-This gate must pass when `agent/`, `workspace/`, `target/`, `build/`, and
+This gate must pass when `dev/`, `workspace/`, `target/`, `build/`, and
 `dist/` are absent.
 
 ## Feature matrix
@@ -49,7 +49,7 @@ locate, verification,
 endpoint, adapter, MAPQ, worker, and SIMD strategies are ordinary production
 code behind those umbrellas. A new algorithm, mapping mode, or switch is not a
 Cargo feature while it is under development: its source, runner, and evidence
-stay in an ignored dated `agent/worktree/` attempt or detached worktree. The
+stay in an ignored dated `workspace/worktree/` attempt or detached worktree. The
 status and ownership rules are in the [Cargo feature lifecycle](development/feature-lifecycle.md).
 
 CI additionally links the actual `combined-index` reader/query closure and the
@@ -106,7 +106,7 @@ read-complete outputs are checked. The unfiltered primary-record count must
 equal the input-read count. A MAPQ-only change must also compare full SAM
 records with field 5 removed and obtain identical hashes before truth metrics
 are accepted. Candidate comparisons and raw qualification output remain in
-their ignored `agent/worktree/` attempt.
+their ignored `workspace/worktree/` attempt.
 
 Publication tables additionally require, for each layout,
 `unique + ambiguous + unmapped_or_other = total input units`, exact and
@@ -115,7 +115,7 @@ errors` at every threshold. Primary step PR-AUC uses only Q60..Q1
 score-bearing-unique points while retaining the full truth denominator. MAPQ
 255 is unavailable and must produce N/A numeric-threshold and PR-AUC cells.
 
-Before widening search or changing ranking, create a dated `agent/worktree/`
+Before widening search or changing ranking, create a dated `workspace/worktree/`
 attempt and keep its strategy-oracle runner, candidate ledgers, and raw output
 there. The externally visible promotion boundary is defined in the
 [behavior contract](behavior-contract.md); current immutable strategy IDs and
@@ -186,11 +186,12 @@ Tests are placed by the boundary they exercise:
   explicitly ignored in the default gate.
 
 Unqualified implementations are not tests and do not live under `crates/`.
-Their source and runners remain in an ignored dated `agent/worktree/` attempt
+Their source and runners remain in an ignored dated `workspace/worktree/` attempt
 until one implementation passes its predeclared promotion gate.
 
-Large shared FASTA/FASTQ inputs, reusable human indexes, and third-party tools
-belong under ignored `workspace/`. Agent-run BAMs, perf data, flamegraphs,
-logs, and single-run output stay with their documented `agent/worktree/` attempt;
-user-owned runs may use `workspace/benchmarks/runs/`. None is a default-test
+Large human-maintained FASTA/FASTQ inputs, reusable indexes, and third-party
+tools belong under ignored `dev/`. Agent-generated data, BAMs, perf data,
+flamegraphs, logs, and single-run output stay under ignored `workspace/`, with
+each attempt documented in `workspace/worktree/YYYY-MM-DD--title/`; promoted
+run archives may use `workspace/benchmarks/runs/`. None is a default-test
 dependency.
