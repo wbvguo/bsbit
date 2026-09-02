@@ -16,12 +16,61 @@
   font-size: 0.8rem;
 }
 
+.md-typeset .cli-options {
+  max-width: 100%;
+}
+
+.md-typeset .cli-options table:not([class]) {
+  display: table;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.md-typeset .cli-options table:not([class]) th:nth-child(1),
+.md-typeset .cli-options table:not([class]) td:nth-child(1) {
+  width: 25%;
+}
+
+.md-typeset .cli-options table:not([class]) th:nth-child(2),
+.md-typeset .cli-options table:not([class]) td:nth-child(2) {
+  width: 22%;
+}
+
+.md-typeset .cli-options table:not([class]) th:nth-child(3),
+.md-typeset .cli-options table:not([class]) td:nth-child(3) {
+  width: 18%;
+}
+
+.md-typeset .cli-options table:not([class]) th:nth-child(4),
+.md-typeset .cli-options table:not([class]) td:nth-child(4) {
+  width: 35%;
+}
+
 .md-typeset table:not([class]) th {
   white-space: nowrap;
 }
 
 .md-typeset table:not([class]) td:first-child code {
   white-space: nowrap;
+}
+
+.md-typeset .cli-options table:not([class]) th,
+.md-typeset .cli-options table:not([class]) td {
+  overflow-wrap: anywhere;
+}
+
+.md-typeset .cli-options table:not([class]) th,
+.md-typeset .cli-options table:not([class]) code {
+  word-break: break-word;
+  white-space: normal;
+}
+
+.md-typeset .cli-options table:not([class]) td:first-child code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: normal;
 }
 
 .md-typeset details[class] {
@@ -229,6 +278,19 @@
   .md-typeset table:not([class]) td:first-child code {
     overflow-wrap: anywhere;
     white-space: normal;
+  }
+
+  .md-typeset .cli-options {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .md-typeset .cli-options table:not([class]) {
+    min-width: 40rem;
+  }
+
+  .md-typeset .cli-options table:not([class]) th {
+    white-space: nowrap;
   }
 
 }

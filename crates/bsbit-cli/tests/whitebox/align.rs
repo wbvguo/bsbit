@@ -28,7 +28,8 @@ fn help_exposes_only_default_and_sensitive_modes() {
     assert!(HELP.contains("--read1 only"));
     assert!(HELP.contains("-1, --read1 PATH"));
     assert!(HELP.contains("-2, --read2 PATH"));
-    assert!(HELP.contains("-i, --index PATH"));
+    assert!(HELP.contains("-x, --index PATH"));
+    assert!(!HELP.contains("-i, --index PATH"));
     assert!(HELP.contains("-o, --output PATH"));
     assert!(HELP.contains("--compression-threads"));
     assert!(HELP.contains("--compression-level"));

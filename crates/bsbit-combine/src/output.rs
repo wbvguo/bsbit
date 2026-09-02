@@ -23,6 +23,15 @@ impl MatrixKind {
             Self::Count => "count",
         }
     }
+
+    const fn suffix(self, compressed: bool) -> &'static str {
+        match (self, compressed) {
+            (Self::Level, true) => ".level.bed.gz",
+            (Self::Level, false) => ".level.bed",
+            (Self::Count, true) => ".count.bed.gz",
+            (Self::Count, false) => ".count.bed",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,47 +54,36 @@ pub(crate) fn output_specs(options: &Options) -> Result<Vec<OutputSpec>, Combine
     match options.matrix_format {
         MatrixFormat::Level => Ok(vec![OutputSpec {
             kind: MatrixKind::Level,
-            path: options.output.clone(),
+            path: matrix_path(options, MatrixKind::Level)?,
         }]),
         MatrixFormat::Count => Ok(vec![OutputSpec {
             kind: MatrixKind::Count,
-            path: options.output.clone(),
+            path: matrix_path(options, MatrixKind::Count)?,
         }]),
         MatrixFormat::Both => Ok(vec![
             OutputSpec {
                 kind: MatrixKind::Level,
-                path: matrix_variant_path(&options.output, MatrixKind::Level)?,
+                path: matrix_path(options, MatrixKind::Level)?,
             },
             OutputSpec {
                 kind: MatrixKind::Count,
-                path: matrix_variant_path(&options.output, MatrixKind::Count)?,
+                path: matrix_path(options, MatrixKind::Count)?,
             },
         ]),
     }
 }
 
-fn matrix_variant_path(base: &Path, kind: MatrixKind) -> Result<PathBuf, CombineError> {
-    let file_name = base
+fn matrix_path(options: &Options, kind: MatrixKind) -> Result<PathBuf, CombineError> {
+    let file_name = options
+        .output_prefix
         .file_name()
-        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
         .ok_or_else(|| {
-            CombineError::configuration(
-                "combine: --matrix both requires an output filename representable as UTF-8",
-            )
+            CombineError::configuration("combine: output prefix must contain a filename")
         })?;
-    let lowercase = file_name.to_ascii_lowercase();
-    let suffix_length = [".bed.gz", ".bed.bgz", ".bed", ".gz", ".bgz"]
-        .into_iter()
-        .find(|suffix| lowercase.ends_with(suffix))
-        .map_or(0, str::len);
-    let stem_length = file_name.len() - suffix_length;
-    if stem_length == 0 {
-        return Err(CombineError::configuration(
-            "combine: --matrix both output filename must contain a stem",
-        ));
-    }
-    let (stem, suffix) = file_name.split_at(stem_length);
-    Ok(base.with_file_name(format!("{stem}.{}{suffix}", kind.name())))
+    let mut output_name = file_name.to_os_string();
+    output_name.push(kind.suffix(options.compress));
+    Ok(options.output_prefix.with_file_name(output_name))
 }
 
 pub(crate) fn create_outputs(
@@ -217,6 +215,7 @@ pub(crate) fn write_header(
         proportion / 1_000_000_000,
         proportion % 1_000_000_000
     )?;
+    writeln!(writer, "##bsbit_cg_only={}", options.parameters.cg_only)?;
     writer.write_all(b"#chrom\tstart\tend\tmodification\tscore\tstrand")?;
     for input in &options.inputs {
         match matrix_kind {

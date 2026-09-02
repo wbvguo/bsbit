@@ -19,7 +19,7 @@ in `tests/whitebox/`, and ignored local-data checks live in
 `tests/qualification/`. Reusable test-only oracles shared by a crate's
 integration tests live in `tests/support/`; they are not product modules.
 New algorithms, feature switches, profiles, and ablations begin in an ignored
-dated `agent/worktree/` attempt; crate manifests and `src/` receive them only
+dated `workspace/worktree/` attempt; crate manifests and `src/` receive them only
 after qualification and promotion under clear domain names. Shared,
 small fixtures live under the workspace `tests/fixtures/`. Unsafe Rust is
 confined to the exact implementation modules that own CPU intrinsics, platform

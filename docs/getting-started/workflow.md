@@ -52,17 +52,9 @@ single-end or paired-end data. Directional mode is the default; use
 `--non-directional` for non-directional libraries.
 
 Preprocessed RRBS and targeted reads are accepted when chemistry and
-orientation match. See the [performance evidence](../performance-evidence.md)
-for the validation scope of each alignment mode.
+orientation match.
 
 ## Limitations and roadmap
-
-| Input | Status |
-|---|---|
-| Directional paired-end | Qualified path with caller-compatible provenance and published GRCh38 speed, accuracy, and MAPQ evidence |
-| Directional single-end | Caller-compatible numeric MAPQ; published 5M-R1 speed and exact/within-5-bp truth evidence |
-| Non-directional paired-end | Four-strand behavior and compatibility are tested; directional benchmark results do not apply |
-| Non-directional single-end | Four-strand behavior, global cross-pass classification, and caller compatibility are tested; directional single-end benchmark results do not apply |
 
 The following capabilities are not available in the current release and may be
 added in future:

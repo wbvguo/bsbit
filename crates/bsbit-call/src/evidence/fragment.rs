@@ -69,6 +69,7 @@ pub(crate) struct EvidenceFilter {
     minimum_base_quality: u8,
     minimum_mapping_quality: u8,
     retain_deletions: bool,
+    ignore_orphans: bool,
 }
 
 impl EvidenceFilter {
@@ -76,11 +77,13 @@ impl EvidenceFilter {
         minimum_base_quality: u8,
         minimum_mapping_quality: u8,
         retain_deletions: bool,
+        ignore_orphans: bool,
     ) -> Self {
         Self {
             minimum_base_quality,
             minimum_mapping_quality,
             retain_deletions,
+            ignore_orphans,
         }
     }
 }
@@ -124,6 +127,9 @@ pub(crate) fn for_each_region_fragment(
         if !has_record {
             break;
         }
+        if should_ignore_orphan(record.flag(), evidence_filter.ignore_orphans) {
+            continue;
+        }
         ordinal = ordinal
             .checked_add(1)
             .ok_or_else(|| CallError::operation("region BAM record ordinal overflowed u64"))?;
@@ -138,6 +144,10 @@ pub(crate) fn for_each_region_fragment(
         collector.accept(record, reconstructed, ordinal)?;
     }
     collector.finish()
+}
+
+const fn should_ignore_orphan(flag: u16, ignore_orphans: bool) -> bool {
+    ignore_orphans && flag & 0x1 != 0 && flag & 0x2 == 0
 }
 
 fn reconstruct_indexed_evidence(
@@ -713,7 +723,7 @@ mod tests {
     }
 
     const fn permissive_evidence_filter() -> EvidenceFilter {
-        EvidenceFilter::new(0, 0, true)
+        EvidenceFilter::new(0, 0, true, false)
     }
 
     fn merge_evidence_pair(
@@ -803,9 +813,17 @@ mod tests {
             &[low_mapping_quality],
             MateSegment::Second,
             &[high_confidence],
-            EvidenceFilter::new(15, 20, true),
+            EvidenceFilter::new(15, 20, true, false),
         )
         .unwrap();
         assert_eq!(merged, vec![high_confidence]);
+    }
+
+    #[test]
+    fn orphan_filter_retains_single_reads_and_proper_pairs() {
+        assert!(!should_ignore_orphan(0, true));
+        assert!(!should_ignore_orphan(0x1 | 0x2 | 0x40, true));
+        assert!(should_ignore_orphan(0x1 | 0x40, true));
+        assert!(!should_ignore_orphan(0x1 | 0x40, false));
     }
 }

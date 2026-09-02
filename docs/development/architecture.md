@@ -30,7 +30,7 @@ directional/non-directional FASTQ   directional/non-directional paired FASTQ
       |                                   |
 ordered caller-compatible BAM    ordered caller-compatible BAM
                 \                         /
-                 coordinate sort / mark duplicates / BAI or CSI
+                 coordinate sort / mark duplicates / BAM index
                                            |
                        authoritative FASTA +
                                            v
@@ -130,7 +130,7 @@ a tightly coupled implementation may remain large rather than expose private
 state merely to make the tree look symmetrical.
 
 Tracked `src/` contains only selected product behavior. New algorithms, policy
-switches, mapping modes, and ablations begin in dated `agent/worktree/` attempts. A
+switches, mapping modes, and ablations begin in dated `workspace/worktree/` attempts. A
 successful attempt enters a crate under a clear domain name; rejected or
 superseded evidence remains with that attempt instead of becoming a dormant
 Cargo feature or a copied `experiments/` source tree.
@@ -172,7 +172,7 @@ immutable bytes and publish the visible target or metadata last. Readers verify
 identity before exposing mapped slices and reject unknown versions, invalid
 ordering, overflow, truncation, trailing data, and digest mismatches. The index
 is intentionally opaque at the command boundary; its user-visible artifact and
-publication contract is documented in the [outputs overview](outputs/index.md).
+publication contract is documented in the [outputs overview](../outputs/index.md).
 
 ## Calling flow
 

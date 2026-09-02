@@ -49,5 +49,5 @@ not bytes in the standalone artifact. A package or container that also ships
 those libraries must extend the inventory for the exact files and versions it
 redistributes.
 
-Experimental dependencies belong to dated records under `agent/worktree/` and
+Experimental dependencies belong to dated records under `workspace/worktree/` and
 are deliberately absent from every production scope.

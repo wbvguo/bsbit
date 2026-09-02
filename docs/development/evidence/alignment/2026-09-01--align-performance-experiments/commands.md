@@ -35,10 +35,10 @@ The checked-in harness refuses to overwrite a prior label. Example standard and
 thread-mix invocations:
 
 ```bash
-workspace/benchmarks/evidence/2026-09-01--align-performance-experiments/run-case.sh \
+docs/development/evidence/alignment/2026-09-01--align-performance-experiments/run-case.sh \
   example-single /path/to/bsbit single 8 2 0,2,4,6,8,10,12,14,16,18
 
-workspace/benchmarks/evidence/2026-09-01--align-performance-experiments/run-case.sh \
+docs/development/evidence/alignment/2026-09-01--align-performance-experiments/run-case.sh \
   example-paired-11m3b /path/to/bsbit paired 11 3 \
   0,2,4,6,8,10,12,14,16,18,20,22,24,26
 ```

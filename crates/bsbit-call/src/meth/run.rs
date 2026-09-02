@@ -39,6 +39,7 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
             render_region(
                 &mut output,
                 options.format,
+                options.parameters,
                 &input.references,
                 meth,
                 &mut summary,

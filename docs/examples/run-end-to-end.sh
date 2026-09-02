@@ -16,7 +16,7 @@ cp docs/examples/quickstart-reference.fa "$output_dir/reference.fa"
   -t 2
 
 "$binary_dir/bsbit" align \
-  --index "$output_dir/reference.bsbit" \
+  -x "$output_dir/reference.bsbit" \
   --read1 docs/examples/quickstart_R1.fastq \
   --read2 docs/examples/quickstart_R2.fastq \
   --output "$output_dir/alignment.bam" \
@@ -41,15 +41,17 @@ samtools quickcheck -v "$output_dir/alignment.analysis.bam"
   --meth-format bed \
   --vcf "$output_dir/variants.vcf" \
   --sample-name demo \
+  --compress false \
   --threads 2
 
 "$binary_dir/bsbit" combine \
   --input "$output_dir/methylation.bed" \
   --sample-name demo \
-  --output "$output_dir/cohort.bed" \
+  --prefix "$output_dir/cohort" \
   --matrix both \
   --min-count 1 \
   --min-prop 1 \
+  --compress false \
   --threads 2
 
 awk -F '\t' 'NR == 2 && $1 == "bsbit-alignment-metrics-v2" && $2 == 4 && $3 == 4 && $6 == 8 { passed = 1 } END { exit !passed }' \

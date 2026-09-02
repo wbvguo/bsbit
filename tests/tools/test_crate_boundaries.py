@@ -62,7 +62,7 @@ EXPECTED_NESTED_SOURCE_FAMILIES = {
 }
 
 # Promotion into this inventory is an explicit architecture change. Candidate
-# switches are exercised under `agent/worktree/`, not appended opportunistically
+# switches are exercised under `workspace/worktree/`, not appended opportunistically
 # to a product manifest.
 EXPECTED_PRODUCT_FEATURE_EXPANSIONS = {
     "bsbit-core": {},
@@ -460,7 +460,7 @@ class CrateBoundaryTests(unittest.TestCase):
                 with self.subTest(crate=crate, feature=feature):
                     self.assertFalse(
                         any(marker in feature for marker in DEVELOPMENT_FEATURE_MARKERS),
-                        f"development feature {feature!r} belongs under agent/worktree",
+                        f"development feature {feature!r} belongs under workspace/worktree",
                     )
 
     def test_feature_bearing_internal_dependencies_disable_defaults(self) -> None:
@@ -559,7 +559,7 @@ class CrateBoundaryTests(unittest.TestCase):
                     self.assertNotIn(
                         marker,
                         contents,
-                        "unselected alignment candidates belong in agent/worktree or tests",
+                        "unselected alignment candidates belong in workspace/worktree or tests",
                     )
 
     def test_cli_and_index_do_not_expose_oracle_switches(self) -> None:

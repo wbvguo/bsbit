@@ -818,7 +818,8 @@ fn combine_command_builds_a_filtered_named_methylation_matrix() {
     fs::create_dir(&directory).expect("fresh directory");
     let first = directory.join("first.bed");
     let second = directory.join("second.cgmap");
-    let matrix = directory.join("matrix.bed");
+    let prefix = directory.join("matrix");
+    let matrix = directory.join("matrix.count.bed");
     fs::write(
         &first,
         concat!(
@@ -841,14 +842,17 @@ fn combine_command_builds_a_filtered_named_methylation_matrix() {
         OsString::from(format!("{},{}", first.display(), second.display())),
         OsString::from("--sample-name"),
         OsString::from("case,control"),
-        OsString::from("--output"),
-        matrix.as_os_str().to_owned(),
+        OsString::from("--prefix"),
+        prefix.as_os_str().to_owned(),
         OsString::from("--matrix"),
         OsString::from("count"),
         OsString::from("--min-count"),
         OsString::from("5"),
         OsString::from("--min-prop"),
         OsString::from("1"),
+        OsString::from("--cg-only"),
+        OsString::from("--compress"),
+        OsString::from("false"),
         OsString::from("--threads"),
         OsString::from("2"),
     ]);
@@ -861,6 +865,7 @@ fn combine_command_builds_a_filtered_named_methylation_matrix() {
             "##bsbit_matrix_format=count\n",
             "##bsbit_min_count=5\n",
             "##bsbit_min_prop=1.000000000\n",
+            "##bsbit_cg_only=true\n",
             "#chrom\tstart\tend\tmodification\tscore\tstrand",
             "\tcase_meth_count\tcase_total_count",
             "\tcontrol_meth_count\tcontrol_total_count\n",
@@ -875,7 +880,8 @@ fn combine_command_uses_input_path_when_sample_names_are_omitted() {
     let directory = unique_directory("combine-path-name");
     fs::create_dir(&directory).expect("fresh directory");
     let input = directory.join("sample one.bed");
-    let matrix = directory.join("matrix.bed");
+    let prefix = directory.join("matrix");
+    let matrix = directory.join("matrix.level.bed");
     fs::write(
         &input,
         "chr1\t0\t1\tm,CG,0\t4\t+\t0\t1\t255,0,0\t4\t75.00\t3\t1\t0\t0\t0\t0\t0\n",
@@ -885,8 +891,10 @@ fn combine_command_uses_input_path_when_sample_names_are_omitted() {
         OsString::from("combine"),
         OsString::from("--input"),
         input.as_os_str().to_owned(),
-        OsString::from("--output"),
-        matrix.as_os_str().to_owned(),
+        OsString::from("--prefix"),
+        prefix.as_os_str().to_owned(),
+        OsString::from("--compress"),
+        OsString::from("false"),
     ]);
     assert_eq!(result.status.code(), Some(0), "{:?}", result.stderr);
     assert!(result.stdout.is_empty());
@@ -898,6 +906,7 @@ fn combine_command_uses_input_path_when_sample_names_are_omitted() {
                 "##bsbit_matrix_format=level\n",
                 "##bsbit_min_count=1\n",
                 "##bsbit_min_prop=0.000000000\n",
+                "##bsbit_cg_only=false\n",
                 "#chrom\tstart\tend\tmodification\tscore\tstrand\t{}\n",
                 "chr1\t0\t1\tm,CG,0\t0\t+\t0.750000\n",
             ),
@@ -927,8 +936,6 @@ fn run_meth_call(input: &Path, reference: &Path, output: &Path) {
         output.as_os_str().to_owned(),
         OsString::from("-f"),
         OsString::from("cgmap"),
-        OsString::from("-c"),
-        OsString::from("true"),
         OsString::from("-t"),
         OsString::from("2"),
     ]);
@@ -945,8 +952,6 @@ fn run_snp_call(input: &Path, reference: &Path, output: &Path) {
         reference.as_os_str().to_owned(),
         OsString::from("-o"),
         output.as_os_str().to_owned(),
-        OsString::from("-c"),
-        OsString::from("true"),
         OsString::from("-t"),
         OsString::from("2"),
     ]);
@@ -967,8 +972,6 @@ fn run_joint_call(input: &Path, reference: &Path, meth_output: &Path, vcf_output
         OsString::from("cgmap"),
         OsString::from("--vcf"),
         vcf_output.as_os_str().to_owned(),
-        OsString::from("-c"),
-        OsString::from("true"),
         OsString::from("-t"),
         OsString::from("2"),
     ]);

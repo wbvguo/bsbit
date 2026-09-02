@@ -71,9 +71,9 @@ fn validate_options(options: &Options) -> Result<Vec<OutputSpec>, CombineError> 
             "combine: minimum sample proportion must be within 0..=1",
         ));
     }
-    if options.output.as_os_str().is_empty() {
+    if options.output_prefix.as_os_str().is_empty() {
         return Err(CombineError::configuration(
-            "combine: output path must not be empty",
+            "combine: output prefix must not be empty",
         ));
     }
 
@@ -323,7 +323,8 @@ fn coordinate_groups(
             .iter()
             .filter(|(_, counts)| sample_is_valid(*counts, options.parameters.minimum_count))
             .count();
-        if valid_samples >= required_samples {
+        let context_is_selected = !options.parameters.cg_only || modification == b"m,CG,0";
+        if context_is_selected && valid_samples >= required_samples {
             for output in outputs.iter_mut() {
                 write_matrix_row(
                     &mut output.writer,

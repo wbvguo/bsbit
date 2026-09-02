@@ -1,70 +1,110 @@
 # Build methylation matrix
 
-`bsbit combine` merges per-sample methylation calls into a site-by-sample level
-matrix, count matrix, or both. CGmap and extended bedMethyl inputs can be mixed
-in the same run.
+`bsbit combine` combines per-sample methylation calls into a site-by-sample
+matrix. It can report methylation levels, methylated and total counts, or both.
 
 ## Inputs
 
-Use one sorted CGmap or extended bedMethyl file per sample, produced by
-[`bsbit call meth`](methylation.md). Inputs may be plain, gzip-compressed, or
-BGZF-compressed and must follow the same coordinate and context conventions.
+Supply one coordinate-sorted [CGmap](../reference/file-formats.md#cgmap-methylation-calls)
+or [extended bedMethyl](../reference/file-formats.md#extended-bedmethyl-calls)
+file per sample. All inputs must use the same reference genome and compatible
+site coordinates. Plain, gzip-compressed, and BGZF-compressed files are
+accepted.
 
 ## Build the matrix
 
 ```bash
 bsbit combine \
-  -i tumor.cgmap.gz,normal.bed.gz \
-  --sample-name tumor,normal \
-  -o cohort.bed.gz \
-  -m both \
-  --min-count 10 \
-  --min-prop 0.8 \
-  -c true \
+  -i sample1.cgmap.gz,sample2.cgmap.gz \
+  --sample-name sample1,sample2 \
+  -p cohort \
   -t 8
 ```
 
 ## Common options
 
+<div class="cli-options" markdown>
+
 | Option | Value | Default | Description |
 | --- | --- | --- | --- |
-| `-i`,<br>`--input` | `PATH[,PATH...]` | Required, repeatable | Sorted CGmap or extended bedMethyl inputs; formats may be mixed |
-| `--sample-name` | `NAME[,NAME...]` | Input paths | Unique sample labels in input order |
-| `-o`,<br>`--output` | `PATH` | Required | Output path, or filename template when `--matrix both` is used |
-| `-m`,<br>`--matrix` | `level\|count\|both` | `level` | Matrix type to write |
-| `--min-count` | `N` | `1` | Minimum coverage required for each sample cell |
-| `--min-prop` | `P` | `0` | Minimum proportion of samples with a valid cell at each site |
-| `-c`,<br>`--compress` | `true\|false` | `false` | Whether to write BGZF-compressed output |
-| `-t`,<br>`--threads` | `N` | `1` | Number of input-merge workers, from 1 to 64 |
+| `-i`,<br>`--input` | `PATH,...` | Required | Methylation call files, one per sample |
+| `--sample-name` | `NAME,...` | Input paths | Sample names used as matrix column labels |
+| `-p`,<br>`--prefix` | `PREFIX` | Required | Prefix for the generated matrix files |
+| `-m`,<br>`--matrix` | `level`, `count`, or `both` | `level` | Matrix values to write |
+| `-c`,<br>`--compress` | `BOOL` | `true` | Write BGZF-compressed output |
+| `-t`,<br>`--threads` | `N` | `1` | Number of input-merge workers |
 
-For repeated input syntax, validation rules, and other advanced details, see
-the [`bsbit combine` CLI reference](../reference/cli.md#bsbit-combine).
+</div>
 
-## Configure the matrix
+## Advanced parameters
 
-**Matrix type.** `level` writes one methylated fraction per sample; `count`
-writes methylated and total counts; `both` writes separate level and count
-files.
+<div class="cli-options" markdown>
 
-**Sample names.** Input order determines matrix column order. Supply one
-`--sample-name` per input, or omit the option to use the input paths as labels.
+| Option | Value | Default | Description |
+|---|---|---|---|
+| `--min-count` | `N` | `1` | Minimum total coverage required to retain a sample value |
+| `--min-prop` | `P` | `0` | Minimum fraction of samples that must pass `--min-count` at a site |
+| `--cg-only` | — | Off | Retain only CpG sites |
 
-**Filtering.** `--min-count` filters individual sample cells by coverage, and
-`--min-prop` filters sites by the proportion of samples with valid cells. A
-missing or filtered cell is written as `.`, not numeric zero.
+</div>
+
+??? note "Inputs and sample names"
+
+    Separate input paths with commas. Their order determines the sample-column
+    order in the matrix. CGmap and extended bedMethyl files may be mixed:
+
+    ```bash
+    -i sample1.cgmap.gz,sample2.cgmap.gz,sample3.cgmap.gz
+    ```
+
+    `--sample-name` accepts a matching comma-separated list of unique names. If
+    it is omitted, the input paths are used as the column labels.
+
+??? note "Matrix types"
+
+    `-m level` writes one methylated fraction from 0 to 1 per sample. `-m count`
+    writes methylated and total coverage for each sample. `-m both` produces
+    both matrices from the same merge.
+
+??? note "Filtering behavior"
+
+    Add `--cg-only` to exclude CHG and CHH sites.
+
+    `--min-count` is applied to each sample first. `--min-prop` then sets the
+    fraction of samples that must pass at each site; for example, `0.8`
+    requires at least 80%. Every retained site must have at least one valid
+    sample, even when `--min-prop` is `0`.
+
+See the [CLI reference](../reference/cli.md#bsbit-combine) for repeated input
+syntax, accepted ranges, and complete parameter details.
 
 ## Output
 
-With `-m both`, the example writes `cohort.level.bed.gz` and
-`cohort.count.bed.gz`; the unsuffixed `cohort.bed.gz` path is not created. Both
-matrices use BED6 site columns followed by sample values.
+The output is a coordinate-sorted BED6-plus-sample table: six genomic-site
+columns followed by one methylation level per sample with `-m level`, or
+methylated and total counts with `-m count`. A `.` represents a missing value
+or one that does not pass `--min-count`, instead of zero.
+
+Output names are derived from the prefix and matrix type. With `-p cohort`,
+`-m level` creates `cohort.level.bed.gz`, `-m count` creates
+`cohort.count.bed.gz`, and `-m both` creates both files. With `-c false`, the
+files end in `.bed` instead of `.bed.gz`.
 
 See [Methylation matrices](../reference/file-formats.md#methylation-matrices)
-for the level and count schemas, metadata lines, coordinates, and missing-value
-representation.
+for the complete schemas, coordinates, and metadata fields. BGZF-compressed
+output can be indexed and queried as BED:
+
+```bash
+tabix -p bed cohort.level.bed.gz
+```
+
+Index each generated file separately. The matrices can be loaded into R or
+Python for sample-level quality control, clustering,
+differential methylation analysis, epigenome-wide association studies (EWAS),
+or methylation quantitative trait locus (mQTL) mapping.
 
 ## Next
 
 - [Call methylation](methylation.md)
-- [`bsbit combine` CLI reference](../reference/cli.md#bsbit-combine)
-- [Methylation matrix format](../reference/file-formats.md#methylation-matrices)
+- [CLI reference: `combine`](../reference/cli.md#bsbit-combine)
+- [File formats](../reference/file-formats.md#methylation-matrices)

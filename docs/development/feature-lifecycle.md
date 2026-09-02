@@ -8,9 +8,9 @@ useful library capabilities.
 | Status | Meaning | Naming and placement |
 |---|---|---|
 | Supported capability | A product entry point or independently useful library build selected by users or release automation | Stable umbrella name; documented and covered by the release gate |
-| Development candidate | A new algorithm, comparison, profile, or ablation with an owner and a current runner | Not a tracked Cargo feature; source, runner, and evidence live in a dated ignored `agent/worktree/` attempt |
+| Development candidate | A new algorithm, comparison, profile, or ablation with an owner and a current runner | Not a tracked Cargo feature; source, runner, and evidence live in a dated ignored `workspace/worktree/` attempt |
 | Historical | A completed, rejected, or superseded experiment | Remove it from live Cargo features and product source; use Git history or an ignored detached worktree when recovery remains useful |
-| Unknown | Inherited development code whose runner or status cannot be established | Keep it outside the tracked crate tree; resolve it in `agent/worktree/` before promotion or retirement |
+| Unknown | Inherited development code whose runner or status cannot be established | Keep it outside the tracked crate tree; resolve it in `workspace/worktree/` before promotion or retirement |
 
 ## Current release inventory
 
@@ -54,7 +54,7 @@ feature-level API.
 
 Before adding or retaining a feature:
 
-1. Create a dated `agent/worktree/` attempt and record its owner, question, and
+1. Create a dated `workspace/worktree/` attempt and record its owner, question, and
    predeclared promotion gate before changing a crate manifest.
 2. Keep the candidate source, feature switches, runners, profiles, and outputs
    in that attempt while the result is unresolved.
@@ -68,5 +68,5 @@ Before adding or retaining a feature:
    the winner into the owning product capability rather than retaining an
    experiment or stage switch.
 6. Put full source snapshots, runners, and measurements only in an ignored
-   dated `agent/worktree/` attempt when they have continuing local value; Git
+   dated `workspace/worktree/` attempt when they have continuing local value; Git
    history remains the durable archive.

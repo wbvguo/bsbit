@@ -141,8 +141,8 @@ for record completeness and confidence semantics.
 
 ## Downstream calling semantics
 
-Every `meth`, `snp`, and `joint` run requires a coordinate-sorted BAI/CSI-
-indexed BAM with the canonical bsbit `@PG` record and the authoritative indexed
+Every `meth`, `snp`, and `joint` run requires a coordinate-sorted, indexed BAM
+with the canonical bsbit `@PG` record and the authoritative indexed
 FASTA. Contig names and lengths must agree, and the normalized reference
 semantic digest must equal the digest stored by alignment. The caller projects
 `SEQ` through `CIGAR` onto FASTA bases and ignores `MD`; a different
@@ -180,9 +180,9 @@ clinical caller.
 performs no new biological inference: it preserves methylated/total counts,
 represents absent or filtered cells as missing rather than zero, and filters by
 the configured valid-sample proportion. Exact schemas live in the
-[methylation](guides/methylation.md),
-[variant](guides/variant-calling.md), and
-[matrix](guides/methylation-matrices.md) guides.
+[methylation](../guides/methylation.md),
+[variant](../guides/variant-calling.md), and
+[matrix](../guides/methylation-matrices.md) guides.
 
 ## Required validation
 
@@ -195,6 +195,8 @@ calling with overlap collapse; regional equivalence; and deterministic matrix
 merging with missing-cell semantics.
 
 Support boundaries are summarized under
-[sequencing data support](getting-started/workflow.md#sequencing-data-support). Measured accuracy and
-MAPQ evidence live in [performance evidence](performance-evidence.md), and
-remaining differences are listed in [known limitations](known-differences.md).
+[sequencing data support](../getting-started/workflow.md#sequencing-data-support),
+and current limitations are maintained under
+[limitations and roadmap](../getting-started/workflow.md#limitations-and-roadmap).
+Measured accuracy and MAPQ evidence live in
+[performance evidence](performance-evidence.md).

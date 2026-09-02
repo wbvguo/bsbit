@@ -28,7 +28,7 @@ For paired-end reads:
 
 ```bash
 bsbit align \
-  -i GRCh38.bsbit \
+  -x GRCh38.bsbit \
   -1 sample_R1.fastq.gz \
   -2 sample_R2.fastq.gz \
   -o sample.bam \
@@ -39,7 +39,7 @@ For single-end reads, supply only read 1:
 
 ```bash
 bsbit align \
-  -i GRCh38.bsbit \
+  -x GRCh38.bsbit \
   -1 sample.fastq.gz \
   -o sample.bam \
   -t 8
@@ -49,7 +49,9 @@ bsbit align \
 
 ## Prepare BAM file
 
-Before calling, prepare a coordinate-sorted, duplicate-marked, and indexed BAM:
+Before calling, coordinate-sort the BAM, apply the duplicate policy selected
+for the library, and create the BAM index. For paired-end data using
+coordinate-based duplicate marking:
 
 ```bash
 samtools sort -n -o sample.qname.bam sample.bam
@@ -76,8 +78,8 @@ samtools index sample.prep.bam
 
 ## Call methylation or SNVs
 
-For faster repeated calling, optionally build a FASTA index. Calling a plain
-FASTA without this file is also supported:
+Create the recommended FASTA index before calling. A plain FASTA also works
+without it, but must be scanned at the start of each call:
 
 ```bash
 samtools faidx GRCh38.fa
@@ -87,12 +89,11 @@ Call methylation:
 
 ```bash
 bsbit call meth \
-  --input sample.prep.bam \
+  -i sample.prep.bam \
   -r GRCh38.fa \
-  --output sample.cgmap.gz \
-  --format cgmap \
-  --compress true \
-  --threads 8
+  -o sample.cgmap.gz \
+  -f cgmap \
+  -t 8
 ```
 
 [Usage: Call methylation](../guides/methylation.md)
@@ -101,18 +102,16 @@ Call SNVs:
 
 ```bash
 bsbit call snp \
-  --input sample.prep.bam \
+  -i sample.prep.bam \
   -r GRCh38.fa \
-  --output sample.vcf.gz \
-  --compress true \
-  --threads 8
+  -o sample.vcf.gz \
+  -t 8
 ```
 
 [Usage: Call SNVs](../guides/variant-calling.md)
 
-To produce both result types from one evidence pass, use `bsbit call joint`;
-the [SNV usage guide](../guides/variant-calling.md#run-joint-calling) has the
-command.
+To produce both result types from one evidence pass, use
+[`bsbit call joint`](../guides/variant-calling.md#run-joint-calling).
 
 ## Build methylation matrix
 
@@ -121,14 +120,13 @@ either format:
 
 ```bash
 bsbit combine \
-  --input tumor.cgmap.gz,normal.bed.gz \
+  -i tumor.cgmap.gz,normal.cgmap.gz \
   --sample-name tumor,normal \
-  --output cohort.bed.gz \
-  --matrix both \
+  -p cohort \
+  -m both \
   --min-count 10 \
   --min-prop 0.8 \
-  --compress true \
-  --threads 8
+  -t 8
 ```
 
 [Usage: Build methylation matrix](../guides/methylation-matrices.md)

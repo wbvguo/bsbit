@@ -1,30 +1,24 @@
 # File formats
 
-This page collects the file formats that appear in a bsbit workflow. Use it to
-choose a format, check its coordinate system, or identify the fields in a small
-example. The linked input and output pages define the complete behavioral
-contracts.
+This page defines the formats, coordinates, and fields used by bsbit. See
+[Input data](input-data.md) for accepted inputs and [Output
+files](../outputs/index.md) for workflow artifacts.
 
 ## Quick reference
 
 | Artifact | Typical name | Used by | Format and transport |
 |---|---|---|---|
-| Reference sequence | `reference.fa` | `index`, `call` | FASTA; plain or BGZF, with FAI/GZI required for BGZF calling |
-| Sequencing reads | `sample_R1.fastq.gz` | `align` | Strict four-line FASTQ; plain, gzip, or BGZF |
-| Target intervals | `targets.bed.gz` | `call` | BED3 or BED3+; plain, gzip, or BGZF |
-| Alignment index | `reference.bsbit` | `index`, `align` | Opaque bsbit index handle |
-| Alignments | `sample.bam` | `align`, `call` | SAM/BAM 1.6 records in BGZF-compressed BAM |
-| Alignment index | `sample.bam.bai` or `sample.bam.csi` | `call` | BAI or CSI random-access sidecar |
-| Methylation calls | `sample.cgmap` | `call meth`, `call joint`, `combine` | Eight-column, tab-delimited CGmap |
-| Methylation calls | `sample.bed` | `call meth`, `call joint`, `combine` | Eighteen-column extended bedMethyl |
-| Variant calls | `sample.vcf` | `call snp`, `call joint` | VCF 4.3 |
-| Methylation matrix | `cohort.level.bed` or `cohort.count.bed` | `combine` | BED6 plus one or more sample columns |
-| Alignment metrics | `alignment.summary.tsv` | `align --metrics` | Two-row, tab-delimited profiling table written to stdout |
-
-The extensions above are conventions, not format selectors. Input compression
-is detected from the file content. Calling and matrix output is plain text
-unless `--compress true` requests deterministic BGZF; a `.gz` suffix alone
-does not enable compression. Alignment BAM is always BGZF-compressed.
+| [Reference sequence](#fasta-reference) | `reference.fa` | `index`, `call` | FASTA; plain or BGZF |
+| [Sequencing reads](#fastq-reads) | `sample_R1.fastq.gz` | `align` | Strict four-line FASTQ; plain, gzip, or BGZF |
+| [Target intervals](#bed-target-intervals) | `targets.bed.gz` | `call` | BED3 or BED3+; plain, gzip, or BGZF |
+| [bsbit alignment index](#bsbit-alignment-index) | `reference.bsbit` | `index`, `align` | Opaque index handle |
+| [BAM alignments](#bam-alignments-and-index) | `sample.bam` | `align`, `call` | SAM/BAM 1.6 in BGZF-compressed BAM |
+| [BAM index](#bam-alignments-and-index) | `sample.bam.bai` | `call` | BAI random-access sidecar |
+| [CGmap calls](#cgmap-methylation-calls) | `sample.cgmap.gz` | `call meth`, `call joint`, `combine` | Eight-column tab-delimited CGmap |
+| [Extended bedMethyl](#extended-bedmethyl-calls) | `sample.bed.gz` | `call meth`, `call joint`, `combine` | Eighteen-column bedMethyl |
+| [Variant calls](#vcf-variant-calls) | `sample.vcf.gz` | `call snp`, `call joint` | VCF 4.3 |
+| [Methylation matrix](#methylation-matrices) | `cohort.level.bed.gz` or `cohort.count.bed.gz` | `combine` | BED6 plus sample columns |
+| [Alignment metrics](#alignment-metrics-tsv) | `alignment.summary.tsv` | `align --metrics` | Two-row profiling TSV written to stdout |
 
 ## Coordinate systems
 
@@ -60,14 +54,8 @@ NNACCGTT
 - bsbit accepts only `A`, `C`, `G`, `T`, and `N`; other IUPAC ambiguity codes
   are rejected.
 
-`bsbit index` accepts plain or BGZF-compressed FASTA and rejects ordinary gzip.
-A caller can scan a plain FASTA without creating a sidecar, or use an adjacent
-FAI when one exists. Calling from BGZF FASTA requires adjacent FAI and GZI
-files. Compression is detected from content rather than the filename suffix.
-
-Use exactly the same assembly and contig naming throughout alignment and
-calling. The caller verifies a digest of the normalized reference bases, not
-only contig names and lengths. See [Prepare input data](input-data.md#fasta-reference).
+See [FASTA input requirements](input-data.md#fasta-reference) for compression,
+sidecars, and reference-consistency rules.
 
 ## FASTQ reads
 
@@ -87,11 +75,9 @@ IIIIIIII
 | 3 | `+`, optionally followed by a header suffix that agrees with line 1 |
 | 4 | Printable Phred+33 quality characters, exactly one per sequence base |
 
-Sequence and quality wrapping is not supported. Paired files must end together
-and have synchronized names. Identical names are accepted, as are matching
-`/1` and `/2` suffixes. FASTQ may be plain, gzip, or BGZF. See
-[paired-read synchronization](input-data.md#paired-read-synchronization) for
-the exact name rules.
+Sequence and quality wrapping is not supported. See [paired-read
+synchronization](input-data.md#paired-read-synchronization) for mate-name and
+ordering requirements.
 
 ## BED target intervals
 
@@ -117,23 +103,15 @@ for calling. A regions file may be plain, gzip, or BGZF.
 
 ## bsbit alignment index
 
-`bsbit index` produces an opaque index addressed by the path passed to
-`--output`:
+`bsbit index` produces an opaque index with no editable text representation or
+public field schema. Treat it as one complete bundle: do not modify its
+components, and rebuild it when the reference changes.
 
-```bash
-bsbit index -r reference.fa -o reference.bsbit
-bsbit align -i reference.bsbit -1 reads.fastq.gz -o sample.bam
-```
-
-There is intentionally no editable text representation or public field
-schema. Treat the output as a complete bundle handle: do not modify its
-components, and rebuild it with `bsbit index` when the reference changes.
-
-## BAM alignments and BAI/CSI
+## BAM alignments and index
 
 `bsbit align` writes SAM/BAM 1.6 records as BAM. The initial BAM follows FASTQ
-input order and therefore must be coordinate-sorted before it can receive a
-BAI or CSI index. This is a simplified SAM-text view of the binary file:
+input order and therefore must be coordinate-sorted before its `.bai` index is
+created. This is a simplified SAM-text view of the binary file:
 
 ```text
 @HD	VN:1.6	SO:unsorted
@@ -157,11 +135,10 @@ Mapped records always carry `NM:i` and `XG:Z:CT|GA`. With
 The structured `@PG` line binds the BAM to the exact reference and alignment
 mode and must survive sorting and duplicate marking.
 
-BAI and CSI are binary random-access sidecars, not alignment files. A caller
-requires a coordinate-sorted BAM and an adjacent matching BAI or CSI. See
-[Alignment BAM](../outputs/alignment-bam.md) for flags, tags, and provenance,
-and [Prepare BAM file](../guides/prepare-bam.md) for the sorting and
-indexing recipe.
+`.bai` is a binary random-access sidecar, not an alignment file. A caller
+requires a coordinate-sorted BAM and its adjacent `.bai`. See [Alignment
+BAM](../outputs/index.md#alignment-bam) for output behavior and validation, and
+[Prepare BAM file](../guides/prepare-bam.md) for sorting and indexing.
 
 ## CGmap methylation calls
 
@@ -218,9 +195,8 @@ chr1	100	101	m,CG,0	4	+	100	101	255,0,0	4	75.00	3	1	0	0	0	0	0
 | 18 | No-call observations | `0` |
 
 Columns 5 and 10 must both equal columns 12 + 13. Deletions and different-base
-observations are reported separately and do not enter valid coverage. The
-current caller reports zero for other modification, failed, and no-call
-counts.
+observations are reported separately and do not enter valid coverage. `bsbit
+call meth` reports zero for other modification, failed, and no-call counts.
 
 CGmap is compact and compatible with CGmap-oriented tooling. Extended
 bedMethyl carries explicit strand, interval, and evidence categories and is
@@ -270,13 +246,14 @@ for filtering and statistical interpretation.
 
 ## Methylation matrices
 
-`bsbit combine` writes three metadata lines, a BED6-plus-samples header, and
+`bsbit combine` writes four metadata lines, a BED6-plus-samples header, and
 one row per retained site. A level matrix has one fraction per sample:
 
 ```text
 ##bsbit_matrix_format=level
 ##bsbit_min_count=1
 ##bsbit_min_prop=0.000000000
+##bsbit_cg_only=false
 #chrom	start	end	modification	score	strand	tumor	normal
 chr1	100	101	m,CG,0	0	+	0.750000	0.500000
 chr1	101	102	m,CG,0	0	-	.	0.250000
@@ -288,6 +265,7 @@ A count matrix has paired methylated and total-count columns:
 ##bsbit_matrix_format=count
 ##bsbit_min_count=1
 ##bsbit_min_prop=0.000000000
+##bsbit_cg_only=false
 #chrom	start	end	modification	score	strand	tumor_meth_count	tumor_total_count	normal_meth_count	normal_total_count
 chr1	100	101	m,CG,0	0	+	3	4	2	4
 chr1	101	102	m,CG,0	0	-	.	.	1	4
@@ -295,19 +273,19 @@ chr1	101	102	m,CG,0	0	-	.	.	1	4
 
 The first six columns use the extended bedMethyl coordinate, modification, and
 strand model. `.` means an absent or below-threshold sample cell; it never
-means numeric zero. With `--matrix both`, the level and count schemas are
+means numeric zero. With `-m both`, the level and count schemas are
 written to separate `.level` and `.count` files. See
 [Build methylation matrix](../guides/methylation-matrices.md) for filtering,
 naming, and mixed-input normalization.
 
 ## Alignment metrics TSV
 
-For either read layout, `--metrics` writes a self-describing two-row TSV to
-stdout. Redirect it separately from the BAM:
+`bsbit align --metrics` writes a self-describing two-row TSV to stdout. Redirect
+it separately from the BAM:
 
 ```bash
 bsbit align \
-  -i reference.bsbit \
+  -x reference.bsbit \
   -1 reads.fastq.gz \
   -o sample.bam \
   --metrics \
@@ -320,31 +298,12 @@ layout-specific versioned schema identifier:
 - `bsbit-single-alignment-metrics-v2` for single-end alignment; or
 - `bsbit-alignment-metrics-v2` for paired-end alignment.
 
-The wide tables group:
+Columns cover:
 
 - read or pair counts and BAM record counts;
 - mapping, BAM, library, search, and output settings;
-- decode, mapping, queue, compression, and publication timings in nanoseconds;
+- decode, mapping, queue, compression, and output-finalization timings;
 - soft-clip fallback and mate-rescue counts; and
 - MAPQ, strategy, and read-output policy identifiers.
 
-Metrics are profiling diagnostics, not alignment records and not caller input.
-Normal runs leave stdout empty.
-
-## Compression and indexing summary
-
-| Format | Plain | gzip input | BGZF input/output | Random-access sidecar |
-|---|---:|---:|---:|---|
-| FASTA for `index` | Yes | No | Yes | None required |
-| FASTA for `call` | Yes | No | Yes | Plain: FAI optional; BGZF: FAI + GZI required |
-| FASTQ | Yes | Yes | Yes | None |
-| BED regions | Yes | Yes | Yes | None |
-| BAM | No | No | Always BGZF | BAI or CSI required for calling |
-| CGmap / extended bedMethyl input | Yes | Yes | Yes | None for `combine` |
-| CGmap output | Default | — | `--compress true` | None required by bsbit |
-| Extended bedMethyl output | Default | — | `--compress true` | Tabix-compatible as BED |
-| VCF output | Default | — | `--compress true` | Tabix-compatible when BGZF-compressed |
-| Matrix output | Default | — | `--compress true` | Tabix-compatible as BED |
-
-All inputs must be regular local files. stdin (`-`), URLs, object-store paths,
-and remote streaming are not supported.
+Metrics are profiling diagnostics, not alignment records or caller input.

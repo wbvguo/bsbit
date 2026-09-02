@@ -22,12 +22,7 @@ alignment, methylation and SNP calling, and cohort-matrix construction.
 
 ## Reference
 
-- [Prepare FASTA, FASTQ, and BAM input](reference/input-data.md)
-- [Understand output files](outputs/index.md)
-- [Troubleshoot an error](help/troubleshooting.md)
-
-## Citation
-
-```
-Coming soon.
-```
+- [Input data](reference/input-data.md)
+- [File formats](reference/file-formats.md)
+- [Outputs](outputs/index.md)
+- [Troubleshoot](help/troubleshooting.md)

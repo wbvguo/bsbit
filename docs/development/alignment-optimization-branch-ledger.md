@@ -172,30 +172,30 @@ branches were removed.
 ## Checked-in evidence
 
 - Exploratory report:
-  `workspace/benchmarks/evidence/2026-09-01--align-performance-experiments/report.md`
+  `docs/development/evidence/alignment/2026-09-01--align-performance-experiments/report.md`
 - Exploratory selected timings:
-  `workspace/benchmarks/evidence/2026-09-01--align-performance-experiments/results.tsv`
+  `docs/development/evidence/alignment/2026-09-01--align-performance-experiments/results.tsv`
 - Exploratory index measurements:
-  `workspace/benchmarks/evidence/2026-09-01--align-performance-experiments/index-results.tsv`
+  `docs/development/evidence/alignment/2026-09-01--align-performance-experiments/index-results.tsv`
 - Exploratory reproduction commands:
-  `workspace/benchmarks/evidence/2026-09-01--align-performance-experiments/commands.md`
+  `docs/development/evidence/alignment/2026-09-01--align-performance-experiments/commands.md`
 - Full optimization report:
-  `workspace/benchmarks/evidence/2026-09-01--align-full-optimization/report.md`
+  `docs/development/evidence/alignment/2026-09-01--align-full-optimization/report.md`
 - Full optimization selected timings:
-  `workspace/benchmarks/evidence/2026-09-01--align-full-optimization/results.tsv`
+  `docs/development/evidence/alignment/2026-09-01--align-full-optimization/results.tsv`
 - Full optimization paired metrics:
-  `workspace/benchmarks/evidence/2026-09-01--align-full-optimization/paired-metrics.tsv`
+  `docs/development/evidence/alignment/2026-09-01--align-full-optimization/paired-metrics.tsv`
 - Full optimization reproduction commands:
-  `workspace/benchmarks/evidence/2026-09-01--align-full-optimization/commands.md`
+  `docs/development/evidence/alignment/2026-09-01--align-full-optimization/commands.md`
 - Merged integration report:
-  `workspace/benchmarks/evidence/2026-09-01--align-merged-integration/report.md`
+  `docs/development/evidence/alignment/2026-09-01--align-merged-integration/report.md`
 - Merged integration timing/output summary:
-  `workspace/benchmarks/evidence/2026-09-01--align-merged-integration/results.tsv`
+  `docs/development/evidence/alignment/2026-09-01--align-merged-integration/results.tsv`
 - Merged integration exact metrics:
-  `workspace/benchmarks/evidence/2026-09-01--align-merged-integration/single-metrics.tsv`
-  and `workspace/benchmarks/evidence/2026-09-01--align-merged-integration/paired-metrics.tsv`
+  `docs/development/evidence/alignment/2026-09-01--align-merged-integration/single-metrics.tsv`
+  and `docs/development/evidence/alignment/2026-09-01--align-merged-integration/paired-metrics.tsv`
 - Merged integration reproduction commands:
-  `workspace/benchmarks/evidence/2026-09-01--align-merged-integration/commands.md`
+  `docs/development/evidence/alignment/2026-09-01--align-merged-integration/commands.md`
 
 The reports also name the host-local `/tmp` directories that held complete raw
 runs, BAMs, binaries, indexes, and `perf.data`. Those paths are supporting

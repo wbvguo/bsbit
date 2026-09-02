@@ -85,19 +85,22 @@ impl IndexedCallMode {
                 parameters.minimum_base_quality,
                 parameters.minimum_mapping_quality,
                 true,
+                parameters.ignore_orphans,
             ),
             Self::Snp(config) => EvidenceFilter::new(
                 config.minimum_base_quality,
                 config.minimum_mapping_quality,
                 false,
+                config.ignore_orphans,
             ),
             Self::Joint(config) => EvidenceFilter::new(
                 config.minimum_base_quality,
                 config.minimum_mapping_quality,
                 true,
+                config.ignore_orphans,
             ),
             #[cfg(test)]
-            Self::Panic => EvidenceFilter::new(0, 0, true),
+            Self::Panic => EvidenceFilter::new(0, 0, true, false),
         }
     }
 }
@@ -555,6 +558,9 @@ fn aggregate_indexed_region_mode(
         IndexedCallMode::Joint(config) => Some(MethParameters {
             minimum_base_quality: config.minimum_base_quality,
             minimum_mapping_quality: config.minimum_mapping_quality,
+            minimum_depth: config.minimum_depth,
+            cg_only: false,
+            ignore_orphans: config.ignore_orphans,
         }),
         IndexedCallMode::Snp(_) => None,
         #[cfg(test)]
@@ -864,6 +870,79 @@ mod tests {
     }
 
     #[test]
+    fn methylation_rendering_applies_depth_and_cg_only_filters() {
+        let references = vec![BamReference {
+            name: b"chr1".to_vec(),
+            length: 100,
+        }];
+        let mut region = DenseMethRegion::new(0, 0, 100).unwrap();
+        for (position, context, calls) in [
+            (
+                2,
+                CytosineContext {
+                    class: ContextClass::Chg,
+                    second: b'A',
+                },
+                [
+                    CallKind::Methylated,
+                    CallKind::Methylated,
+                    CallKind::Unmethylated,
+                ],
+            ),
+            (
+                4,
+                CytosineContext {
+                    class: ContextClass::Cg,
+                    second: b'G',
+                },
+                [
+                    CallKind::Methylated,
+                    CallKind::Unmethylated,
+                    CallKind::Deleted,
+                ],
+            ),
+            (
+                6,
+                CytosineContext {
+                    class: ContextClass::Cg,
+                    second: b'G',
+                },
+                [
+                    CallKind::Methylated,
+                    CallKind::Methylated,
+                    CallKind::Unmethylated,
+                ],
+            ),
+        ] {
+            let key = SiteKey {
+                reference: 0,
+                position,
+                strand: EvidenceStrand::Top,
+            };
+            for call in calls {
+                region.add_observation(key, Some(context), call).unwrap();
+            }
+        }
+
+        let mut output = Vec::new();
+        render_meth_region(
+            &mut output,
+            MethylationOutputFormat::Cgmap,
+            MethParameters {
+                minimum_depth: 3,
+                cg_only: true,
+                ..MethParameters::default()
+            },
+            &references,
+            &region,
+            &mut UnresolvedContextSummary::default(),
+        )
+        .unwrap();
+
+        assert_eq!(output, b"chr1\tC\t7\tCG\tCG\t0.666667\t2\t3\n");
+    }
+
+    #[test]
     fn region_and_likelihood_sizes_adapt_to_parallel_memory_budget() {
         let config = SnpConfig::default();
         let meth_parameters = MethParameters::default();
@@ -1143,6 +1222,9 @@ mod tests {
             IndexedCallMode::Meth(MethParameters {
                 minimum_base_quality: config.minimum_base_quality,
                 minimum_mapping_quality: config.minimum_mapping_quality,
+                minimum_depth: config.minimum_depth,
+                cg_only: false,
+                ignore_orphans: config.ignore_orphans,
             }),
         )
         .unwrap();
@@ -1201,6 +1283,10 @@ mod tests {
         render_meth_region(
             &mut writer,
             MethylationOutputFormat::Cgmap,
+            MethParameters {
+                minimum_depth: 2,
+                ..MethParameters::default()
+            },
             &references,
             &region,
             &mut UnresolvedContextSummary::default(),

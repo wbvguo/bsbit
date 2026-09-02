@@ -50,7 +50,7 @@ endpoint, adapter, MAPQ, worker, and SIMD strategies are ordinary production
 code behind those umbrellas. A new algorithm, mapping mode, or switch is not a
 Cargo feature while it is under development: its source, runner, and evidence
 stay in an ignored dated `workspace/worktree/` attempt or detached worktree. The
-status and ownership rules are in the [Cargo feature lifecycle](development/feature-lifecycle.md).
+status and ownership rules are in the [Cargo feature lifecycle](feature-lifecycle.md).
 
 CI additionally links the actual `combined-index` reader/query closure and the
 current alignment library while `CC` and `AR` point to nonexistent programs.
@@ -193,5 +193,5 @@ Large human-maintained FASTA/FASTQ inputs, reusable indexes, and third-party
 tools belong under ignored `dev/`. Agent-generated data, BAMs, perf data,
 flamegraphs, logs, and single-run output stay under ignored `workspace/`, with
 each attempt documented in `workspace/worktree/YYYY-MM-DD--title/`; promoted
-run archives may use `workspace/benchmarks/runs/`. None is a default-test
+run archives may use `workspace/runs/`. None is a default-test
 dependency.

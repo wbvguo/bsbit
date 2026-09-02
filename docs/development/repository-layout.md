@@ -12,7 +12,7 @@ previous build output, or benchmark results.
 | `external/` | Pinned third-party Git submodules plus the static production distribution-license policy under `external/licenses/` | Gitlinks and policy files | Yes, through audited wrappers only |
 | `tests/` | Cross-crate fixtures, formal test support, and the independent Rust fuzz workspace | Yes | Tests only |
 | `scripts/` | Reproducible build, release, and formal validation entry points | Yes | No |
-| `docs/` | Final pages published by the MkDocs website | Yes | No |
+| `docs/` | Final MkDocs pages and compact immutable evidence referenced by them | Yes | No |
 | `dev/` | Human-maintained local scripts, notebooks, experiments, source data, manuscript work, and comparison tools | No | Never |
 | `workspace/` | Agent-generated attempts, notes, one-off scripts, logs, benchmark results, and generated data | No | Never |
 | `target/`, `build/`, `dist/`, `artifacts/` | Regenerable output | No | Never |
@@ -39,9 +39,10 @@ Within `dev/`, `benchmarks/` contains long-lived harness and analysis code,
 `data/` contains authoritative source inputs, `analysis/` contains human-owned
 notebooks, `manuscript/` contains the working preprint, and `tools/` contains
 local comparison-tool installations. Within `workspace/`, `worktree/` is the
-dated experiment archive; `benchmarks/`, `datasets/`, and `docs/` contain
-generated run archives, reusable derivatives, and Agent summaries. An Agent
-that runs a harness writes its attempt and output under
+dated experiment archive, `runs/` contains retained self-contained run
+archives, `datasets/` contains reusable generated derivatives, and `notes/`
+contains local cross-attempt synthesis. An Agent that runs a harness writes its
+attempt and output under
 `workspace/worktree/YYYY-MM-DD--title/`.
 
 ## Dependency direction
@@ -73,10 +74,10 @@ agent-run attempt, human-maintained local asset, or generated output.
 Human-maintained scripts, notebooks, experiments, source data, manuscript work,
 and tools belong under `dev/`. Raw Agent benchmark rows and complete dated
 reports belong to their `workspace/worktree/` attempt; reusable internal
-summaries belong under `workspace/docs/`; promoted run archives may remain
-under `workspace/benchmarks/runs/`. Only final website-facing documentation and the
-compact immutable TSV snapshots linked by that documentation belong in
-`docs/`; complete run archives remain local.
+summaries belong under `workspace/notes/`; promoted run archives may remain
+under `workspace/runs/`. Final website-facing documentation belongs in `docs/`,
+while compact immutable snapshots linked by that documentation belong in
+`docs/development/evidence/`; complete run archives remain local.
 
 Within a crate, keep release implementation in `src/`, public-boundary tests in
 `tests/`, checks requiring private implementation details beside the code as

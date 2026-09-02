@@ -72,26 +72,17 @@ nav:
       - Call methylation: guides/methylation.md
       - Call SNVs: guides/variant-calling.md
       - Build methylation matrix: guides/methylation-matrices.md
-  - Outputs:
-      - Outputs overview: outputs/index.md
-      - Alignment BAM: outputs/alignment-bam.md
+  - Inputs and outputs:
+      - Input data: reference/input-data.md
+      - Output files: outputs/index.md
   - Reference:
       - CLI reference: reference/cli.md
       - File formats: reference/file-formats.md
-      - Input data: reference/input-data.md
       - Troubleshoot: help/troubleshooting.md
 # Evidence, developer references, exact contracts, binary-format specifications,
 # and maintenance registries remain searchable and directly linked without
 # crowding the user navigation.
 not_in_nav: |
-  /performance-evidence.md
-  /known-differences.md
-  /architecture.md
-  /testing.md
-  /repository-layout.md
-  /behavior-contract.md
-  /scientific-contract.md
-  /development/feature-lifecycle.md
-  /development/alignment-optimization-branch-ledger.md
+  /development/**
 
 copyright: !ENV [DOCS_COPYRIGHT, "Copyright &copy; bsbit contributors · local documentation build"]

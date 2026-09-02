@@ -847,7 +847,7 @@ pub struct NativeIndexedBamReader {
 }
 
 impl NativeIndexedBamReader {
-    /// Opens a BAM together with its adjacent BAI or CSI index.
+    /// Opens a BAM together with its adjacent index.
     pub fn open(path: &CStr) -> Result<Self, NativeError> {
         let mut handle = core::ptr::null_mut();
         let mut call = NativeCall::new();

@@ -112,7 +112,7 @@ fn internal_index_construction_is_not_a_public_subcommand() {
 fn public_help_exposes_only_supported_index_and_alignment_entry_points() {
     let help = crate::GENERAL_HELP;
     assert!(help.contains("bsbit index"));
-    assert!(help.contains("bsbit align -i"));
+    assert!(help.contains("bsbit align -x"));
     for hidden in [
         "align-general",
         "index combined",
@@ -130,7 +130,7 @@ fn public_help_exposes_only_supported_index_and_alignment_entry_points() {
 fn standard_alignment_layout_and_read_aliases_parse() {
     let Action::Align(_) = parse(arguments(&[
         "align",
-        "-i",
+        "-x",
         "ref.bsbit",
         "-1",
         "reads.fq",
@@ -180,7 +180,7 @@ fn alignment_aliases_share_option_identity() {
     );
     let duplicate_index = parse(arguments(&[
         "align",
-        "-i",
+        "-x",
         "first.bsbit",
         "--index",
         "second.bsbit",
@@ -197,7 +197,7 @@ fn alignment_aliases_share_option_identity() {
     );
     let duplicate_threads = parse(arguments(&[
         "align",
-        "-i",
+        "-x",
         "ref.bsbit",
         "-1",
         "reads.fq",
@@ -243,6 +243,22 @@ fn alignment_aliases_share_option_identity() {
 }
 
 #[test]
+fn alignment_input_alias_is_rejected() {
+    assert!(
+        parse(arguments(&[
+            "align",
+            "-i",
+            "ref.bsbit",
+            "-1",
+            "reads.fq",
+            "-o",
+            "out.bam",
+        ]))
+        .is_err()
+    );
+}
+
+#[test]
 fn nested_methylation_call_accepts_short_and_long_options() {
     let Action::CallMeth(short) = parse(arguments(&[
         "call",
@@ -258,11 +274,7 @@ fn nested_methylation_call_accepts_short_and_long_options() {
         "-c",
         "true",
         "--region",
-        "chr1:1-10",
-        "--region",
-        "chr1:21-1,000",
-        "--regions-file",
-        "targets.bed.gz",
+        "chr1:1-10,chr1:21-1000",
     ]))
     .expect("short call options parse") else {
         panic!("expected methylation-call action");
@@ -270,17 +282,17 @@ fn nested_methylation_call_accepts_short_and_long_options() {
     assert_eq!(short.format, MethylationOutputFormat::Cgmap);
     assert!(short.compress);
     assert_eq!(short.threads, 1);
-    assert_eq!(short.parameters.minimum_base_quality, 15);
+    assert_eq!(short.parameters.minimum_base_quality, 20);
     assert_eq!(short.parameters.minimum_mapping_quality, 20);
+    assert_eq!(short.parameters.minimum_depth, 10);
+    assert!(!short.parameters.cg_only);
+    assert!(!short.parameters.ignore_orphans);
     assert_eq!(short.regions.intervals.len(), 2);
     assert_eq!(short.regions.intervals[0].start, 0);
     assert_eq!(short.regions.intervals[0].end, 10);
     assert_eq!(short.regions.intervals[1].start, 20);
     assert_eq!(short.regions.intervals[1].end, 1_000);
-    assert_eq!(
-        short.regions.regions_file.as_deref(),
-        Some(std::path::Path::new("targets.bed.gz"))
-    );
+    assert!(short.regions.regions_file.is_none());
 
     let Action::CallMeth(long) = parse(arguments(&[
         "call",
@@ -295,20 +307,33 @@ fn nested_methylation_call_accepts_short_and_long_options() {
         "bed",
         "--threads",
         "4",
-        "--min-base-quality",
+        "--min-bq",
         "25",
         "--min-mapq",
         "30",
+        "--min-depth",
+        "12",
+        "--cg-only",
+        "--ignore-orphan",
+        "--regions-file",
+        "targets.bed.gz",
     ]))
     .expect("long call options parse") else {
         panic!("expected methylation-call action");
     };
     assert_eq!(long.format, MethylationOutputFormat::Bed);
     assert_eq!(long.reference, std::path::Path::new("reference.fa"));
-    assert!(!long.compress);
+    assert!(long.compress);
     assert_eq!(long.threads, 4);
     assert_eq!(long.parameters.minimum_base_quality, 25);
     assert_eq!(long.parameters.minimum_mapping_quality, 30);
+    assert_eq!(long.parameters.minimum_depth, 12);
+    assert!(long.parameters.cg_only);
+    assert!(long.parameters.ignore_orphans);
+    assert_eq!(
+        long.regions.regions_file.as_deref(),
+        Some(std::path::Path::new("targets.bed.gz"))
+    );
 }
 
 #[test]
@@ -337,6 +362,20 @@ fn nested_methylation_call_rejects_invalid_options() {
         arguments(&["call"]),
         arguments(&["call", "unknown"]),
         arguments(&["call", "meth", "-i", "reads.bam"]),
+        arguments(&[
+            "call",
+            "meth",
+            "-i",
+            "reads.bam",
+            "-r",
+            "reference.fa",
+            "-o",
+            "calls",
+            "-f",
+            "cgmap",
+            "--min-depth",
+            "0",
+        ]),
         arguments(&[
             "call",
             "meth",
@@ -392,7 +431,7 @@ fn nested_methylation_call_rejects_invalid_options() {
             "calls",
             "-f",
             "cgmap",
-            "--min-base-quality",
+            "--min-bq",
             "94",
         ]),
         arguments(&[
@@ -414,7 +453,13 @@ fn nested_methylation_call_rejects_invalid_options() {
 
 #[test]
 fn call_region_coordinates_fail_closed() {
-    for region in ["chr1:0-10", "chr1:20-10", "chr1:1,00-200", "chr1"] {
+    for region in [
+        "chr1:0-10",
+        "chr1:20-10",
+        "chr1:1,000",
+        "chr1:1-10,",
+        "chr1",
+    ] {
         assert!(
             parse(arguments(&[
                 "call",
@@ -433,6 +478,52 @@ fn call_region_coordinates_fail_closed() {
             .is_err()
         );
     }
+
+    let repeated = parse(arguments(&[
+        "call",
+        "meth",
+        "-i",
+        "reads.bam",
+        "--reference",
+        "reference.fa",
+        "-o",
+        "calls",
+        "-f",
+        "cgmap",
+        "--region",
+        "chr1:1-10",
+        "--region",
+        "chr2:1-10",
+    ]))
+    .expect_err("--region may be specified only once");
+    assert!(
+        repeated
+            .to_string()
+            .contains("separate multiple regions with commas")
+    );
+
+    let conflicting = parse(arguments(&[
+        "call",
+        "meth",
+        "-i",
+        "reads.bam",
+        "--reference",
+        "reference.fa",
+        "-o",
+        "calls",
+        "-f",
+        "cgmap",
+        "--region",
+        "chr1:1-10",
+        "--regions-file",
+        "targets.bed",
+    ]))
+    .expect_err("region arguments conflict");
+    assert!(
+        conflicting
+            .to_string()
+            .contains("`--region` conflicts with `--regions-file`")
+    );
 }
 
 #[test]
@@ -486,14 +577,15 @@ fn methylation_combine_parses_comma_separated_inputs_names_and_filters() {
         "tumor.bed.gz,normal.bed",
         "--sample-name",
         "tumor,normal",
-        "-o",
-        "matrix.bed.gz",
+        "-p",
+        "matrix",
         "-m",
         "both",
         "--min-count",
         "10",
         "--min-prop",
         "0.8",
+        "--cg-only",
         "-c",
         "true",
         "-t",
@@ -505,6 +597,7 @@ fn methylation_combine_parses_comma_separated_inputs_names_and_filters() {
     assert_eq!(options.inputs.len(), 2);
     assert_eq!(options.inputs[0].sample, "tumor");
     assert_eq!(options.inputs[1].sample, "normal");
+    assert_eq!(options.output_prefix, std::path::Path::new("matrix"));
     assert_eq!(options.matrix_format, CombineMatrixFormat::Both);
     assert_eq!(options.parameters.minimum_count, 10);
     assert_eq!(
@@ -513,6 +606,7 @@ fn methylation_combine_parses_comma_separated_inputs_names_and_filters() {
             .minimum_sample_proportion_parts_per_billion,
         800_000_000
     );
+    assert!(options.parameters.cg_only);
     assert!(options.compress);
     assert_eq!(options.threads, 8);
 }
@@ -523,13 +617,15 @@ fn methylation_combine_defaults_names_to_exact_paths() {
         "combine",
         "--input",
         "cohort/tumor.bed.gz,cohort/normal sample.bed",
-        "--output",
-        "matrix.bed",
+        "--prefix",
+        "matrix",
     ]))
     .expect("path-derived sample names parse") else {
         panic!("expected combine action");
     };
     assert_eq!(defaulted.inputs.len(), 2);
+    assert!(defaulted.compress);
+    assert!(!defaulted.parameters.cg_only);
     assert_eq!(defaulted.inputs[0].sample, "cohort/tumor.bed.gz");
     assert_eq!(defaulted.inputs[1].sample, "cohort/normal sample.bed");
     assert_eq!(
@@ -541,8 +637,8 @@ fn methylation_combine_defaults_names_to_exact_paths() {
         "combine",
         "--input",
         "tumor=one.bed",
-        "--output",
-        "matrix.bed",
+        "--prefix",
+        "matrix",
     ]))
     .expect("equals sign remains part of the path") else {
         panic!("expected combine action");
@@ -557,41 +653,33 @@ fn methylation_combine_defaults_names_to_exact_paths() {
 #[test]
 fn methylation_combine_rejects_ambiguous_or_invalid_options() {
     for invalid in [
-        arguments(&["combine", "-o", "matrix.bed"]),
+        arguments(&["combine", "-p", "matrix"]),
         arguments(&[
             "combine",
             "-i",
             "one.bed,two.bed",
             "--sample-name",
             "only-one",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
         ]),
-        arguments(&["combine", "-i", "one.bed,,two.bed", "-o", "matrix.bed"]),
+        arguments(&["combine", "-i", "one.bed,,two.bed", "-p", "matrix"]),
         arguments(&[
             "combine",
             "-i",
             "one.bed,two.bed",
             "--sample-name",
             "sample,,control",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
         ]),
-        arguments(&[
-            "combine",
-            "-i",
-            "one.bed",
-            "-i",
-            "one.bed",
-            "-o",
-            "matrix.bed",
-        ]),
+        arguments(&["combine", "-i", "one.bed", "-i", "one.bed", "-p", "matrix"]),
         arguments(&[
             "combine",
             "-i",
             "sample=one.bed",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
             "--matrix",
             "wide",
         ]),
@@ -599,8 +687,8 @@ fn methylation_combine_rejects_ambiguous_or_invalid_options() {
             "combine",
             "-i",
             "sample=one.bed",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
             "--min-prop",
             "1.1",
         ]),
@@ -608,11 +696,22 @@ fn methylation_combine_rejects_ambiguous_or_invalid_options() {
             "combine",
             "-i",
             "sample=one.bed",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
             "--threads",
             "0",
         ]),
+        arguments(&[
+            "combine",
+            "-i",
+            "sample=one.bed",
+            "-p",
+            "matrix",
+            "--cg-only",
+            "--cg-only",
+        ]),
+        arguments(&["combine", "-i", "sample=one.bed", "-o", "matrix.bed"]),
+        arguments(&["combine", "-i", "sample=one.bed", "--output", "matrix.bed"]),
     ] {
         assert!(parse(invalid).is_err());
     }
@@ -631,11 +730,9 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "calls.vcf.gz",
         "--sample-name",
         "tumor-A",
-        "-c",
-        "true",
         "-t",
         "8",
-        "--min-base-quality",
+        "--min-bq",
         "25",
         "--min-mapq",
         "30",
@@ -655,6 +752,7 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "0.0025",
         "--overconversion-rate",
         "0.000001",
+        "--ignore-orphan",
     ]))
     .expect("SNP call parses") else {
         panic!("expected SNP-call action");
@@ -665,6 +763,7 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
     assert_eq!(snp.threads, 8);
     assert_eq!(snp.parameters.minimum_base_quality, 25);
     assert_eq!(snp.parameters.minimum_mapping_quality, 30);
+    assert!(snp.parameters.ignore_orphans);
     assert_eq!(snp.parameters.minimum_depth, 6);
     assert_eq!(snp.parameters.minimum_alternate_count, 3);
     assert_eq!(
@@ -694,6 +793,10 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "calls.vcf.gz",
         "--heterozygosity",
         "0.002",
+        "--cg-only",
+        "--ignore-orphan",
+        "-c",
+        "false",
     ]))
     .expect("joint call parses") else {
         panic!("expected joint-call action");
@@ -701,8 +804,10 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
     assert_eq!(joint.meth_format, MethylationOutputFormat::Cgmap);
     assert_eq!(joint.reference, std::path::Path::new("reference.fa"));
     assert_eq!(joint.sample_name.as_deref(), Some("tumor-A"));
-    assert_eq!(joint.parameters.minimum_base_quality, 15);
+    assert_eq!(joint.parameters.minimum_base_quality, 20);
     assert_eq!(joint.parameters.minimum_mapping_quality, 20);
+    assert!(joint.cg_only);
+    assert!(joint.parameters.ignore_orphans);
     assert_eq!(joint.parameters.heterozygosity_parts_per_billion, 2_000_000);
     assert!(!joint.compress);
 }
@@ -731,7 +836,7 @@ fn invalid_snp_and_joint_quality_controls_are_rejected() {
             "reference.fa",
             "-o",
             "calls.vcf",
-            "--min-base-quality",
+            "--min-bq",
             "94",
         ]),
         arguments(&[

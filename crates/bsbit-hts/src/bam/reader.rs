@@ -920,7 +920,7 @@ fn copy_slice_into<T: Copy>(destination: &mut Vec<T>, source: &[T]) {
     destination.extend_from_slice(source);
 }
 
-/// A thread-confined BAM reader with reusable BAI/CSI region queries.
+/// A thread-confined BAM reader with reusable indexed region queries.
 pub struct IndexedBamReader {
     path: PathBuf,
     header: IndexedBamHeader,
@@ -929,7 +929,7 @@ pub struct IndexedBamReader {
 }
 
 impl IndexedBamReader {
-    /// Opens a local BAM and its adjacent `.bai` or `.csi` index.
+    /// Opens a local BAM and its adjacent index.
     ///
     /// # Errors
     ///

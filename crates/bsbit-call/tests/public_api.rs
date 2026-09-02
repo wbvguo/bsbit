@@ -238,6 +238,7 @@ fn module_entry_points_validate_before_opening_inputs() {
         vcf_output: PathBuf::from("missing.vcf"),
         compress: false,
         threads: bsbit_call::MAX_THREADS + 1,
+        cg_only: false,
         parameters: snp::Parameters::default(),
     })
     .expect_err("excess joint threads must fail before input is opened");
@@ -255,6 +256,7 @@ fn module_entry_points_validate_before_opening_inputs() {
         vcf_output: same_output,
         compress: true,
         threads: 1,
+        cg_only: false,
         parameters: snp::Parameters::default(),
     })
     .expect_err("joint output aliases must fail before input is opened");
@@ -469,6 +471,7 @@ fn real_meth_snp_and_joint_calls_share_outputs() {
         vcf_output: joint_vcf_output.clone(),
         compress: true,
         threads: 2,
+        cg_only: false,
         parameters,
     })
     .expect("real joint call succeeds");

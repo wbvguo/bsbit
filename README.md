@@ -1,167 +1,24 @@
+<img src="docs/img/bsbit.png" alt="bsbit logo" width="150" align="right">
+
 # bsbit
 
-`bsbit` is an ultrafast, memory-efficient toolkit for bisulfite-sequencing
-alignment, methylation and SNP calling, and cohort-matrix construction. The
-qualified release target is 64-bit Linux on an Intel or AMD CPU with
-x86-64-v3 support—roughly Intel Haswell or AMD Zen and newer. It builds a
-memory-efficient reference index, reads plain or gzip FASTQ directly, and
-publishes finalized BAM atomically through HTSlib.
+bsbit is an ultrafast, memory-efficient toolkit for bisulfite-sequencing
+analysis. It provides reference indexing, read alignment, methylation and
+single-nucleotide variant calling, and cohort-level methylation matrices in one
+command-line workflow. Its outputs integrate with common genomic tools for
+quality control and downstream analysis.
 
-Start with the [documentation site](docs/index.md). It is the authoritative
-source for installation, workflows, command arguments, output contracts,
-troubleshooting, and current qualification evidence. Historical experiments do
-not compile into the product; their lifecycle is documented under
-[development](docs/development/feature-lifecycle.md).
 
-## Prerequisites
+## Installation and usage
 
-Building requires Rust 1.89 or newer, a C toolchain, Autotools, Make,
-pkg-config, OpenMP, and development libraries for zlib, bzip2, liblzma, and
-libdeflate. On Debian or Ubuntu:
+For supported platforms, installation instructions, the quick start, workflow
+guides, CLI options, input and output formats, and troubleshooting, see the
+complete user guide:
 
-```sh
-sudo apt-get install build-essential autoconf automake libtool pkg-config \
-  zlib1g-dev libbz2-dev liblzma-dev libdeflate-dev
-```
+[**wbvguo.github.io/bsbit/**](https://wbvguo.github.io/bsbit/)
 
-HTSlib/htscodecs and libsais are pinned Git submodules under `external/`.
-Clone with `--recurse-submodules`, or initialize an existing checkout with:
 
-```sh
-git submodule update --init --recursive
-```
-
-See [installation](docs/getting-started/installation.md) for the supported
-platform contract and complete setup notes.
-
-## Build
-
-Build the complete indexing, alignment, calling, and combining command surface:
-
-```sh
-cargo build --locked --release -p bsbit-cli --bin bsbit
-```
-
-For an audited x86-64-v3 fat-LTO `bsbit` binary, use
-`scripts/build-bsbit.sh`. It writes build products and provenance below
-ignored `build/` unless given an explicit temporary output path.
-
-## Minimal index and alignment flow
-
-Create the complete reference index:
-
-```sh
-target/release/bsbit index \
-  -r GRCh38.fa \
-  -o GRCh38.bsbit \
-  -t 8
-```
-
-Use the same command for either read layout. This paired-end example supplies
-both mates; alignment only opens and validates the opaque index created above
-and never builds or changes it:
-
-```sh
-target/release/bsbit align \
-  -i GRCh38.bsbit \
-  -1 sample_R1.fastq.gz \
-  -2 sample_R2.fastq.gz \
-  -o sample.bam \
-  -t 8 \
-  --compression-threads 2
-```
-
-For single-end input, supply only `--read1` (or `-1`). Directional alignment is
-the default; add `--non-directional` to make one decision across OT, OB, CTOT,
-and CTOB. The single-end path accepts the shared runtime/output controls and
-`--sensitive`, writes numeric MAPQ from the retained search evidence, performs
-conservative exact 3' Illumina-adapter recovery for directional output,
-supports `--metrics`, and declares caller-compatible provenance; see the
-[single-end alignment
-guide](docs/guides/alignment.md).
-
-Omit a mode flag for the default mode or add `--sensitive` for the wider
-bounded candidate-search audit. On single-end input the default result is the
-incumbent: a different-origin replacement or new rescue must be unique at
-MAPQ 20 or above, while a lower-confidence conflict retains the incumbent at
-MAPQ 0. The current replicated maximum-recall qualification remains
-paired-end; directional single-end has one controlled same-binary 5M-R1
-comparison, which does not qualify non-directional reads.
-Search, rescue, reporting, and MAPQ policies are fixed by each mode rather
-than assembled from experimental switches. Use `--help` for the exact command
-surface, and see [indexing](docs/guides/indexing.md),
-[alignment](docs/guides/alignment.md) before changing resource or output
-settings.
-
-## Outputs and downstream tools
-
-The default `minimal` BAM contract emits standard BAM core fields plus literal
-`NM` and bisulfite-strand `XG`. Select `--output-contract bismark` only when a
-consumer requires Bismark-compatible `MD`, `XM`, `XR`, and `XG` tags. The
-default BAM retains mapped MAPQ-0 representatives and unmapped primary records;
-`--mapped-only` removes only truly unmapped records.
-
-`bsbit call meth`, `bsbit call snp`, and `bsbit call joint` consume a
-coordinate-sorted, duplicate-marked, indexed BAM plus its matching reference
-FASTA. An existing FAI is used when available; otherwise plain FASTA is scanned
-directly without creating a sidecar.
-`bsbit combine` merges named CGmap and/or extended bedMethyl files into count
-and/or level matrices. Output schemas and preprocessing contracts are
-maintained in:
-
-- [workflow outputs](docs/outputs/index.md)
-- [methylation calls](docs/guides/methylation.md)
-- [variant and joint calls](docs/guides/variant-calling.md)
-- [methylation matrices](docs/guides/methylation-matrices.md)
-
-The full command reference is [docs/reference/cli.md](docs/reference/cli.md).
-
-## Validation
-
-Run the normal source checks from the repository root:
-
-```sh
-scripts/check-native-sources.sh
-cargo fmt --all -- --check
-cargo test --locked --workspace
-```
-
-Formal fuzz, native-boundary, platform-publication, and release-soak entry
-points are indexed in [scripts/README.md](scripts/README.md). Large references,
-FASTQ inputs, BAM outputs, profiling data, and benchmark runs remain under
-ignored `dev/` or `workspace/`; neither is required by the default suite.
-
-## Project boundaries and evidence
-
-Tracked product code lives in `crates/`, durable small fixtures in `tests/fixtures/`,
-and current user/developer contracts in `docs/`. See
-[repository layout](docs/repository-layout.md) and
-[architecture](docs/architecture.md) for crate ownership and dependency
-direction.
-
-Performance numbers, support boundaries, MAPQ interpretation, and known
-differences change with qualification evidence and therefore live only in the
-[current performance evidence](docs/performance-evidence.md),
-[supported workflows](docs/getting-started/workflow.md#supported-workflows), and
-[known differences](docs/known-differences.md) pages.
-
-## Build the documentation
-
-Install the locked documentation dependency group in a virtual environment or
-use the existing Conda environment, then preview the site on port 8800:
-
-```sh
-python3 -m venv .venv-docs
-source .venv-docs/bin/activate
-python -m pip install --upgrade "pip>=25.1"
-python -m pip install --group docs
-mkdocs serve
-```
-
-Open <http://127.0.0.1:8800/bsbit/>. Set `DEV_ADDR` only when another listen
-address is required. Before publishing, run `mkdocs build --strict`; CI runs
-the same strict build.
-
-Project-owned code is dual-licensed under MIT or Apache-2.0. Fixed third-party
-components retain their own licenses; see
-[`external/licenses/THIRD_PARTY_NOTICES.md`](external/licenses/THIRD_PARTY_NOTICES.md).
+## License
+bsbit is dual-licensed under the [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE) license. 
+Fixed third-party components retain their own licenses; see the
+[third-party notices](external/licenses/THIRD_PARTY_NOTICES.md).

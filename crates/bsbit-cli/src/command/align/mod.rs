@@ -23,10 +23,10 @@ use crate::{CliError, RunReport};
 pub(crate) const HELP: &str = r"bsbit align - standard bisulfite read alignment
 
 USAGE:
-  bsbit align -i PATH -1 PATH [-2 PATH] -o PATH [OPTIONS]
+  bsbit align -x PATH -1 PATH [-2 PATH] -o PATH [OPTIONS]
 
 REQUIRED:
-  -i, --index PATH                   complete index created by `bsbit index`
+  -x, --index PATH                   complete index created by `bsbit index`
   -1, --read1 PATH                   single-end FASTQ, or R1 FASTQ when paired
   -o, --output PATH                  BAM path; an existing file is atomically replaced
 
@@ -268,7 +268,7 @@ fn parse_options_from(
             .to_str()
             .ok_or_else(|| invalid("argument name is not UTF-8"))?;
         let flag = match flag {
-            "-i" => "--index",
+            "-x" => "--index",
             "-1" => "--read1",
             "-2" => "--read2",
             "-o" | "--output-bam" => "--output",

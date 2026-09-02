@@ -2,7 +2,7 @@
 
 This page defines behavior that users and downstream tools may rely on. The
 [scientific contract](scientific-contract.md) owns bisulfite chemistry and
-calling semantics; the [CLI reference](reference/cli.md) owns option spelling
+calling semantics; the [CLI reference](../reference/cli.md) owns option spelling
 and defaults.
 
 ## Command surfaces
@@ -39,7 +39,7 @@ approximated.
 - URLs, stdin aliases, devices, and object-store paths are unsupported.
 
 Complete calling requirements, including FASTA access and BAM identity, are
-defined in [Prepare input data](reference/input-data.md).
+defined in [Prepare input data](../reference/input-data.md).
 
 ## Placement and classification
 
