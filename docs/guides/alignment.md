@@ -1,151 +1,104 @@
 # Align reads
 
-`bsbit align` is the entry point for both read layouts. Supplying read 1 alone
-selects directional single-end alignment; adding synchronized read 2 selects
-paired-end alignment without changing the command.
+`bsbit align` maps bisulfite sequencing reads to a reference genome and writes
+an input-order BAM. It supports directional and non-directional libraries with
+either single-end or paired-end data.
 
-Both layouts open the opaque index created by `bsbit index`; alignment never
-builds or modifies index data.
+## Inputs
 
-## Before you run
+Alignment requires a [reference index](indexing.md) and one or two FASTQ files.
+FASTQ may be plain, gzip-compressed, or BGZF-compressed. See [Input
+data](../reference/input-data.md) for the complete input requirements.
 
-- Complete the [installation](../getting-started/installation.md) and make the
-  built binary available on `PATH`.
-- [Build one complete index](indexing.md) from the reference FASTA.
-- For paired input, confirm that R1 and R2 end together and use synchronized
-  read names.
-- Choose template-span bounds appropriate to a paired library rather than
-  relying on a learned insert-size distribution.
+## Run alignment
 
-The audited fat-LTO build used for frozen benchmark reproduction is documented
-with the [performance evidence](../performance-evidence.md#reproduction-protocol).
-It is not required for an ordinary source build or analysis run.
-
-## Align single-end reads
+For paired-end data, supply both read files with `-1` and `-2`:
 
 ```bash
 bsbit align \
-  --index GRCh38.bsbit \
-  --read1 sample.fastq.gz \
-  --output-bam sample.bam \
-  --sensitive \
-  --threads 8
+  -i GRCh38.bsbit \
+  -1 sample_R1.fastq.gz \
+  -2 sample_R2.fastq.gz \
+  -o sample.bam \
+  -t 8
 ```
 
-Omit `--sensitive` for the low-latency default. With it, single-end alignment
-replays seed intervals admitted only by the wider 4,096-hit bound, completes
-the six-round bounded frontier, and then performs distance-5 verification,
-origin classification, and MAPQ. Pair geometry, mate rescue, and paired
-adapter recovery do not apply to a single read.
-
-!!! note "Single-end confidence"
-    Unique origins receive numeric Q10/Q15/Q20/Q30/Q40 from evidence retained
-    by the selecting search; tied origins remain MAPQ 0. Output declares
-    `caller-compatible-directional-single`. The published truth qualification
-    is scoped to the documented 5M-R1 simulated corpus.
-
-Single-end output preserves input order. Coordinate-based analysis still
-requires coordinate sorting. Single-end input currently supports the
-directional library model; non-directional single-end and PBAT are unsupported.
-
-Shared options including `--sensitive`, `--threads`, `--bam-threads`, and
-`--bam-compression-level` apply to the read-1-only layout. Paired-only controls
-including `--non-directional`, template span, `--mapped-only`, output-contract
-selection, paired batching, and `--metrics` fail explicitly on single-end
-input instead of being ignored.
-
-## Align paired reads
-
-Use synchronized R1 and R2 for caller-compatible MAPQ and BAM provenance:
+For single-end data, supply only read 1:
 
 ```bash
 bsbit align \
-  --index GRCh38.bsbit \
-  --read1 sample_R1.fastq.gz \
-  --read2 sample_R2.fastq.gz \
-  --output-bam sample.bam \
-  --threads 8 \
-  --bam-threads 2 \
-  --output-contract minimal \
-  --min-template-span 0 \
-  --max-template-span 1000
+  -i GRCh38.bsbit \
+  -1 sample.fastq.gz \
+  -o sample.bam \
+  -t 8
 ```
 
-The default run keeps stdout clean. Add `--metrics` and redirect stdout when
-the two-row profiling TSV is useful:
+## Common options
+
+| Option | Value | Default | Description |
+| --- | --- | --- | --- |
+| `-i`,<br>`--index` | `PATH` | Required | Path to an alignment index created by `bsbit index` |
+| `-1`,<br>`--read1` | `PATH` | Required | Plain, gzip-compressed, or BGZF-compressed FASTQ for single-end reads or paired-end read 1 |
+| `-2`,<br>`--read2` | `PATH` | None | Plain, gzip-compressed, or BGZF-compressed FASTQ for paired-end read 2 |
+| `-o`,<br>`--output` | `PATH` | Required | Path for the input-order BAM output |
+| `-t`,<br>`--threads` | `N` | `1` | Number of mapping workers, from 1 to 64 |
+
+For compression, batching, profiling metrics, template-span, and other
+advanced options, see the [`bsbit align` CLI
+reference](../reference/cli.md#bsbit-align).
+
+## Configure alignment
+
+### Search sensitivity
+
+The default mode balances speed and sensitivity. Add `--sensitive` to search a
+wider set of candidates when additional sensitivity is more important than
+runtime:
 
 ```bash
 bsbit align \
-  --index GRCh38.bsbit \
-  --read1 sample_R1.fastq.gz \
-  --read2 sample_R2.fastq.gz \
-  --output-bam sample.bam \
-  --threads 8 \
-  --metrics \
-  > sample.summary.tsv
+  -i GRCh38.bsbit \
+  -1 sample.fastq.gz \
+  -o sample.bam \
+  -t 8 \
+  --sensitive
 ```
 
-The BAM is written in input order. Inspect it immediately, then follow the
-[BAM-preparation guide](prepare-bam.md) before coordinate indexing or calling.
+### Library type
 
-## Choose an alignment mode
-
-Both layouts expose default and sensitive search. For single-end input,
-default keeps the existing early-resolution d3/d5 path and `--sensitive`
-completes the wider bounded candidate frontier before classification. The
-paired-end path additionally records one of these stable strategies:
-
-| Mode | Stable strategy | Main behavior |
-|---|---|---|
-| Default (omit a mode flag) | `balanced-d5-adapter-recovery-read-complete-v2` | Balanced distance-3-to-5 search plus exact Illumina-adapter recovery for otherwise-unmapped directional pairs |
-| `--sensitive` | `sensitive-bounded-integrated-read-complete-v1` | Additional complete-frontier, adapter, confidence, and bounded-repeat evidence within the published wall-time envelope |
-
-Use default mode for the normal latency/accuracy balance. Use `--sensitive`
-when the documented extra recall is worth the additional runtime. Current
-measurements and their workload boundary live on the
-[performance page](../performance-evidence.md).
-
-Both modes write one primary record per input read by default. An ambiguous
-pair may retain one deterministic mapped representative, normally at MAPQ 0;
-a narrowly qualified sensitive subset may receive MAPQ 10. Use pair-minimum
-MAPQ 20 when a downstream workflow requires pairs classified as unique by this
-executable. bsbit MAPQ tiers rank confidence within bsbit and are not
-probability-matched to another aligner.
-
-## Select library orientation
-
-Directional paired libraries are the default. Add `--non-directional` to make
-one placement decision across all four supported directional classes. The
-option does not infer orientation from assay name and does not change the
-output-tag contract.
+Directional alignment is used by default. Add `--non-directional` for a
+non-directional library; the flag works with both single-end and paired-end
+data:
 
 ```bash
 bsbit align \
-  --index GRCh38.bsbit \
-  --read1 sample_R1.fastq.gz \
-  --read2 sample_R2.fastq.gz \
-  --output-bam sample.nondirectional.bam \
-  --non-directional \
-  --threads 8
+  -i GRCh38.bsbit \
+  -1 sample_R1.fastq.gz \
+  -2 sample_R2.fastq.gz \
+  -o sample.bam \
+  -t 8 \
+  --non-directional
 ```
 
-PBAT is unsupported rather than silently approximated. Check the actual
-library protocol before choosing this option.
+### BAM output
 
-## Select the output contract
+By default, `bsbit align` writes the BAM tags required by bsbit callers. For
+downstream tools that require Bismark-style optional tags, use
+`--output-contract bismark`. Add `--mapped-only` to omit unmapped records.
 
-The default `minimal` contract emits `NM` and `XG` and is sufficient for the
-in-tree callers. Use `--output-contract bismark` only for a consumer that
-requires Bismark-compatible `MD`, `XM`, and `XR` tags in addition to `NM` and
-`XG`. The compatibility contract changes tags, not coordinates, ambiguity,
-MAPQ, or classification.
+## Validate the BAM
 
-See [Alignment BAM](../outputs/alignment-bam.md) for header provenance, record
-completeness, tag definitions, and inspection commands.
+The BAM follows FASTQ input order and is not coordinate-sorted. Validate it
+before continuing:
+
+```bash
+samtools quickcheck -v sample.bam
+samtools flagstat sample.bam
+```
 
 ## Next
 
-- [Prepare the BAM for calling](prepare-bam.md)
-- [Review every alignment option](../reference/cli.md#bsbit-align)
-- [Review supported workflows](../getting-started/workflow.md#supported-workflows)
-- [Troubleshoot alignment](../help/troubleshooting.md)
+- [Prepare BAM file](prepare-bam.md)
+- [Alignment BAM fields and tags](../outputs/alignment-bam.md)
+- [`bsbit align` CLI reference](../reference/cli.md#bsbit-align)
+- [Troubleshoot](../help/troubleshooting.md)

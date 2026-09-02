@@ -104,13 +104,13 @@ impl Parameters {
 pub struct Options {
     /// Coordinate-sorted, indexed canonical bsbit BAM input.
     pub input: PathBuf,
-    /// Indexed FASTA used as the authoritative reference sequence.
+    /// Authoritative FASTA; an existing FAI is used, otherwise plain FASTA is scanned.
     pub reference: PathBuf,
-    /// VCF sample name; defaults to the unique BAM `SM`, then its basename.
+    /// VCF sample name; defaults to the unique BAM `SM`, then its filename stem.
     pub sample_name: Option<String>,
     /// Optional interval restriction; empty means the whole BAM dictionary.
     pub regions: RegionSelection,
-    /// Create-only VCF destination.
+    /// VCF destination, replacing an existing file after completion.
     pub output: PathBuf,
     /// Encode output as BGZF when true, otherwise plain VCF.
     pub compress: bool,

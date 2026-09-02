@@ -9,7 +9,7 @@ docs_dir: docs
 theme:
   name: material
   language: en
-  logo: img/dna-methylation.svg
+  logo: img/digital-dnam.svg
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -68,33 +68,29 @@ nav:
   - Usage:
       - Build index: guides/indexing.md
       - Align reads: guides/alignment.md
-      - Prepare a BAM: guides/prepare-bam.md
-      - Call methylation: outputs/methylation.md
-      - Call SNVs: outputs/variant-calling.md
-      - Build matrix: outputs/methylation-matrices.md
+      - Prepare BAM file: guides/prepare-bam.md
+      - Call methylation: guides/methylation.md
+      - Call SNVs: guides/variant-calling.md
+      - Build methylation matrix: guides/methylation-matrices.md
   - Outputs:
       - Outputs overview: outputs/index.md
       - Alignment BAM: outputs/alignment-bam.md
   - Reference:
-      - Use the CLI reference: reference/cli.md
-      - Prepare input data: reference/input-data.md
-      - Troubleshoot problems: help/troubleshooting.md
-  - Evidence and limitations:
-      - Review performance evidence: performance-evidence.md
-      - Check known differences: known-differences.md
-  - Developer documentation:
-      - Review the architecture: architecture.md
-      - Run tests and release checks: testing.md
-      - Follow the repository layout: repository-layout.md
-
-# Exact contracts, binary-format specifications, and maintenance registries
-# remain searchable and directly linked without crowding the user navigation.
+      - CLI reference: reference/cli.md
+      - File formats: reference/file-formats.md
+      - Input data: reference/input-data.md
+      - Troubleshoot: help/troubleshooting.md
+# Evidence, developer references, exact contracts, binary-format specifications,
+# and maintenance registries remain searchable and directly linked without
+# crowding the user navigation.
 not_in_nav: |
+  /performance-evidence.md
+  /known-differences.md
+  /architecture.md
+  /testing.md
+  /repository-layout.md
   /behavior-contract.md
   /scientific-contract.md
   /development/feature-lifecycle.md
-  /getting-started/capabilities.md
-  /guides/paired-end-alignment.md
-  /tutorials/end-to-end.md
 
 copyright: !ENV [DOCS_COPYRIGHT, "Copyright &copy; bsbit contributors · local documentation build"]

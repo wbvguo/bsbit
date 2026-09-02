@@ -1,12 +1,12 @@
 //! Shared BAM, reference, region, and sample preflight for call modes.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use bsbit_core::reference::ReferenceSemanticDigest;
 use bsbit_hts::IndexedBamReader;
 
-use crate::reference_context::CallReferenceReader;
+use crate::reference_context::CallReferenceSource;
 use crate::region::{CallRegion, RegionSelection, plan_call_regions};
 use crate::region_workers::{IndexedCallMode, region_bases_for};
 use crate::{CallError, CallErrorKind};
@@ -39,7 +39,7 @@ pub(crate) fn resolve_sample_name(
                 input.display()
             ))
         })?;
-    validate_sample_name(command, sample.as_bytes(), "BAM basename")
+    validate_sample_name(command, sample.as_bytes(), "BAM filename stem")
 }
 
 pub(crate) fn validate_explicit_sample_name(
@@ -74,7 +74,7 @@ pub(crate) struct PreparedCallInput {
     pub(crate) references: Vec<BamReference>,
     pub(crate) regions: Vec<CallRegion>,
     pub(crate) worker_count: usize,
-    pub(crate) reference: PathBuf,
+    pub(crate) reference: CallReferenceSource,
     pub(crate) bam_sample_name: Option<Vec<u8>>,
 }
 
@@ -160,14 +160,15 @@ pub(crate) fn prepare_call_input(
             error,
         )
     })?;
-    let mut reference_reader = CallReferenceReader::open(reference_path, &references)?;
+    let reference = CallReferenceSource::prepare(reference_path, &references)?;
+    let mut reference_reader = reference.open()?;
     reference_reader.validate_semantic_digest(
         &references,
         ReferenceSemanticDigest::from_bytes(provenance.reference_semantic_digest()),
     )?;
     reference_reader.close().map_err(|error| {
         error.with_context(format!(
-            "{command}: validate indexed reference FASTA {}",
+            "{command}: validate reference FASTA {}",
             reference_path.display()
         ))
     })?;
@@ -179,7 +180,7 @@ pub(crate) fn prepare_call_input(
         references,
         regions,
         worker_count,
-        reference: reference_path.to_path_buf(),
+        reference,
         bam_sample_name,
     })
 }

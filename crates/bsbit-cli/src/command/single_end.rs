@@ -18,7 +18,7 @@ use bsbit_hts::{
 };
 use bsbit_index::reference::ReferenceIndex;
 use bsbit_index::storage::combined::load_combined_reference_catalog;
-use bsbit_io::validate_create_target;
+use bsbit_io::validate_replace_target;
 
 use crate::parallel::{
     DispatchError, ProducerOutcome, WorkDispatcher, WorkerOutcome, run_ordered_parallel,
@@ -43,8 +43,8 @@ pub(crate) struct SingleEndCommandOptions {
     pub(crate) max_edit_distance: u64,
     pub(crate) batch_records: u64,
     pub(crate) threads: u64,
-    pub(crate) bam_threads: u32,
-    pub(crate) bam_compression_level: Option<u8>,
+    pub(crate) compression_threads: u32,
+    pub(crate) compression_level: Option<u8>,
 }
 
 pub(crate) fn run_single_end(options: &SingleEndCommandOptions) -> Result<RunReport, CliError> {
@@ -93,8 +93,8 @@ fn run_single_align_scalar(
         staging,
         &header,
         record_limits,
-        options.bam_threads,
-        options.bam_compression_level,
+        options.compression_threads,
+        options.compression_level,
     )?;
     let batch_size = physical_batch_size(options.batch_records)?;
     let mut batch = Vec::new();
@@ -190,8 +190,8 @@ fn run_single_align_parallel(
                 staging,
                 &header,
                 record_limits,
-                options.bam_threads,
-                options.bam_compression_level,
+                options.compression_threads,
+                options.compression_level,
             )
         },
         write_parallel_records,
@@ -501,7 +501,7 @@ impl OutputWriter {
             .finish()
             .map_err(|error| operation_error("align", "finalize BAM output", target, &error))?;
         let publication = completed
-            .publish_create_new(target)
+            .publish_replace(target)
             .map_err(|error| operation_error("align", "publish BAM output", target, &error))?;
         let warning = publication.cleanup_warning().map(|kind| {
             CliWarning::new(format!(
@@ -515,14 +515,8 @@ impl OutputWriter {
 }
 
 fn validate_output_target(path: &Path) -> Result<(), CliError> {
-    match validate_create_target(path) {
+    match validate_replace_target(path) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            Err(CliError::operation(format!(
-                "output destination {} already exists",
-                path.display()
-            )))
-        }
         Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
             let parent = output_parent(path);
             Err(CliError::operation(format!(

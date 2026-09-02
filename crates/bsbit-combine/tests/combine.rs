@@ -42,6 +42,27 @@ fn bed_row(
     )
 }
 
+fn cgmap_row(
+    contig: &str,
+    nucleotide: char,
+    position: u64,
+    context: &str,
+    dinucleotide: &str,
+    methylated: u64,
+    total: u64,
+) -> String {
+    let level = if total == 0 {
+        "na".to_owned()
+    } else {
+        let scaled =
+            (u128::from(methylated) * 1_000_000 + u128::from(total) / 2) / u128::from(total);
+        format!("{}.{:06}", scaled / 1_000_000, scaled % 1_000_000)
+    };
+    format!(
+        "{contig}\t{nucleotide}\t{position}\t{context}\t{dinucleotide}\t{level}\t{methylated}\t{total}\n"
+    )
+}
+
 fn write_plain(path: &Path, rows: &[String]) {
     fs::write(path, rows.concat()).expect("plain bedMethyl writes");
 }
@@ -133,7 +154,7 @@ fn public_configuration_errors_have_stable_classification() {
 }
 
 #[test]
-fn invalid_bed_methyl_rows_have_stable_input_classification() {
+fn invalid_methylation_rows_have_stable_input_classification() {
     let directory = unique_directory("input-errors");
     fs::create_dir(&directory).expect("fixture directory");
     let malformed = directory.join("malformed.bed");
@@ -158,11 +179,84 @@ fn invalid_bed_methyl_rows_have_stable_input_classification() {
     ] {
         let output = directory.join(format!("{label}-matrix.bed"));
         let error = combine(&options(vec![input("sample", &path)], output.clone()))
-            .expect_err("invalid bedMethyl input fails");
+            .expect_err("invalid methylation input fails");
         assert_eq!(error.kind(), CombineErrorKind::Input, "case {label}");
         assert!(!output.exists(), "case {label} must not publish output");
     }
 
+    fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+#[test]
+fn cgmap_and_bed_methyl_inputs_share_one_matrix_coordinate_model() {
+    let directory = unique_directory("cgmap-bed-parity");
+    fs::create_dir(&directory).expect("fixture directory");
+    let bed = directory.join("first.bed.gz");
+    let cgmap = directory.join("second.cgmap");
+    write_bgzf(
+        &bed,
+        &[
+            bed_row("chr1", 0, "m,CG,0", '+', 3, 2),
+            bed_row("chr1", 1, "m,CG,0", '-', 2, 3),
+            bed_row("chr1", 3, "m,CHH,0", '+', 1, 1),
+        ],
+    );
+    write_plain(
+        &cgmap,
+        &[
+            cgmap_row("chr1", 'C', 1, "CG", "CG", 4, 5),
+            cgmap_row("chr1", 'G', 2, "CG", "CG", 1, 5),
+            cgmap_row("chr1", 'C', 4, "CHH", "CA", 0, 2),
+        ],
+    );
+    let output = directory.join("matrix.bed");
+    let report = combine(&Options {
+        inputs: vec![input("bed", &bed), input("cgmap", &cgmap)],
+        output: output.clone(),
+        matrix_format: MatrixFormat::Count,
+        compress: false,
+        threads: 2,
+        parameters: Parameters::default(),
+    })
+    .expect("CGmap and bedMethyl combine together");
+
+    assert_eq!(report.sites_seen(), 3);
+    assert_eq!(report.sites_written(), 3);
+    assert_eq!(
+        decoded(&output),
+        concat!(
+            "##bsbit_matrix_format=count\n",
+            "##bsbit_min_count=1\n",
+            "##bsbit_min_prop=0.000000000\n",
+            "#chrom\tstart\tend\tmodification\tscore\tstrand",
+            "\tbed_meth_count\tbed_total_count",
+            "\tcgmap_meth_count\tcgmap_total_count\n",
+            "chr1\t0\t1\tm,CG,0\t0\t+\t3\t5\t4\t5\n",
+            "chr1\t1\t2\tm,CG,0\t0\t-\t2\t5\t1\t5\n",
+            "chr1\t3\t4\tm,CHH,0\t0\t+\t1\t2\t0\t2\n",
+        )
+    );
+    fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+#[test]
+fn malformed_cgmap_rows_fail_before_publication() {
+    let directory = unique_directory("cgmap-errors");
+    fs::create_dir(&directory).expect("fixture directory");
+    let invalid_rows = [
+        ("zero-position", "chr1\tC\t0\tCG\tCG\t0.5\t1\t2\n"),
+        ("wrong-context", "chr1\tC\t1\tCG\tCA\t0.5\t1\t2\n"),
+        ("count-overflow", "chr1\tC\t1\tCG\tCG\t1.0\t3\t2\n"),
+    ];
+    for (label, row) in invalid_rows {
+        let input_path = directory.join(format!("{label}.cgmap"));
+        fs::write(&input_path, row).expect("invalid CGmap fixture writes");
+        let output = directory.join(format!("{label}.bed"));
+        let error = combine(&options(vec![input("sample", &input_path)], output.clone()))
+            .expect_err("invalid CGmap fails");
+        assert_eq!(error.kind(), CombineErrorKind::Input);
+        assert!(!output.exists());
+    }
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }
 
@@ -342,7 +436,7 @@ fn incompatible_contig_order_fails_before_publication() {
 }
 
 #[test]
-fn metadata_mismatch_and_existing_target_fail_closed() {
+fn metadata_mismatch_fails_closed_and_existing_targets_are_replaced() {
     let directory = unique_directory("fail-closed");
     fs::create_dir(&directory).expect("fixture directory");
     let first = directory.join("first.bed");
@@ -365,7 +459,7 @@ fn metadata_mismatch_and_existing_target_fail_closed() {
 
     let existing = directory.join("existing.bed");
     fs::write(&existing, b"owned\n").expect("existing target");
-    let existing_error = combine(&Options {
+    combine(&Options {
         inputs: vec![input("a", &first)],
         output: existing.clone(),
         matrix_format: MatrixFormat::Level,
@@ -373,15 +467,15 @@ fn metadata_mismatch_and_existing_target_fail_closed() {
         threads: 1,
         parameters: Parameters::default(),
     })
-    .expect_err("existing target fails");
-    assert_eq!(existing_error.kind(), CombineErrorKind::Output);
-    assert_eq!(fs::read(&existing).expect("existing bytes"), b"owned\n");
+    .expect("existing target is replaced");
+    assert!(decoded(&existing).contains("#chrom"));
+    assert_ne!(fs::read(&existing).expect("replacement bytes"), b"owned\n");
 
     let both_template = directory.join("cohort.bed.gz");
     let existing_count = directory.join("cohort.count.bed.gz");
     let absent_level = directory.join("cohort.level.bed.gz");
     fs::write(&existing_count, b"owned count\n").expect("existing count target");
-    let both_error = combine(&Options {
+    combine(&Options {
         inputs: vec![input("a", &first)],
         output: both_template.clone(),
         matrix_format: MatrixFormat::Both,
@@ -389,13 +483,9 @@ fn metadata_mismatch_and_existing_target_fail_closed() {
         threads: 1,
         parameters: Parameters::default(),
     })
-    .expect_err("an existing derived target fails both outputs");
-    assert_eq!(both_error.kind(), CombineErrorKind::Output);
-    assert_eq!(
-        fs::read(&existing_count).expect("existing count bytes"),
-        b"owned count\n"
-    );
-    assert!(!absent_level.exists());
+    .expect("both outputs replace existing destinations");
+    assert!(decoded(&existing_count).contains("##bsbit_matrix_format=count"));
+    assert!(decoded(&absent_level).contains("##bsbit_matrix_format=level"));
     assert!(!both_template.exists());
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }

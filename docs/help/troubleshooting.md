@@ -1,4 +1,4 @@
-# Troubleshoot problems
+# Troubleshoot
 
 bsbit rejects inputs and stops publication when validation, reference identity,
 resource, or output requirements are not satisfied. Start with the exact error
@@ -40,11 +40,12 @@ Large index and output publication intentionally relies on Linux descriptor and
 hard-link semantics. Windows-drive 9p mounts can fail this contract even when
 ordinary file creation appears to work.
 
-## The output already exists
+## An output cannot be replaced
 
-Index, SAM, BAM, CGmap, bedMethyl, VCF, and matrix destinations must be
-new. Choose another output path or move the prior artifact aside intentionally.
-bsbit never truncates, appends to, or silently replaces a result.
+bsbit can replace an existing regular-file result, but it rejects a destination
+that is a directory or special file. Check the destination type and parent
+directory permissions. If the command fails before publication, the previous
+result remains unchanged.
 
 ## A `.staging` file remains after interruption
 
@@ -73,9 +74,26 @@ zcat sample_R2.fastq.gz | awk 'END { print NR / 4 }'
 ## An index is rejected as corrupt or stale
 
 Preserve the exact error for diagnosis. Rebuild the index from the trusted
-original FASTA under a new output path with `bsbit index`; only after that
-single command succeeds, rerun `bsbit align`. Alignment deliberately never
-creates or overwrites missing, corrupt, or mismatched index data.
+original FASTA with `bsbit index`; only after that single command succeeds,
+rerun `bsbit align`. Alignment deliberately never repairs missing, corrupt, or
+mismatched index data.
+
+## A reference FASTA is rejected as ordinary gzip
+
+Reference FASTA supports plain or BGZF-compressed input. A `.gz` suffix does
+not identify which gzip variant was used; bsbit checks the file content and
+rejects ordinary gzip because it cannot provide random access.
+
+Recompress the file as BGZF and create the sidecar indexes required by calling:
+
+```bash
+gzip -cd reference.fa.gz | bgzip -c > reference.bgzf.fa.gz
+samtools faidx reference.bgzf.fa.gz
+```
+
+This creates `reference.bgzf.fa.gz.fai` and
+`reference.bgzf.fa.gz.gzi`. Alternatively, use an uncompressed FASTA; its
+`.fai` is optional because bsbit can build an in-memory position table.
 
 ## Alignment produces fewer mapped records than expected
 
@@ -104,25 +122,24 @@ record. Prepare paired output as shown in the [BAM-preparation
 guide](../guides/prepare-bam.md), then confirm both files:
 
 ```bash
-samtools quickcheck -v sample.analysis.bam
-samtools index sample.analysis.bam
-samtools view -H sample.analysis.bam | grep '^@PG'
+samtools quickcheck -v sample.prep.bam
+samtools index sample.prep.bam
+samtools view -H sample.prep.bam | grep '^@PG'
 ```
 
 ### A single-end BAM is rejected
 
 Current `bsbit align` output with read 1 only uses numeric MAPQ and declares
-`caller-compatible-directional-single`. If a single-end BAM is rejected,
-inspect `@PG`: an older `standard-directional-single` BAM predates numeric MAPQ
-and must be realigned rather than having its header or scores rewritten.
+`caller-compatible-directional-single` or
+`caller-compatible-nondirectional-single`, according to the selected library
+profile. If a single-end BAM is rejected, inspect `@PG`: an older
+`standard-directional-single` BAM predates numeric MAPQ and must be realigned
+rather than having its header or scores rewritten.
 
-All three call modules also require the authoritative reference FASTA. A plain
-FASTA needs an adjacent FAI; a BGZF FASTA needs both FAI and GZI. Build the
-index with `samtools faidx`:
-
-```bash
-samtools faidx reference.fa
-```
+All three call modules also require a reference genome FASTA. When a
+plain FASTA has an adjacent FAI, bsbit uses it. Without FAI, bsbit scans the
+plain FASTA once and builds an in-memory position table without writing a
+sidecar. BGZF FASTA requires both FAI and GZI; ordinary gzip FASTA is rejected.
 
 Every BAM dictionary contig must have one uniquely named FASTA entry with the
 same length; FASTA order may differ. The caller normalizes and hashes those
@@ -139,5 +156,5 @@ selected, compressed input is read directly, and no competing process is
 consuming CPU, memory bandwidth, or storage.
 
 Change one option at a time. See
-[paired-end alignment settings](../guides/alignment.md#choose-an-alignment-mode)
+[alignment settings](../guides/alignment.md#configure-alignment)
 and the exact [performance protocol](../performance-evidence.md).

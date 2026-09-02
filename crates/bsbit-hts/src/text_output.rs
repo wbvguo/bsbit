@@ -51,7 +51,7 @@ impl TextBackend {
     }
 }
 
-/// Streaming format encoder backed by one generic create-only staging file.
+/// Streaming format encoder backed by one generic private staging file.
 pub struct TextStagingWriter {
     staged: Option<StagedFile>,
     backend: Option<TextBackend>,
@@ -71,8 +71,35 @@ impl TextStagingWriter {
         compression: TextOutputCompression,
         compression_threads: u32,
     ) -> Result<Self, HtsError> {
-        let mut staged =
-            StagedFile::create_sibling(target.as_ref(), "text").map_err(map_publication_error)?;
+        Self::create_sibling_with_policy(target.as_ref(), compression, compression_threads, false)
+    }
+
+    /// Creates a private sibling staging file beside a missing or replaceable
+    /// final target.
+    ///
+    /// # Errors
+    ///
+    /// Returns target/staging publication errors or a BGZF-open error.
+    pub fn create_sibling_replace(
+        target: impl AsRef<Path>,
+        compression: TextOutputCompression,
+        compression_threads: u32,
+    ) -> Result<Self, HtsError> {
+        Self::create_sibling_with_policy(target.as_ref(), compression, compression_threads, true)
+    }
+
+    fn create_sibling_with_policy(
+        target: &Path,
+        compression: TextOutputCompression,
+        compression_threads: u32,
+        replace: bool,
+    ) -> Result<Self, HtsError> {
+        let mut staged = if replace {
+            StagedFile::create_sibling_replace(target, "text")
+        } else {
+            StagedFile::create_sibling(target, "text")
+        }
+        .map_err(map_publication_error)?;
         let path = staged.path().to_path_buf();
         let file = staged.take_file().map_err(map_publication_error)?;
         let backend = match compression {
@@ -205,10 +232,22 @@ impl CompletedTextOutput {
             .map(|published| TextPublication { published })
             .map_err(map_publication_error)
     }
+
+    /// Atomically publishes the completed bytes, replacing an existing file.
+    ///
+    /// # Errors
+    ///
+    /// Returns synchronization, identity, backup, or rename failures.
+    pub fn publish_replace(self) -> Result<TextPublication, HtsError> {
+        self.completed
+            .publish_replace()
+            .map(|published| TextPublication { published })
+            .map_err(map_publication_error)
+    }
 }
 
 /// Details and rollback authority for one published text output.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct TextPublication {
     published: PublishedFile,
 }

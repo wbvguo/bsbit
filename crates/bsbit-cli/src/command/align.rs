@@ -2,7 +2,7 @@
 //!
 //! Single-end and paired-end input share the persisted combined index, bounded
 //! d3/d5 verification core, canonical traceback, record construction, BAM
-//! compression/finalization, and create-only publication path.
+//! compression/finalization, and staged replacement path.
 
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -54,12 +54,12 @@ impl MetricsTimer {
 pub(crate) const HELP: &str = r"bsbit align - standard bisulfite read alignment
 
 USAGE:
-  bsbit align --index PATH --read1 PATH [--read2 PATH] --output-bam PATH [OPTIONS]
+  bsbit align -i PATH -1 PATH [-2 PATH] -o PATH [OPTIONS]
 
 REQUIRED:
-  --index PATH                       complete index created by `bsbit index`
+  -i, --index PATH                   complete index created by `bsbit index`
   -1, --read1 PATH                   single-end FASTQ, or R1 FASTQ when paired
-  --output-bam PATH                  create-only published BAM path
+  -o, --output PATH                  BAM path; an existing file is replaced
 
 INPUT LAYOUT:
   --read1 only                       directional single-end alignment
@@ -71,9 +71,9 @@ OPTIONAL INPUT:
 
 OPTIONS FOR BOTH LAYOUTS:
   --sensitive                        complete a wider bounded candidate frontier
-  --threads N                        mapping workers; default: 1
-  --bam-threads N                    BGZF workers; default: 1
-  --bam-compression-level LEVEL      default|0..9; default: 1
+  -t, --threads N                    mapping workers; default: 1
+  --compression-threads N            output BGZF workers; default: 1
+  --compression-level LEVEL          default|0..9; default: 1
 
 PAIRED-END OPTIONS:
   --batch-pairs N                    default: 16384
@@ -146,8 +146,8 @@ pub(crate) struct Options {
     batch_pairs: usize,
     alignment_queue_batches: usize,
     threads: usize,
-    bam_threads: u32,
-    bam_compression_level: Option<u8>,
+    compression_threads: u32,
+    compression_level: Option<u8>,
     output_contract: AlignmentAuxiliaryMode,
     library_profile: PairedLibraryProfile,
     search_mode: PairedSearchMode,
@@ -317,8 +317,8 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let (reference, header, reference_load_ns) = load_alignment_reference(&options, limits)?;
     let (alignment_sender, alignment_receiver) = sync_channel(options.alignment_queue_batches);
     let output_bam = options.output_bam.clone();
-    let bam_threads = options.bam_threads;
-    let bam_compression_level = options.bam_compression_level;
+    let compression_threads = options.compression_threads;
+    let compression_level = options.compression_level;
     let emit_metrics = options.emit_metrics;
     let writer_cpu_placement = cpu_placement.clone();
     let writer = thread::spawn(move || {
@@ -327,8 +327,8 @@ pub(crate) fn run(options: Options) -> Result<(), Box<dyn Error>> {
             &output_bam,
             &header,
             limits,
-            bam_threads,
-            bam_compression_level,
+            compression_threads,
+            compression_level,
             alignment_receiver,
             emit_metrics,
         )
@@ -435,7 +435,7 @@ fn write_metrics(
         observation.classes.unmapped.to_string(),
         writer_observation.records.to_string(),
         options.threads.to_string(),
-        options.bam_threads.to_string(),
+        options.compression_threads.to_string(),
         output_contract_name(options.output_contract).to_owned(),
         library_profile_name(options.library_profile).to_owned(),
         "indexed-reference".to_owned(),
@@ -451,7 +451,7 @@ fn write_metrics(
         observation.writer_queue_wait_ns.to_string(),
         observation.writer_queue_sends.to_string(),
         options
-            .bam_compression_level
+            .compression_level
             .map_or_else(|| "default".to_owned(), |level| level.to_string()),
         PAIRED_MAX_EDIT_DISTANCE.to_string(),
         soft_clip_fallback_name(options.search_mode).to_owned(),
@@ -488,8 +488,8 @@ fn run_standard_single_from_options(options: Options) -> Result<(), Box<dyn Erro
         max_edit_distance: u64::from(PAIRED_MAX_EDIT_DISTANCE),
         batch_records: 1_000,
         threads: u64::try_from(options.threads).expect("validated thread count fits u64"),
-        bam_threads: options.bam_threads,
-        bam_compression_level: options.bam_compression_level,
+        compression_threads: options.compression_threads,
+        compression_level: options.compression_level,
     };
     run_single_end(&align_options)
         .map(|_| ())
@@ -906,22 +906,25 @@ fn write_batches(
     output_bam: &PathBuf,
     header: &SamHeader,
     limits: AlignmentRecordLimits,
-    bam_threads: u32,
-    bam_compression_level: Option<u8>,
+    compression_threads: u32,
+    compression_level: Option<u8>,
     receiver: Receiver<Vec<AlignmentRecordBatch>>,
     emit_metrics: bool,
 ) -> Result<WriterObservation, String> {
-    let mut writer = match bam_compression_level {
-        Some(level) => BamStagingWriter::create_sibling_with_threads_and_compression_level(
+    let mut writer = match compression_level {
+        Some(level) => BamStagingWriter::create_sibling_replace_with_threads_and_compression_level(
             output_bam,
             header,
             limits,
-            bam_threads,
+            compression_threads,
             level,
         ),
-        None => {
-            BamStagingWriter::create_sibling_with_threads(output_bam, header, limits, bam_threads)
-        }
+        None => BamStagingWriter::create_sibling_replace_with_threads(
+            output_bam,
+            header,
+            limits,
+            compression_threads,
+        ),
     }
     .map_err(|error| error.to_string())?;
     let mut bam_write_ns = 0_u128;
@@ -940,7 +943,7 @@ fn write_batches(
     let publication = writer
         .finish()
         .map_err(|error| error.to_string())?
-        .publish_create_new(output_bam)
+        .publish_replace(output_bam)
         .map_err(|error| error.to_string())?;
     Ok(WriterObservation {
         records: publication.records_written(),
@@ -1033,12 +1036,12 @@ fn option_takes_value(flag: &str) -> bool {
         "--index"
             | "--read1"
             | "--read2"
-            | "--output-bam"
+            | "--output"
             | "--batch-pairs"
             | "--alignment-queue-batches"
             | "--threads"
-            | "--bam-threads"
-            | "--bam-compression-level"
+            | "--compression-threads"
+            | "--compression-level"
             | "--output-contract"
             | "--min-template-span"
             | "--max-template-span"
@@ -1060,8 +1063,8 @@ fn parse_options_from(
     let mut threads = 1_usize;
     // One BGZF worker lets record compression overlap mapping.  Zero remains
     // available for callers that require a strictly synchronous writer.
-    let mut bam_threads = 1_u32;
-    let mut bam_compression_level = Some(1_u8);
+    let mut compression_threads = 1_u32;
+    let mut compression_level = Some(1_u8);
     let mut output_contract = AlignmentAuxiliaryMode::Minimal;
     let mut library_profile = PairedLibraryProfile::Directional;
     let mut search_mode = PairedSearchMode::Default;
@@ -1078,8 +1081,11 @@ fn parse_options_from(
             .to_str()
             .ok_or_else(|| invalid("argument name is not UTF-8"))?;
         let flag = match flag {
+            "-i" => "--index",
             "-1" => "--read1",
             "-2" => "--read2",
+            "-o" | "--output-bam" => "--output",
+            "-t" => "--threads",
             flag => flag,
         };
         if flag == "--sensitive" {
@@ -1131,25 +1137,22 @@ fn parse_options_from(
             "--index" => index = Some(PathBuf::from(value)),
             "--read1" => read1 = Some(PathBuf::from(value)),
             "--read2" => read2 = Some(PathBuf::from(value)),
-            "--output-bam" => output_bam = Some(PathBuf::from(value)),
+            "--output" => output_bam = Some(PathBuf::from(value)),
             "--batch-pairs" => batch_pairs = parse_usize(flag, &value)?,
             "--alignment-queue-batches" => {
                 alignment_queue_batches = parse_usize(flag, &value)?;
             }
             "--threads" => threads = parse_usize(flag, &value)?,
-            "--bam-threads" => bam_threads = parse_u32(flag, &value)?,
-            "--bam-compression-level" => {
+            "--compression-threads" => compression_threads = parse_u32(flag, &value)?,
+            "--compression-level" => {
                 if value == "default" {
-                    bam_compression_level = None;
+                    compression_level = None;
                 } else {
                     let level = parse_u32(flag, &value)?;
                     if level > 9 {
-                        return Err(invalid(
-                            "--bam-compression-level must be default or in 0..=9",
-                        ));
+                        return Err(invalid("--compression-level must be default or in 0..=9"));
                     }
-                    bam_compression_level =
-                        Some(u8::try_from(level).expect("level is at most nine"));
+                    compression_level = Some(u8::try_from(level).expect("level is at most nine"));
                 }
             }
             "--output-contract" => {
@@ -1163,8 +1166,8 @@ fn parse_options_from(
     if threads == 0 || threads > 64 {
         return Err(invalid("--threads must be in 1..=64"));
     }
-    if bam_threads > 64 {
-        return Err(invalid("--bam-threads must be in 0..=64"));
+    if compression_threads > 64 {
+        return Err(invalid("--compression-threads must be in 0..=64"));
     }
     if batch_pairs == 0 {
         return Err(invalid("--batch-pairs must be positive"));
@@ -1184,7 +1187,7 @@ fn parse_options_from(
         (None, Some(_)) => return Err(invalid("--read2 requires --read1")),
         (None, None) => return Err(invalid("missing --read1")),
     };
-    let output_bam = required(output_bam, "--output-bam")?;
+    let output_bam = required(output_bam, "--output")?;
     if matches!(layout, ReadLayout::SingleEnd) {
         let unsupported_flag = if matches!(library_profile, PairedLibraryProfile::NonDirectional) {
             Some("--non-directional")
@@ -1216,8 +1219,8 @@ fn parse_options_from(
         batch_pairs,
         alignment_queue_batches,
         threads,
-        bam_threads,
-        bam_compression_level,
+        compression_threads,
+        compression_level,
         output_contract,
         library_profile,
         search_mode,

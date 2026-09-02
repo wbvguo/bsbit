@@ -1057,7 +1057,7 @@ impl std::error::Error for SamFileError {
 }
 
 /// Successful create-only SAM publication details.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct SamFilePublication {
     published: PublishedFile,
     records_written: u64,

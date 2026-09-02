@@ -22,6 +22,8 @@ fn help_exposes_only_default_and_sensitive_modes() {
     assert!(HELP.contains("Without --sensitive, default mode"));
     assert!(HELP.contains("--sensitive"));
     assert!(HELP.contains("--mapped-only"));
+    assert!(HELP.contains("--compression-threads"));
+    assert!(HELP.contains("--compression-level"));
     assert!(HELP.contains("minimal|bismark"));
     assert!(HELP.contains("--non-directional"));
     assert!(HELP.contains("--read1 only"));
@@ -45,6 +47,8 @@ fn help_exposes_only_default_and_sensitive_modes() {
         "--packed-reference-catalog",
         "--expected-reference-digest",
         "--combined-index-prefix",
+        "--bam-threads",
+        "--bam-compression-level",
         "--reads PATH",
         "--reads1",
         "--reads2",
@@ -60,7 +64,7 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
         "reference.bsbit",
         "--read1",
         "reads.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from)
@@ -69,8 +73,8 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     assert_eq!(parsed.layout, ReadLayout::SingleEnd);
     assert!(parsed.read2.is_none());
     assert_eq!(parsed.threads, 1);
-    assert_eq!(parsed.bam_threads, 1);
-    assert_eq!(parsed.bam_compression_level, Some(1));
+    assert_eq!(parsed.compression_threads, 1);
+    assert_eq!(parsed.compression_level, Some(1));
 
     let mut sensitive = single.clone();
     sensitive.push(OsString::from("--sensitive"));
@@ -87,12 +91,31 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
         4
     );
 
-    let mut explicit_bam = single.clone();
-    explicit_bam
-        .extend(["--bam-threads", "2", "--bam-compression-level", "default"].map(OsString::from));
-    let parsed = parse_options_from(explicit_bam).expect("single-end BAM controls parse");
-    assert_eq!(parsed.bam_threads, 2);
-    assert_eq!(parsed.bam_compression_level, None);
+    let mut explicit_compression = single.clone();
+    explicit_compression.extend(
+        [
+            "--compression-threads",
+            "2",
+            "--compression-level",
+            "default",
+        ]
+        .map(OsString::from),
+    );
+    let parsed =
+        parse_options_from(explicit_compression).expect("single-end compression controls parse");
+    assert_eq!(parsed.compression_threads, 2);
+    assert_eq!(parsed.compression_level, None);
+
+    for retired in ["--bam-threads", "--bam-compression-level"] {
+        let mut arguments = single.clone();
+        arguments.extend([retired, "1"].map(OsString::from));
+        assert!(
+            parse_options_from(arguments)
+                .expect_err("retired BAM-specific compression option must fail")
+                .to_string()
+                .contains("unknown option")
+        );
+    }
 
     for arguments in [
         [
@@ -115,13 +138,75 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
 }
 
 #[test]
+fn compression_controls_keep_their_exact_domains() {
+    let required = || {
+        [
+            "--index",
+            "reference.bsbit",
+            "--read1",
+            "reads.fastq.gz",
+            "--output",
+            "output.bam",
+        ]
+        .map(OsString::from)
+        .to_vec()
+    };
+
+    for threads in ["0", "64"] {
+        let mut arguments = required();
+        arguments.extend(["--compression-threads", threads].map(OsString::from));
+        assert_eq!(
+            parse_options_from(arguments)
+                .expect("compression thread boundary parses")
+                .compression_threads,
+            threads.parse::<u32>().unwrap()
+        );
+    }
+    let mut excessive_threads = required();
+    excessive_threads.extend(["--compression-threads", "65"].map(OsString::from));
+    assert_eq!(
+        parse_options_from(excessive_threads)
+            .expect_err("compression threads above 64 must fail")
+            .to_string(),
+        "--compression-threads must be in 0..=64"
+    );
+
+    for level in ["0", "9"] {
+        let mut arguments = required();
+        arguments.extend(["--compression-level", level].map(OsString::from));
+        assert_eq!(
+            parse_options_from(arguments)
+                .expect("compression level boundary parses")
+                .compression_level,
+            Some(level.parse::<u8>().unwrap())
+        );
+    }
+    let mut delegated = required();
+    delegated.extend(["--compression-level", "default"].map(OsString::from));
+    assert_eq!(
+        parse_options_from(delegated)
+            .expect("default compression level parses")
+            .compression_level,
+        None
+    );
+    let mut excessive_level = required();
+    excessive_level.extend(["--compression-level", "10"].map(OsString::from));
+    assert_eq!(
+        parse_options_from(excessive_level)
+            .expect_err("compression levels above nine must fail")
+            .to_string(),
+        "--compression-level must be default or in 0..=9"
+    );
+}
+
+#[test]
 fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
     let short_single = [
         "--index",
         "reference.bsbit",
         "-1",
         "single.fastq.gz",
-        "--output-bam",
+        "--output",
         "single.bam",
     ]
     .map(OsString::from);
@@ -137,7 +222,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "r1.fastq.gz",
         "-2",
         "r2.fastq.gz",
-        "--output-bam",
+        "--output",
         "paired.bam",
     ]
     .map(OsString::from);
@@ -155,7 +240,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
             "reference.bsbit",
             retired,
             "reads.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from);
@@ -174,7 +259,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "first.fastq.gz",
         "-1",
         "second.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from);
@@ -190,7 +275,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "reference.bsbit",
         "-2",
         "r2.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from);
@@ -212,7 +297,7 @@ fn minimal_is_default_and_bismark_output_is_explicit() {
             "reads.R1.fastq.gz",
             "--read2",
             "reads.R2.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from)
@@ -281,7 +366,7 @@ fn parser_accepts_only_the_opaque_index_handle_and_rejects_duplicate_value_flags
         "r1.fq",
         "--read2",
         "r2.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
     ]
     .map(OsString::from)
@@ -352,7 +437,7 @@ fn public_modes_select_fixed_default_and_sensitive_strategies() {
             "reads.R1.fastq.gz",
             "--read2",
             "reads.R2.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from)

@@ -12,7 +12,7 @@ presence of the two explicit read paths:
 
 | Command/layout | Stable role | Input and output |
 |---|---|---|
-| `bsbit align` with read 1 only | Caller-compatible directional single-end alignment | One FASTQ to BAM in input order; unique origins receive numeric MAPQ |
+| `bsbit align` with read 1 only | Caller-compatible single-end alignment | One FASTQ to BAM in input order; unique origins receive numeric MAPQ; `--non-directional` enables four-strand placement |
 | `bsbit align` with read 1 and read 2 | Caller-compatible, high-throughput paired-end alignment | Synchronized paired FASTQ to read-complete BAM in input order |
 
 Both layouts accept exactly two search modes: default, selected by omitting a
@@ -21,13 +21,16 @@ profiling summaries record the selected mode and an immutable `strategy_id`;
 current identities and measurements live in [performance
 evidence](performance-evidence.md).
 
-Directional paired libraries are the default. `--non-directional` performs one
-global placement decision across all four supported strand/mate configurations.
-PBAT is not silently approximated.
+Directional libraries are the default for either layout. `--non-directional`
+performs one global placement decision across all four supported strand
+configurations, including mate order for paired input. PBAT is not silently
+approximated.
 
 ## Input and identity
 
-- FASTA and FASTQ may be plain, gzip, or BGZF local regular files.
+- Reference FASTA may be plain or BGZF-compressed; ordinary gzip FASTA is
+  rejected. FASTQ may be plain, gzip, or BGZF. All inputs are local regular
+  files, and compression is detected from content.
 - Sequence is normalized case-insensitively to A/C/G/T/N. Malformed records,
   other symbols, mate-name disagreement, and unequal paired EOF are errors.
 - Reference contigs and N runs are hard search barriers.
@@ -35,7 +38,7 @@ PBAT is not silently approximated.
   reference digest. Missing or mismatched bundle data fails before mapping.
 - URLs, stdin aliases, devices, and object-store paths are unsupported.
 
-Complete calling requirements, including indexed FASTA and BAM identity, are
+Complete calling requirements, including FASTA access and BAM identity, are
 defined in [Prepare input data](reference/input-data.md).
 
 ## Placement and classification
@@ -85,13 +88,17 @@ integers are not universally probability-matched to another aligner. Current
 calibration results and their corpus boundary are maintained only on the
 [performance page](performance-evidence.md).
 
-Directional single-end `bsbit align` assigns Q10/Q15/Q20/Q30/Q40 from evidence
-already retained by the selecting search; MAPQ calculation does not launch a
-second search. Tied origins remain MAPQ 0. The BAM declares
-`caller-compatible-directional-single` in structured `@PG` provenance and is
-accepted by `bsbit call` after the same sorting, indexing, tag, and reference
-identity checks as paired output. The current exact and within-5-bp calibration
-boundary is reported on the [performance page](performance-evidence.md).
+Single-end `bsbit align` assigns Q10/Q15/Q20/Q30/Q40 from evidence retained by
+the selecting search; MAPQ calculation does not launch another search.
+Non-directional mode merges the OT/OB and CTOT/CTOB passes, treats an
+equal-best cross-pass result as ambiguous, and includes weaker cross-pass
+evidence in confidence separation. Tied origins remain MAPQ 0. The BAM declares
+the matching `caller-compatible-directional-single` or
+`caller-compatible-nondirectional-single` mode in structured `@PG` provenance
+and is accepted by `bsbit call` after the same sorting, indexing, tag, and
+reference identity checks as paired output. The current exact and within-5-bp
+calibration boundary applies to directional single-end and is reported on the
+[performance page](performance-evidence.md).
 
 ## Determinism and publication
 
@@ -100,9 +107,9 @@ classification, record order, and output bytes are deterministic. Paired-end
 alignment does not learn an insert-size prior; the explicit template bounds are
 the complete span policy.
 
-Every result destination is create-only. Writers stage private bytes and expose
-the final target only after successful finalization. Malformed input, reference
+Writers stage private bytes and atomically replace an existing regular-file
+destination only after successful finalization. Malformed input, reference
 identity failure, corrupt dimensions or offsets, arithmetic overflow, resource
-failure, worker failure, output collision, and publication failure terminate
-without publishing a successful target. A failure never selects a legacy,
-high-memory, or otherwise unqualified fallback backend.
+failure, worker failure, invalid output type, and publication failure terminate
+without damaging a prior result. A failure never selects a legacy, high-memory,
+or otherwise unqualified fallback backend.

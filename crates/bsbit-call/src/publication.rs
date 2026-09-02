@@ -1,4 +1,4 @@
-//! Create-only text staging and publication shared by all call modes.
+//! Replaceable text staging and publication shared by all call modes.
 
 use std::io;
 use std::path::Path;
@@ -21,13 +21,15 @@ pub(crate) fn create_text_staging(
     // Region calculation and encoding overlap. One private BGZF worker keeps
     // compression off the ordered writer without multiplying `-t` threads.
     let compression_threads = u32::from(compress && threads > 1);
-    TextStagingWriter::create_sibling(target, compression, compression_threads).map_err(|error| {
-        CallError::with_source(
-            CallErrorKind::Output,
-            format!("{command}: create output staging for {}", target.display()),
-            error,
-        )
-    })
+    TextStagingWriter::create_sibling_replace(target, compression, compression_threads).map_err(
+        |error| {
+            CallError::with_source(
+                CallErrorKind::Output,
+                format!("{command}: create output staging for {}", target.display()),
+                error,
+            )
+        },
+    )
 }
 
 pub(crate) fn finish_and_publish(
@@ -41,7 +43,7 @@ pub(crate) fn finish_and_publish(
             error,
         )
     })?;
-    completed.publish_create_new().map_err(|error| {
+    completed.publish_replace().map_err(|error| {
         CallError::with_source(
             CallErrorKind::Publication,
             format!("{command}: publish output"),

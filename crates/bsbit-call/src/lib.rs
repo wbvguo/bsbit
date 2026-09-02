@@ -2,7 +2,7 @@
 //!
 //! The library owns evidence reconstruction, overlapping-mate collapse,
 //! regional parallelism, likelihood evaluation, and biological output
-//! rendering. BAM field access, BGZF transport, and create-only publication are
+//! rendering. BAM field access, BGZF transport, and atomic publication are
 //! delegated to `bsbit-hts`; command-line parsing remains in `bsbit-cli`.
 
 #![forbid(unsafe_code)]
@@ -34,7 +34,7 @@ pub enum CallErrorKind {
     Calling,
     /// Staging creation, encoding, or finalization failed.
     Output,
-    /// Create-only publication or transactional rollback failed.
+    /// Replacement publication or transactional rollback failed.
     Publication,
 }
 

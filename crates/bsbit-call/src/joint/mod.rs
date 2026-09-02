@@ -14,17 +14,17 @@ use crate::{CallError, CallReport, validate_threads};
 pub struct Options {
     /// Coordinate-sorted, indexed canonical bsbit BAM input.
     pub input: PathBuf,
-    /// Indexed FASTA used for authoritative cytosine context.
+    /// Authoritative FASTA; an existing FAI is used, otherwise plain FASTA is scanned.
     pub reference: PathBuf,
-    /// VCF sample name; defaults to the unique BAM `SM`, then its basename.
+    /// VCF sample name; defaults to the unique BAM `SM`, then its filename stem.
     pub sample_name: Option<String>,
     /// Optional interval restriction; empty means the whole BAM dictionary.
     pub regions: RegionSelection,
-    /// Create-only methylation destination.
+    /// Methylation destination, replacing an existing file transactionally.
     pub meth_output: PathBuf,
     /// Methylation output schema.
     pub meth_format: OutputFormat,
-    /// Create-only VCF destination.
+    /// VCF destination, replacing an existing file transactionally.
     pub vcf_output: PathBuf,
     /// Encode both outputs as BGZF when true, otherwise plain text.
     pub compress: bool,

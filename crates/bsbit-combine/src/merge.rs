@@ -1,4 +1,4 @@
-//! Bounded streaming merge implementation for sorted extended bedMethyl inputs.
+//! Bounded streaming merge implementation for sorted methylation inputs.
 //!
 //! The implementation performs a bounded-memory hierarchical k-way merge.
 //! Input workers retain one record per sample and the ordered coordinator
@@ -14,7 +14,7 @@ use std::thread;
 
 use bsbit_io::validate_distinct_paths;
 
-use crate::input::{BedCursor, ContigCatalog, preflight_catalog};
+use crate::input::{ContigCatalog, MethylationCursor, preflight_catalog};
 use crate::output::{
     MatrixOutput, OutputSpec, create_outputs, finish_outputs, output_error, output_specs,
     publish_outputs, write_header, write_matrix_row,
@@ -25,11 +25,11 @@ use crate::site::{Counts, SiteKey};
 
 const PROPORTION_SCALE: u64 = 1_000_000_000;
 
-/// Combines sorted bsbit extended bedMethyl files into wide matrices.
+/// Combines sorted bsbit `CGmap` or extended bedMethyl files into wide matrices.
 ///
 /// Inputs are decoded by content, so ordinary text, gzip, and BGZF are
-/// accepted regardless of filename suffix. The output is staged beside its
-/// absent destination(s), finalized, synchronized, and published create-only.
+/// accepted regardless of filename suffix. Output is staged beside its
+/// destination, finalized, synchronized, and atomically replaced.
 ///
 /// # Errors
 ///
@@ -159,7 +159,7 @@ fn merge_group(
 ) -> Result<(), CombineError> {
     let mut cursors = inputs
         .iter()
-        .map(|input| BedCursor::open(input, contigs))
+        .map(|input| MethylationCursor::open(input, contigs))
         .collect::<Result<Vec<_>, _>>()?;
     let mut heads = (0..inputs.len()).map(|_| None).collect::<Vec<_>>();
     let mut heap = BinaryHeap::new();

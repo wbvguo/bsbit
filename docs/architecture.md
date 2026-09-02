@@ -11,7 +11,7 @@ can be validated at its owning boundary.
 ## Data flow
 
 ```text
-FASTA / FASTA.gz
+plain / BGZF FASTA
       |
       v
 opaque complete index (.bsbit handle)
@@ -26,19 +26,19 @@ compact exact-reference catalog     digest-bound combined SA16 image
                 /              \
                v                v
 bsbit align (single)                bsbit align (paired)
-one directional FASTQ              directional/non-directional paired FASTQ
+directional/non-directional FASTQ   directional/non-directional paired FASTQ
       |                                   |
-ordered BAM, uncalibrated              ordered BAM
-current caller boundary                   |
-                           coordinate sort / mark duplicates / BAI or CSI
+ordered caller-compatible BAM      ordered caller-compatible BAM
+      |                                   |
+      +------ coordinate sort / mark duplicates / BAI or CSI
                                            |
-               indexed authoritative FASTA +
+                       authoritative FASTA +
                                            v
                                       bsbit call
                  /       |       \
             CGmap   bedMethyl    VCF
-                         |
-     named bedMethyl samples -> bsbit combine -> matrices
+                \       /
+     named methylation samples -> bsbit combine -> matrices
 ```
 
 The logical index is the semantic authority: contig names, exact bases, N
@@ -59,7 +59,7 @@ before they become output records.
 | `bsbit-index` | Reference ownership plus index construction and storage: the packed reference catalog and projected FM/rank/locate search image |
 | `bsbit-align` | The complete alignment domain: edit distance, CIGAR replay, scalar/SIMD kernels, seeds, candidates, extension, pairing, paired-end modes and phases, rescue/search policy, and MAPQ |
 | `bsbit-call` | Alignment-evidence reconstruction, fragment overlap collapse, regional aggregation, methylation/SNV likelihoods, and call-specific CGmap/VCF rendering |
-| `bsbit-combine` | Parallel preflight and memory-efficient merge of named bedMethyl inputs into matrices |
+| `bsbit-combine` | Parallel preflight and memory-efficient merge of named CGmap and/or bedMethyl inputs into matrices |
 | `bsbit-cli` | Product commands, cross-crate composition, runtime policy, and the single executable |
 | `crates/bsbit-hts/htslib-shim` | Small project-owned C ABI over pinned HTSlib |
 
@@ -178,12 +178,12 @@ user-facing executable.
 Mode-specific aggregation, likelihood, rendering, and orchestration live under
 `meth`, `snp`, and `joint`. BAM fragment reconstruction is owned once by
 `evidence`; region selection and planning are owned by `region`. Input
-preflight, indexed-reference context, bounded region workers, and create-only
-publication remain explicit shared files rather than a catch-all calling
+preflight, reference-context access, bounded region workers, and atomic
+replacement remain explicit shared files rather than a catch-all calling
 directory.
 
 The caller projects observed bases from BAM CIGAR and SEQ onto the required
-indexed reference FASTA; `MD` is ignored. Required `XG`, FLAG, base-quality, and
+reference FASTA; `MD` is ignored. Required `XG`, FLAG, base-quality, and
 mapping-quality fields supply the remaining evidence. R1/R2 observations from one
 fragment are matched by QNAME, read group, and reciprocal coordinates, then
 collapsed at overlapping positions by active-filter eligibility, canonical
@@ -199,7 +199,7 @@ from direct intervals and BED3+ into one dictionary-ordered union before those
 internal work regions are created.
 `bsbit-hts` owns the format boundary: indexed BAM access, decoded SEQ/CIGAR/aux
 fields, BGZF encoding, and format-aware finalization. Generic staging,
-identity checks, synchronization, create-only publication, and rollback are
+identity checks, synchronization, replacement publication, and rollback are
 delegated to `bsbit-io`.
 Completed region results are rendered directly to staging output in ordinal
 order through bounded channels and a sliding reorder window, so the caller
@@ -207,10 +207,12 @@ never accumulates a whole-genome site vector. Worker panics are caught and
 reported through the same structured error channel. SNV region sizing accounts
 for worst-case retained candidates and calls as well as bit-sliced counters;
 exact likelihood batches have a separate per-worker planning budget. At caller
-startup, indexed FAI/GZI-backed FASTA is streamed in bounded chunks to verify
-the BAM's semantic reference digest. Region workers then fetch only the spans
-needed for authoritative methylation context and SNV reference alleles. This
-applies to `meth`, `snp`, and `joint`.
+startup, an existing FAI/GZI-backed reference is used when available. If a
+plain FASTA has no FAI, one scan builds a compact in-memory line-layout table
+shared by all workers without writing a sidecar. The reference is then streamed
+in bounded chunks to verify the BAM's semantic digest, and region workers fetch
+only the spans needed for authoritative methylation context and SNV reference
+alleles. This applies to `meth`, `snp`, and `joint`.
 
 ## Index construction
 
@@ -222,8 +224,9 @@ BWT, Occ64/Occ65536 checkpoints, and SA16 samples. Unknown bases receive
 deterministic projection symbols, while the catalog's N mask remains
 authoritative.
 
-Publication is create-only, bundle-atomic, and fail-closed. Structural checks
-are mandatory; the public command has one fixed bounded construction path.
+Publication atomically replaces the complete existing bundle and is
+fail-closed. Structural checks are mandatory; the public command has one fixed
+bounded construction path.
 `bsbit align` contains no construction path and fails when required internal
 data is absent.
 
@@ -231,9 +234,17 @@ data is absent.
 
 `bsbit align` opens the opaque index read-only and chooses the input layout
 explicitly from the supplied read paths. With only `--read1`, it runs the
-deterministic directional single-end alignment and preserves FASTQ order. With
-both `--read1` and `--read2`, it runs the paired-end path described below. Both
-layouts publish BAM through the same create-only output contract.
+deterministic single-end alignment and preserves FASTQ order. Directional mode
+uses OT/OB; `--non-directional` runs the complementary CTOT/CTOB pass and merges
+both decisions globally. With both `--read1` and `--read2`, it runs the
+paired-end path described below. Both layouts publish BAM through the same
+atomic-replacement output contract.
+
+Directionality is represented once as a shared library profile. Directional
+alignment runs the original two-strand pass, while non-directional alignment
+also runs the complementary two-strand pass. The single-end executor owns
+read-level distance, classification, and MAPQ; the paired-end executor owns
+mate permutation, template geometry, pair score, rescue, and paired MAPQ.
 
 Single-end default mode may classify a verified initial frontier immediately
 and continues only unresolved work. Single-end sensitive mode instead replays
@@ -329,17 +340,17 @@ workers normally. Decode, ordered record construction, BAM writing, queues,
 and batch sizes have explicit bounded resource contracts. The aligner does not
 perform per-read development audits or read repository-local data.
 
-Directional mode runs the ordinary paired read-conversion configuration.
+Directional mode runs the ordinary read-conversion configuration.
 `--non-directional` runs both the ordinary and complementary configurations as
-complete searches and merges their best, second-best, and near-best evidence
-before classification and MAPQ. A cross-configuration tie remains ambiguous.
-This library selection is independent of the public default and sensitive
-search modes.
+complete searches and merges their evidence before classification and MAPQ. A
+cross-configuration tie remains ambiguous. This library selection is
+independent of the public default and sensitive search modes.
 
 ## Persistence and failure model
 
 Every product format has magic/version fields, checked lengths, fixed
-endianness, and digests or structural validation. Paths are create-only.
+endianness, and digests or structural validation. Completed outputs atomically
+replace existing regular files; directories and special files are rejected.
 Truncation, checksum mismatch, unsupported format, arithmetic overflow,
 resource-limit violation, or publication-identity change is an error; no
 backend silently falls back to a less qualified implementation.

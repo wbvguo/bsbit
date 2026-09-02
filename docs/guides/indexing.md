@@ -1,32 +1,66 @@
 # Build index
 
-Use one plain FASTA as the authoritative reference for alignment and calling.
-Build its random-access index first, then build the complete `.bsbit`
-alignment index:
+Use `bsbit index` to build the complete alignment index from a reference genome
+FASTA:
 
 ```bash
-samtools faidx GRCh38.fa
-
 bsbit index \
-  --reference GRCh38.fa \
-  --output GRCh38.bsbit \
-  --threads 8
+  -r GRCh38.fa \
+  -o GRCh38.bsbit \
+  -t 8
 ```
 
-Plain FASTA is the simplest format to share across the workflow. `bsbit index`
-also accepts gzip or BGZF FASTA, but callers cannot randomly access ordinary
-gzip FASTA; BGZF additionally needs a `.gzi`. Contig names must be unique, and
-sequence is normalized to uppercase `A`, `C`, `G`, `T`, or `N`.
+## Parameters
 
-`--output` must be a new path and becomes the only opaque index handle supplied
-to alignment. Physical construction and layout are internal. Alignment only
-opens and validates the completed index; a
-missing, stale, corrupt, or mismatched component is an error and is never
-rebuilt during alignment. Downstream calling independently uses the indexed
-original FASTA as its authoritative sequence.
+| Option | Value | Default | Description |
+|---|---|---|---|
+| `-r`,<br>`--reference` | `PATH` | Required | Plain or BGZF-compressed reference genome FASTA used to build the index. |
+| `-o`,<br>`--output` | `PATH` | Required | Path for the generated bsbit alignment index. |
+| `-t`,<br>`--threads` | `N` | `1` | Number of threads used to build the index, from 1 to 64. |
+| `-h`,<br>`--help` | — | None | Print help for `bsbit index` and exit. |
+
+??? note "Parameter validation"
+
+    The reference, output, and threads parameters each accept exactly one value
+    in either short or long form. Unknown options, repeated options, a missing
+    value, or a thread count outside the accepted range will be reported as
+    errors.
+
+## Reference requirements
+
+Plain [FASTA](../reference/file-formats.md#fasta-reference) is recommended. It
+works for indexing without sidecars. For calling, an adjacent `.fai` is
+recommended; without one, bsbit scans the FASTA once to build an in-memory
+position table. BGZF-compressed FASTA is also accepted, but calling requires
+both adjacent `.fai` and `.gzi` indexes. Create the indexes with `samtools
+faidx`:
+
+```bash
+samtools faidx GRCh38.fa       # plain FASTA: creates .fai
+samtools faidx GRCh38.fa.gz    # BGZF FASTA: creates .fai and .gzi
+```
+
+Ordinary gzip FASTA is not supported. Decompress it to plain FASTA or convert
+it to BGZF:
+
+```bash
+gzip -cd GRCh38.fa.gz | bgzip -c > GRCh38.bgzf.fa.gz
+samtools faidx GRCh38.bgzf.fa.gz
+```
+
+## Index output
+
+`bsbit index` writes an opaque index bundle at `--output`. Pass the same path to
+`bsbit align -i`. This index is used only for alignment; `bsbit call` reads the
+original FASTA directly.
+
+Treat the bundle as one artifact; downstream commands do not modify it after
+generation. If an index already exists at the output path, bsbit replaces it
+only after the new build succeeds. A failed build leaves the existing index
+unchanged.
 
 ## Next
 
 - [Align reads](alignment.md)
 - [Prepare input data](../reference/input-data.md)
-- [Review index parameters](../reference/cli.md#bsbit-index)
+- [Use the complete CLI reference](../reference/cli.md#bsbit-index)

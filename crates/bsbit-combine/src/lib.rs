@@ -1,4 +1,4 @@
-//! Streaming methylation-matrix assembly from sorted extended bedMethyl files.
+//! Streaming methylation-matrix assembly from sorted `CGmap` or bedMethyl files.
 
 #![forbid(unsafe_code)]
 

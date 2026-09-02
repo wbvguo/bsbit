@@ -253,7 +253,7 @@ sha256sum build/bsbit/bsbit
 ```
 
 After building the opaque index with `bsbit index` as described in the
-[alignment guide](guides/alignment.md#align-paired-reads), the bsbit side of the timed
+[alignment guide](guides/alignment.md#run-alignment), the bsbit side of the timed
 command has this public shape:
 
 ```bash
@@ -261,10 +261,10 @@ build/bsbit/bsbit align \
   --index GRCh38.bsbit \
   --read1 sim_wgbs_10m.R1.fastq.gz \
   --read2 sim_wgbs_10m.R2.fastq.gz \
-  --output-bam sensitive.bam \
+  --output sensitive.bam \
   --sensitive \
   --threads 8 \
-  --bam-threads 2 \
+  --compression-threads 2 \
   --min-template-span 0 \
   --max-template-span 500 \
   --metrics > sensitive.summary.tsv
@@ -293,14 +293,14 @@ exercise the recovery rule; their results are
   truth-accuracy claim.
 - The frozen matrix broadens regression evidence, but it does not qualify
   every read length, organism, protocol, or error distribution.
-- Non-directional paired-end has functional coverage, not this large-corpus
-  performance/MAPQ qualification. Standard directional single-end has one
-  controlled 5M-R1 performance/truth regression run, but no replicated MAPQ
-  qualification.
+- Non-directional paired-end and single-end have functional coverage, not this
+  large-corpus performance/MAPQ qualification. Standard directional single-end
+  has one controlled 5M-R1 performance/truth regression run, but no replicated
+  MAPQ qualification; that run does not qualify non-directional single-end.
 - Calling and cohort outputs are outside this aligner scorecard and require
   study-specific validation.
 - The benchmark is not an independent third-party study.
 
 Read this page with the [scientific contract](scientific-contract.md),
-[supported workflows](getting-started/workflow.md#supported-workflows), and
+[sequencing data support](getting-started/workflow.md#sequencing-data-support), and
 [known differences](known-differences.md).

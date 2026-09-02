@@ -1,57 +1,68 @@
 # Workflow
 
-bsbit separates indexing, alignment, BAM preparation, calling, and cohort
-aggregation. Stop after the stage required by the analysis.
+Build the reference index, process each sample through alignment and calling,
+then combine the methylation results into a matrix.
+
+<div class="workflow-flow" role="img" aria-label="From left to right: build the index once, repeat alignment, BAM preparation, and calling for every sample, then combine all sample calls">
+  <div class="workflow-node">
+    <strong>Index</strong>
+    <code>bsbit index</code>
+  </div>
+  <span class="workflow-arrow" aria-hidden="true">→</span>
+  <div class="workflow-repeat">
+    <span class="workflow-repeat-label">Each sample</span>
+    <div class="workflow-row">
+      <div class="workflow-node">
+        <strong>Align</strong>
+        <code>bsbit align</code>
+      </div>
+      <span class="workflow-arrow" aria-hidden="true">→</span>
+      <div class="workflow-node">
+        <strong>Prepare BAM</strong>
+        <code>samtools</code>
+      </div>
+      <span class="workflow-arrow" aria-hidden="true">→</span>
+      <div class="workflow-node">
+        <strong>Call</strong>
+        <code>bsbit call</code>
+      </div>
+    </div>
+  </div>
+  <span class="workflow-arrow" aria-hidden="true">→</span>
+  <div class="workflow-node">
+    <strong>Combine</strong>
+    <code>bsbit combine</code>
+  </div>
+</div>
 
 ## Stages
 
-| Stage | Command | Main input | Output | Guide |
-|---|---|---|---|---|
-| Index | `bsbit index` | Reference FASTA | Opaque `.bsbit` index | [Build index](../guides/indexing.md) |
-| Align | `bsbit align` | Index and FASTQ | Input-order BAM | [Align reads](../guides/alignment.md) |
-| Prepare | `samtools` | Alignment BAM | Coordinate-sorted, duplicate-handled as appropriate, indexed BAM | [Prepare a BAM](../guides/prepare-bam.md) |
-| Call | `bsbit call` | Prepared BAM and the same indexed FASTA | Methylation output and/or VCF | [Methylation](../outputs/methylation.md) · [SNVs](../outputs/variant-calling.md) |
-| Combine | `bsbit combine` | Sorted extended bedMethyl files | Level and/or count matrix | [Build matrix](../outputs/methylation-matrices.md) |
+| Stage | Command | Main input | Output |
+|---|---|---|---|
+| [Index](../guides/indexing.md) | `bsbit index` | Reference FASTA | Reusable `.bsbit` alignment index |
+| [Align](../guides/alignment.md) | `bsbit align` | Index and FASTQ | Input-order BAM |
+| [Prepare BAM](../guides/prepare-bam.md) | `samtools` | Alignment BAM | Coordinate-sorted, duplicate-handled, indexed BAM |
+| Call [methylation](../guides/methylation.md) or [SNVs](../guides/variant-calling.md) | `bsbit call` | Prepared BAM and matching reference | Methylation output and/or VCF |
+| [Combine](../guides/methylation-matrices.md) | `bsbit combine` | Sorted per-sample methylation call files | Methylation level and/or count matrix |
 
-Final destinations must be new local paths. Identical immutable inputs,
-options, worker count, and binary produce deterministic output within the
-documented contract.
+## Sequencing data support
 
-## Supported workflows
+bsbit supports both directional and non-directional libraries with either
+single-end or paired-end data. Directional mode is the default; use
+`--non-directional` for non-directional libraries.
 
-| Goal | Stages | Requirements |
-|---|---|---|
-| Alignment only | Index → Align | Single-end or paired-end FASTQ; coordinate sorting is optional unless another tool requires it |
-| Methylation or SNV calling | Index → Align → Prepare → Call | Caller-compatible single- or paired-end alignment and the same reference assembly throughout |
-| Cohort methylation matrix | All five stages | One sorted extended bedMethyl input and unique sample name per sample |
+Preprocessed RRBS and targeted reads are accepted when chemistry and
+orientation match. See the [performance evidence](../performance-evidence.md)
+for the validation scope of each alignment mode.
 
-Alignment support depends on read layout:
+## Limitations and roadmap
 
-| Input | Status |
-|---|---|
-| Directional paired-end | Qualified path with caller-compatible provenance and published GRCh38 speed, accuracy, and MAPQ evidence |
-| Directional single-end | Caller-compatible numeric MAPQ; published 5M-R1 speed and exact/within-5-bp truth evidence |
-| Non-directional paired-end | Four-strand behavior and compatibility are tested; directional benchmark results do not apply |
+The following capabilities are not available in the current release and may be
+added in future:
 
-Directional paired-end WGBS owns the published qualification. Preprocessed
-RRBS and targeted reads are accepted when chemistry and orientation match, but
-bsbit does not provide assay-specific trimming or interpretation. PBAT, CRAM,
-remote input, and object-store input are unsupported.
-
-Methylation, SNP, and joint calling are deterministic technical workflows that
-still require study-specific validation. The SNP caller is diploid, does not
-call indels or assemble haplotypes, and makes no clinical-validation claim.
-
-## End-to-end example
-
-Exercise all five stages on the bundled synthetic data from the repository
-root:
-
-```bash
-bash docs/examples/run-end-to-end.sh
-```
-
-The script indexes, aligns, prepares the BAM, calls methylation and one
-synthetic SNV, and builds one-sample level and count matrices. It is a smoke
-test, not a benchmark. See the [outputs overview](../outputs/index.md) for the
-artifact set and the Usage guides above for commands to adapt to real data.
+- PBAT and other library protocols, including assay-specific preprocessing and
+  interpretation
+- Broader variant calling, including indels and haplotype-aware analysis
+- Standard-stream (`-`) input and output
+- CRAM and additional output formats
+- ARM architectures, including Apple Silicon

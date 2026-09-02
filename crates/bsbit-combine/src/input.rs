@@ -1,4 +1,4 @@
-//! Input decoding, validation, and ordered bedMethyl cursors.
+//! Input decoding, validation, and ordered methylation-record cursors.
 
 #![forbid(unsafe_code)]
 
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::thread;
 
-use bsbit_hts::{BedMethylRecord, BedMethylStrand, DecodedReader};
+use bsbit_hts::{BedMethylContext, BedMethylRecord, BedMethylStrand, DecodedReader};
 
 use crate::request::Input;
 use crate::result::{CombineError, CombineErrorKind};
@@ -89,9 +89,8 @@ fn preflight_input(input: &Input) -> Result<InputPreflight, CombineError> {
     let mut previous_coordinate = None;
 
     while let Some(line_number) = lines.next_data_line()? {
-        let parsed = BedMethylRecord::parse(lines.current_line())
-            .map(SampleSite::from)
-            .map_err(|error| input_line_error(input, line_number, error.to_string()))?;
+        let parsed = parse_sample_site(lines.current_line())
+            .map_err(|error| input_line_error(input, line_number, error))?;
         match active_contig.as_deref() {
             Some(contig) if contig == parsed.contig => {
                 let coordinate = parsed.coordinate();
@@ -332,6 +331,120 @@ impl<'a> From<BedMethylRecord<'a>> for SampleSite<'a> {
     }
 }
 
+fn parse_sample_site(line: &[u8]) -> Result<SampleSite<'_>, String> {
+    let columns = line.split(|byte| *byte == b'\t').count();
+    match columns {
+        8 => parse_cgmap_site(line),
+        18 => BedMethylRecord::parse(line)
+            .map(SampleSite::from)
+            .map_err(|error| error.to_string()),
+        _ => Err(format!(
+            "expected exactly 8 CGmap or 18 extended bedMethyl columns, observed {columns}"
+        )),
+    }
+}
+
+fn parse_cgmap_site(line: &[u8]) -> Result<SampleSite<'_>, String> {
+    let mut columns = [&[][..]; 8];
+    let mut fields = line.split(|byte| *byte == b'\t');
+    for column in &mut columns {
+        *column = fields
+            .next()
+            .expect("CGmap column count was validated before parsing");
+    }
+    debug_assert!(fields.next().is_none());
+    if columns[0].is_empty() {
+        return Err("CGmap contig in column 1 must not be empty".to_owned());
+    }
+    let strand = match columns[1] {
+        b"C" => 0,
+        b"G" => 1,
+        _ => return Err("CGmap column 2 must be `C` or `G`".to_owned()),
+    };
+    let position = parse_cgmap_u64(columns[2], 3)?;
+    let start = position
+        .checked_sub(1)
+        .ok_or_else(|| "CGmap column 3 must be a positive 1-based position".to_owned())?;
+    let modification = match columns[3] {
+        b"CG" => BedMethylContext::Cg.modification(),
+        b"CHG" => BedMethylContext::Chg.modification(),
+        b"CHH" => BedMethylContext::Chh.modification(),
+        _ => return Err("CGmap column 4 must be `CG`, `CHG`, or `CHH`".to_owned()),
+    };
+    let valid_dinucleotide = match columns[3] {
+        b"CG" => columns[4] == b"CG",
+        b"CHG" | b"CHH" => matches!(columns[4], b"CA" | b"CC" | b"CT"),
+        _ => false,
+    };
+    if !valid_dinucleotide {
+        return Err("CGmap column 5 is inconsistent with the context in column 4".to_owned());
+    }
+    let methylated = parse_cgmap_u64(columns[6], 7)?;
+    let total = parse_cgmap_u64(columns[7], 8)?;
+    if methylated > total {
+        return Err(
+            "CGmap methylated count in column 7 exceeds total count in column 8".to_owned(),
+        );
+    }
+    validate_cgmap_level(columns[5], total)?;
+    Ok(SampleSite {
+        contig: columns[0],
+        start,
+        end: position,
+        modification,
+        strand,
+        methylated,
+        total,
+    })
+}
+
+fn parse_cgmap_u64(value: &[u8], column: u8) -> Result<u64, String> {
+    if value.is_empty() {
+        return Err(format!(
+            "CGmap column {column} must be a nonnegative integer"
+        ));
+    }
+    let mut parsed = 0_u64;
+    for &byte in value {
+        if !byte.is_ascii_digit() {
+            return Err(format!(
+                "CGmap column {column} must be a nonnegative integer"
+            ));
+        }
+        parsed = parsed
+            .checked_mul(10)
+            .and_then(|current| current.checked_add(u64::from(byte - b'0')))
+            .ok_or_else(|| format!("CGmap column {column} overflows u64"))?;
+    }
+    Ok(parsed)
+}
+
+fn validate_cgmap_level(value: &[u8], total: u64) -> Result<(), String> {
+    if value == b"na" {
+        return (total == 0)
+            .then_some(())
+            .ok_or_else(|| "CGmap column 6 may be `na` only when total count is zero".to_owned());
+    }
+    if total == 0 {
+        return Err("CGmap column 6 must be `na` when total count is zero".to_owned());
+    }
+    let mut parts = value.split(|byte| *byte == b'.');
+    let whole = parts.next().unwrap_or_default();
+    let fraction = parts.next();
+    if parts.next().is_some()
+        || whole.is_empty()
+        || !whole.iter().all(u8::is_ascii_digit)
+        || fraction
+            .is_some_and(|digits| digits.is_empty() || !digits.iter().all(u8::is_ascii_digit))
+        || !matches!(whole, b"0" | b"1")
+        || (whole == b"1"
+            && fraction.is_some_and(|digits| digits.iter().any(|digit| *digit != b'0')))
+    {
+        return Err("CGmap column 6 must be a decimal within 0..=1 or `na`".to_owned());
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(crate) struct ContigCatalog {
     pub(crate) names: Vec<Vec<u8>>,
@@ -414,20 +527,20 @@ impl ContigCatalog {
 }
 
 #[derive(Debug)]
-pub(crate) struct BedRecord {
+pub(crate) struct MethylationRecord {
     pub(crate) key: SiteKey,
     pub(crate) modification: Vec<u8>,
     pub(crate) counts: Counts,
 }
 
-pub(crate) struct BedCursor<'a> {
+pub(crate) struct MethylationCursor<'a> {
     input: &'a Input,
     contigs: &'a ContigCatalog,
     lines: DecodedLines,
     previous: Option<SiteKey>,
 }
 
-impl<'a> BedCursor<'a> {
+impl<'a> MethylationCursor<'a> {
     pub(crate) fn open(input: &'a Input, contigs: &'a ContigCatalog) -> Result<Self, CombineError> {
         Ok(Self {
             input,
@@ -437,13 +550,12 @@ impl<'a> BedCursor<'a> {
         })
     }
 
-    pub(crate) fn next_record(&mut self) -> Result<Option<BedRecord>, CombineError> {
+    pub(crate) fn next_record(&mut self) -> Result<Option<MethylationRecord>, CombineError> {
         let Some(line_number) = self.lines.next_data_line()? else {
             return Ok(None);
         };
-        let parsed = BedMethylRecord::parse(self.lines.current_line())
-            .map(SampleSite::from)
-            .map_err(|error| input_line_error(self.input, line_number, error.to_string()))?;
+        let parsed = parse_sample_site(self.lines.current_line())
+            .map_err(|error| input_line_error(self.input, line_number, error))?;
         let contig = self
             .contigs
             .ranks
@@ -470,7 +582,7 @@ impl<'a> BedCursor<'a> {
             ));
         }
         self.previous = Some(key);
-        Ok(Some(BedRecord {
+        Ok(Some(MethylationRecord {
             key,
             modification: parsed.modification.to_vec(),
             counts: Counts {

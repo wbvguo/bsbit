@@ -219,6 +219,7 @@ fn normalize_call_meth_options(arguments: &[String]) -> Result<Vec<String>, CliE
         .map(|argument| {
             Ok(match argument.as_str() {
                 "-i" => String::from("--input"),
+                "-r" => String::from("--reference"),
                 "-o" => String::from("--output"),
                 "-f" => String::from("--format"),
                 "-c" => String::from("--compress"),
@@ -246,6 +247,7 @@ fn normalize_call_options(arguments: &[String], joint: bool) -> Result<Vec<Strin
         .map(|argument| {
             Ok(match argument.as_str() {
                 "-i" => String::from("--input"),
+                "-r" => String::from("--reference"),
                 "-o" if !joint => String::from("--output"),
                 "-m" if joint => String::from("--meth"),
                 "-v" if joint => String::from("--vcf"),
