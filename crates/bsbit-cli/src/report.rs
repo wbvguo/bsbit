@@ -77,7 +77,7 @@ pub struct RunReport {
 
 impl RunReport {
     /// Returns post-publication warnings. A warning never changes exit status
-    /// because the create-only final target is already visible and complete.
+    /// because the final target is already visible and complete.
     #[must_use]
     pub fn warnings(&self) -> &[CliWarning] {
         &self.warnings

@@ -1,4 +1,4 @@
-//! Matrix output planning, encoding, and create-only publication.
+//! Matrix output planning, encoding, and replaceable publication.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -110,13 +110,15 @@ fn create_output(options: &Options, path: &Path) -> Result<TextStagingWriter, Co
         TextOutputCompression::Plain
     };
     let compression_threads = u32::from(options.compress && options.threads > 1);
-    TextStagingWriter::create_sibling(path, compression, compression_threads).map_err(|error| {
-        CombineError::with_source(
-            CombineErrorKind::Output,
-            format!("combine: create output staging for {}", path.display()),
-            error,
-        )
-    })
+    TextStagingWriter::create_sibling_replace(path, compression, compression_threads).map_err(
+        |error| {
+            CombineError::with_source(
+                CombineErrorKind::Output,
+                format!("combine: create output staging for {}", path.display()),
+                error,
+            )
+        },
+    )
 }
 
 pub(crate) fn output_error(path: &Path, error: io::Error) -> CombineError {
@@ -158,7 +160,7 @@ pub(crate) fn publish_outputs(
     let mut publications = Vec::<TextPublication>::with_capacity(outputs.len());
     for output in outputs {
         let path = output.spec.path;
-        match output.output.publish_create_new() {
+        match output.output.publish_replace() {
             Ok(publication) => publications.push(publication),
             Err(error) => {
                 for publication in publications.into_iter().rev() {

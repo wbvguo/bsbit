@@ -50,6 +50,60 @@ fn exact_index_options_parse() {
 }
 
 #[test]
+fn short_index_options_parse() {
+    let Action::Index(index) = parse(arguments(&[
+        "index",
+        "-r",
+        "ref.fa",
+        "-o",
+        "ref.bsbit",
+        "-t",
+        "4",
+    ]))
+    .expect("short index options parse") else {
+        panic!("expected index action");
+    };
+    assert_eq!(index.reference, std::path::Path::new("ref.fa"));
+    assert_eq!(index.output, std::path::Path::new("ref.bsbit"));
+    assert_eq!(index.threads, 4);
+}
+
+#[test]
+fn short_and_long_index_forms_are_one_option() {
+    let error = parse(arguments(&[
+        "index",
+        "-r",
+        "first.fa",
+        "--reference",
+        "second.fa",
+        "-o",
+        "ref.bsbit",
+    ]))
+    .expect_err("short and long reference forms are one option");
+    assert!(error.to_string().contains("duplicate option `--reference`"));
+}
+
+#[test]
+fn uppercase_reference_alias_is_rejected() {
+    assert!(parse(arguments(&["index", "-R", "ref.fa", "-o", "ref.bsbit",])).is_err());
+    assert!(
+        parse(arguments(&[
+            "call",
+            "meth",
+            "-i",
+            "reads.bam",
+            "-R",
+            "ref.fa",
+            "-o",
+            "calls.cgmap",
+            "-f",
+            "cgmap",
+        ]))
+        .is_err()
+    );
+}
+
+#[test]
 fn internal_index_construction_is_not_a_public_subcommand() {
     assert!(parse(arguments(&["index", "combined", "--snapshot", "ref.bsbit"])).is_err());
 }
@@ -58,7 +112,7 @@ fn internal_index_construction_is_not_a_public_subcommand() {
 fn public_help_exposes_only_supported_index_and_alignment_entry_points() {
     let help = crate::GENERAL_HELP;
     assert!(help.contains("bsbit index"));
-    assert!(help.contains("bsbit align --index"));
+    assert!(help.contains("bsbit align -i"));
     for hidden in [
         "align-general",
         "index combined",
@@ -76,14 +130,16 @@ fn public_help_exposes_only_supported_index_and_alignment_entry_points() {
 fn standard_alignment_layout_and_read_aliases_parse() {
     let Action::Align(_) = parse(arguments(&[
         "align",
-        "--index",
+        "-i",
         "ref.bsbit",
         "-1",
         "reads.fq",
-        "--output-bam",
+        "-o",
         "out.bam",
+        "-t",
+        "2",
     ]))
-    .expect("single parses") else {
+    .expect("short alignment options parse") else {
         panic!("expected align action");
     };
 
@@ -101,6 +157,72 @@ fn standard_alignment_layout_and_read_aliases_parse() {
     .expect("paired input parses") else {
         panic!("expected align action");
     };
+}
+
+#[test]
+fn alignment_aliases_share_option_identity() {
+    let duplicate_output = parse(arguments(&[
+        "align",
+        "--index",
+        "ref.bsbit",
+        "--read1",
+        "reads.fq",
+        "--output",
+        "first.bam",
+        "--output-bam",
+        "second.bam",
+    ]))
+    .expect_err("canonical output and compatibility alias are one option");
+    assert!(
+        duplicate_output
+            .to_string()
+            .contains("--output may be specified only once")
+    );
+    let duplicate_index = parse(arguments(&[
+        "align",
+        "-i",
+        "first.bsbit",
+        "--index",
+        "second.bsbit",
+        "-1",
+        "reads.fq",
+        "-o",
+        "out.bam",
+    ]))
+    .expect_err("short and long index forms are one option");
+    assert!(
+        duplicate_index
+            .to_string()
+            .contains("--index may be specified only once")
+    );
+    let duplicate_threads = parse(arguments(&[
+        "align",
+        "-i",
+        "ref.bsbit",
+        "-1",
+        "reads.fq",
+        "-o",
+        "out.bam",
+        "-t",
+        "1",
+        "--threads",
+        "2",
+    ]))
+    .expect_err("short and long thread forms are one option");
+    assert!(
+        duplicate_threads
+            .to_string()
+            .contains("--threads may be specified only once")
+    );
+    let missing_output = parse(arguments(&[
+        "align",
+        "--index",
+        "ref.bsbit",
+        "--read1",
+        "reads.fq",
+    ]))
+    .expect_err("output is required");
+    assert!(missing_output.to_string().contains("missing --output"));
     let duplicate = parse(arguments(&[
         "align",
         "--index",
@@ -109,7 +231,7 @@ fn standard_alignment_layout_and_read_aliases_parse() {
         "first.fq",
         "-1",
         "second.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
     ]))
     .expect_err("short and long read-1 forms are one option");
@@ -127,7 +249,7 @@ fn nested_methylation_call_accepts_short_and_long_options() {
         "meth",
         "-i",
         "reads.bam",
-        "--reference",
+        "-r",
         "reference.fa",
         "-o",
         "calls.cgmap.gz",
@@ -187,6 +309,26 @@ fn nested_methylation_call_accepts_short_and_long_options() {
     assert_eq!(long.threads, 4);
     assert_eq!(long.parameters.minimum_base_quality, 25);
     assert_eq!(long.parameters.minimum_mapping_quality, 30);
+}
+
+#[test]
+fn short_and_long_call_reference_forms_are_one_option() {
+    let error = parse(arguments(&[
+        "call",
+        "meth",
+        "-i",
+        "reads.bam",
+        "-r",
+        "first.fa",
+        "--reference",
+        "second.fa",
+        "-o",
+        "calls.cgmap",
+        "-f",
+        "cgmap",
+    ]))
+    .expect_err("short and long reference forms are one option");
+    assert!(error.to_string().contains("duplicate option `--reference`"));
 }
 
 #[test]
@@ -294,7 +436,7 @@ fn call_region_coordinates_fail_closed() {
 }
 
 #[test]
-fn all_call_modules_require_an_indexed_reference_argument() {
+fn all_call_modules_require_a_reference_argument() {
     assert!(
         parse(arguments(&[
             "call",
@@ -483,7 +625,7 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "snp",
         "-i",
         "reads.bam",
-        "--reference",
+        "-r",
         "reference.fa",
         "-o",
         "calls.vcf.gz",
@@ -540,7 +682,7 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "joint",
         "-i",
         "reads.bam",
-        "--reference",
+        "-r",
         "reference.fa",
         "--sample-name",
         "tumor-A",
@@ -679,7 +821,6 @@ fn internal_cache_and_historical_alignment_options_are_absent() {
 
     for retired in [
         "--reads",
-        "--output",
         "--output-format",
         "--max-edit-distance",
         "--reference-backend",
@@ -692,7 +833,7 @@ fn internal_cache_and_historical_alignment_options_are_absent() {
             "ref.bsbit",
             "--read1",
             "reads.fq",
-            "--output-bam",
+            "--output",
             "out.bam",
             retired,
             "value",
@@ -711,7 +852,7 @@ fn alignment_entry_points_are_explicit() {
         "r1.fq",
         "-2",
         "r2.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
     ]))
     .expect("canonical alignment parses");
@@ -723,7 +864,7 @@ fn alignment_entry_points_are_explicit() {
         "reference.bsbit",
         "--read1",
         "single.fq",
-        "--output-bam",
+        "--output",
         "single.bam",
     ]))
     .expect("canonical single-end alignment parses");
@@ -758,7 +899,7 @@ fn paired_span_and_fail_closed_rules_are_exact() {
         "r1.fq",
         "-2",
         "r2.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
         "--min-template-span",
         "10",
@@ -776,7 +917,7 @@ fn paired_span_and_fail_closed_rules_are_exact() {
             "ref.bsbit",
             "--read2",
             "r2",
-            "--output-bam",
+            "--output",
             "o.bam",
         ]),
         arguments(&[
@@ -787,7 +928,7 @@ fn paired_span_and_fail_closed_rules_are_exact() {
             "r1",
             "--read2",
             "r2",
-            "--output-bam",
+            "--output",
             "o.bam",
             "--min-template-span",
             "501",
@@ -807,7 +948,7 @@ fn thread_domain_is_exact_and_independent_of_host_cpu_count() {
         "ref.bsbit",
         "--read1",
         "reads.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
         "--threads",
     ];

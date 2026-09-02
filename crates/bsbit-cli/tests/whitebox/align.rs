@@ -28,6 +28,10 @@ fn help_exposes_only_default_and_sensitive_modes() {
     assert!(HELP.contains("--read1 only"));
     assert!(HELP.contains("-1, --read1 PATH"));
     assert!(HELP.contains("-2, --read2 PATH"));
+    assert!(HELP.contains("-i, --index PATH"));
+    assert!(HELP.contains("-o, --output PATH"));
+    assert!(HELP.contains("--compression-threads"));
+    assert!(HELP.contains("--compression-level"));
     assert!(HELP.contains("same persisted combined index and bounded d3/d5"));
     for hidden in [
         "align-general",
@@ -61,7 +65,7 @@ fn standard_single_input_supports_shared_output_policy_and_pair_only_options_fai
         "reference.bsbit",
         "--read1",
         "reads.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from)
@@ -100,8 +104,15 @@ fn standard_single_input_supports_shared_output_policy_and_pair_only_options_fai
     );
 
     let mut explicit_bam = single.clone();
-    explicit_bam
-        .extend(["--bam-threads", "2", "--bam-compression-level", "default"].map(OsString::from));
+    explicit_bam.extend(
+        [
+            "--compression-threads",
+            "2",
+            "--compression-level",
+            "default",
+        ]
+        .map(OsString::from),
+    );
     let parsed = parse_options_from(explicit_bam).expect("single-end BAM controls parse");
     assert_eq!(parsed.bam_threads, 2);
     assert_eq!(parsed.bam_compression_level, None);
@@ -160,7 +171,7 @@ fn paired_total_thread_budget_selects_qualified_mapping_output_splits() {
             "r1.fastq.gz",
             "--read2",
             "r2.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from)
@@ -174,14 +185,14 @@ fn paired_total_thread_budget_selects_qualified_mapping_output_splits() {
     assert_eq!(automatic.auxiliary_core_budget, Some(3));
     assert_eq!(automatic.total_thread_budget, Some(14));
 
-    for explicit in ["--threads", "--bam-threads"] {
+    for explicit in ["--threads", "--compression-threads"] {
         let mut conflicting = paired();
         conflicting.extend(["--total-threads", "14", explicit, "2"].map(OsString::from));
         assert_eq!(
             parse_options_from(conflicting)
                 .expect_err("automatic and explicit thread controls conflict")
                 .to_string(),
-            "--total-threads conflicts with --threads and --bam-threads"
+            "--total-threads conflicts with --threads and --compression-threads"
         );
     }
 }
@@ -193,7 +204,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "reference.bsbit",
         "-1",
         "single.fastq.gz",
-        "--output-bam",
+        "--output",
         "single.bam",
     ]
     .map(OsString::from);
@@ -209,7 +220,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "r1.fastq.gz",
         "-2",
         "r2.fastq.gz",
-        "--output-bam",
+        "--output",
         "paired.bam",
     ]
     .map(OsString::from);
@@ -227,7 +238,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
             "reference.bsbit",
             retired,
             "reads.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from);
@@ -246,7 +257,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "first.fastq.gz",
         "-1",
         "second.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from);
@@ -262,7 +273,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "reference.bsbit",
         "-2",
         "r2.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from);
@@ -284,7 +295,7 @@ fn minimal_is_default_and_bismark_output_is_explicit() {
             "reads.R1.fastq.gz",
             "--read2",
             "reads.R2.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from)
@@ -353,7 +364,7 @@ fn parser_accepts_only_the_opaque_index_handle_and_rejects_duplicate_value_flags
         "r1.fq",
         "--read2",
         "r2.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
     ]
     .map(OsString::from)
@@ -424,7 +435,7 @@ fn public_modes_select_fixed_default_and_sensitive_strategies() {
             "reads.R1.fastq.gz",
             "--read2",
             "reads.R2.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from)

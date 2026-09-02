@@ -18,7 +18,7 @@ use crate::meth::Parameters as MethParameters;
 use crate::meth::aggregation::{
     DenseMethRegion, accumulate_meth_fragment, meth_dense_bytes_per_block,
 };
-use crate::reference_context::CallReferenceReader;
+use crate::reference_context::{CallReferenceReader, CallReferenceSource};
 use crate::region::{CallRegion, RegionAggregation};
 use crate::snp::candidate::{CandidateRegion, CandidateSite, snp_region_bytes_per_block};
 use crate::snp::likelihood::{LikelihoodRegion, likelihood_site_bytes};
@@ -142,7 +142,7 @@ struct CollectedRegionAggregation {
 #[cfg(test)]
 fn run_indexed_region_workers(
     path: &Path,
-    reference_path: &Path,
+    reference_source: &CallReferenceSource,
     references: &[BamReference],
     regions: &[CallRegion],
     worker_count: usize,
@@ -154,7 +154,7 @@ fn run_indexed_region_workers(
         regions,
         worker_count,
         IndexedCallMode::Meth(MethParameters::default()),
-        reference_path,
+        reference_source,
         |region| {
             let meth = region
                 .meth
@@ -169,7 +169,7 @@ fn run_indexed_region_workers(
 #[cfg(test)]
 fn collect_indexed_region_workers_mode(
     path: &Path,
-    reference_path: &Path,
+    reference_source: &CallReferenceSource,
     references: &[BamReference],
     regions: &[CallRegion],
     worker_count: usize,
@@ -182,7 +182,7 @@ fn collect_indexed_region_workers_mode(
         regions,
         worker_count,
         mode,
-        reference_path,
+        reference_source,
         |mut region| {
             if let Some(meth) = region.meth.take() {
                 aggregation.meth_sites.extend(meth.into_sites()?);
@@ -200,7 +200,7 @@ pub(crate) fn stream_indexed_region_workers_mode(
     regions: &[CallRegion],
     worker_count: usize,
     mode: IndexedCallMode,
-    reference_path: &Path,
+    reference_source: &CallReferenceSource,
     mut consume: impl FnMut(RegionAggregation) -> Result<(), CallError>,
 ) -> Result<(), CallError> {
     if regions.is_empty() {
@@ -224,7 +224,7 @@ pub(crate) fn stream_indexed_region_workers_mode(
                 path,
                 references,
                 mode,
-                reference_path,
+                reference_source,
                 likelihood_batch_sites,
             };
             scope.spawn(move || {
@@ -253,7 +253,7 @@ struct IndexedRegionWorkerPlan<'a> {
     path: &'a Path,
     references: &'a [BamReference],
     mode: IndexedCallMode,
-    reference_path: &'a Path,
+    reference_source: &'a CallReferenceSource,
     likelihood_batch_sites: usize,
 }
 
@@ -283,7 +283,7 @@ fn indexed_region_worker_body(
         path,
         references,
         mode,
-        reference_path,
+        reference_source,
         likelihood_batch_sites,
     } = plan;
     let mut reader = match IndexedBamReader::open(path) {
@@ -300,14 +300,12 @@ fn indexed_region_worker_body(
             return;
         }
     };
-    let mut reference_reader = match CallReferenceReader::open(reference_path, references) {
+    let mut reference_reader = match reference_source.open() {
         Ok(reader) => reader,
         Err(error) => {
             let _ = result_sender.send(RegionWorkerMessage::Ready {
                 worker,
-                result: Err(
-                    error.with_context(format!("worker {worker}: open indexed reference FASTA"))
-                ),
+                result: Err(error.with_context(format!("worker {worker}: open reference FASTA"))),
             });
             return;
         }
@@ -1029,6 +1027,8 @@ mod tests {
     #[test]
     fn indexed_region_workers_are_thread_count_and_boundary_invariant() {
         let fixture = indexed_xg_fixture("indexed-workers");
+        let reference_source =
+            CallReferenceSource::prepare(&fixture.fasta, &fixture.references).unwrap();
         let boundary = fixture.references[0].length / 2;
         let regions = [
             CallRegion {
@@ -1046,7 +1046,7 @@ mod tests {
         ];
         let single = run_indexed_region_workers(
             &fixture.bam,
-            &fixture.fasta,
+            &reference_source,
             &fixture.references,
             &regions,
             1,
@@ -1054,7 +1054,7 @@ mod tests {
         .unwrap();
         let parallel = run_indexed_region_workers(
             &fixture.bam,
-            &fixture.fasta,
+            &reference_source,
             &fixture.references,
             &regions,
             2,
@@ -1092,9 +1092,10 @@ mod tests {
             start: 900,
             end: 1_000,
         }];
+        let reference_source = CallReferenceSource::prepare(&reference_path, &references).unwrap();
         let error = collect_indexed_region_workers_mode(
             &path,
-            &reference_path,
+            &reference_source,
             &references,
             &regions,
             1,
@@ -1108,6 +1109,8 @@ mod tests {
     #[test]
     fn joint_regions_equal_separate_meth_and_snp_modules() {
         let fixture = indexed_xg_fixture("joint-workers");
+        let reference_source =
+            CallReferenceSource::prepare(&fixture.fasta, &fixture.references).unwrap();
         let boundary = fixture.references[0].length / 2;
         let regions = [
             CallRegion {
@@ -1133,7 +1136,7 @@ mod tests {
         };
         let meth = collect_indexed_region_workers_mode(
             &fixture.bam,
-            &fixture.fasta,
+            &reference_source,
             &fixture.references,
             &regions,
             2,
@@ -1145,7 +1148,7 @@ mod tests {
         .unwrap();
         let snp = collect_indexed_region_workers_mode(
             &fixture.bam,
-            &fixture.fasta,
+            &reference_source,
             &fixture.references,
             &regions,
             2,
@@ -1154,7 +1157,7 @@ mod tests {
         .unwrap();
         let joint = collect_indexed_region_workers_mode(
             &fixture.bam,
-            &fixture.fasta,
+            &reference_source,
             &fixture.references,
             &regions,
             2,

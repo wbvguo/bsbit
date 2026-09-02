@@ -451,7 +451,7 @@ sha256sum build/bsbit/bsbit
 ```
 
 After building the opaque index with `bsbit index` as described in the
-[alignment guide](guides/alignment.md#align-paired-reads), the bsbit side of the timed
+[alignment guide](guides/alignment.md#run-alignment), the bsbit side of the timed
 command has this public shape:
 
 ```bash
@@ -459,10 +459,10 @@ build/bsbit/bsbit align \
   --index GRCh38.bsbit \
   --read1 sim_wgbs_10m.R1.fastq.gz \
   --read2 sim_wgbs_10m.R2.fastq.gz \
-  --output-bam sensitive.bam \
+  --output sensitive.bam \
   --sensitive \
   --threads 8 \
-  --bam-threads 2 \
+  --compression-threads 2 \
   --min-template-span 0 \
   --max-template-span 500 \
   --metrics > sensitive.summary.tsv
@@ -503,5 +503,5 @@ exercise the recovery rule; their results are
 - The benchmark is not an independent third-party study.
 
 Read this page with the [scientific contract](scientific-contract.md),
-[supported workflows](getting-started/workflow.md#supported-workflows), and
+[sequencing data support](getting-started/workflow.md#sequencing-data-support), and
 [known differences](known-differences.md).

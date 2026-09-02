@@ -180,9 +180,9 @@ clinical caller.
 performs no new biological inference: it preserves methylated/total counts,
 represents absent or filtered cells as missing rather than zero, and filters by
 the configured valid-sample proportion. Exact schemas live in the
-[methylation](outputs/methylation.md),
-[variant](outputs/variant-calling.md), and
-[matrix](outputs/methylation-matrices.md) guides.
+[methylation](guides/methylation.md),
+[variant](guides/variant-calling.md), and
+[matrix](guides/methylation-matrices.md) guides.
 
 ## Required validation
 
@@ -195,6 +195,6 @@ calling with overlap collapse; regional equivalence; and deterministic matrix
 merging with missing-cell semantics.
 
 Support boundaries are summarized under
-[supported workflows](getting-started/workflow.md#supported-workflows). Measured accuracy and
+[sequencing data support](getting-started/workflow.md#sequencing-data-support). Measured accuracy and
 MAPQ evidence live in [performance evidence](performance-evidence.md), and
 remaining differences are listed in [known limitations](known-differences.md).

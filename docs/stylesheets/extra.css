@@ -24,6 +24,155 @@
   white-space: nowrap;
 }
 
+.md-typeset details[class] {
+  border-color: var(--md-default-fg-color--lightest);
+  box-shadow: none;
+}
+
+.md-typeset details[class] > summary {
+  background-color: var(--md-code-bg-color);
+  color: var(--md-default-fg-color--light);
+  font-weight: 600;
+}
+
+.md-typeset details[class] > summary::before {
+  background-color: var(--md-default-fg-color--light);
+}
+
+.md-typeset details[class] > summary:hover,
+.md-typeset details[class][open] > summary {
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset details.highlight.tip {
+  border-color: #00bfa5;
+}
+
+.md-typeset details.highlight.tip > summary {
+  background-color: rgba(0, 191, 165, 0.1);
+  color: var(--md-default-fg-color);
+}
+
+.md-typeset details.highlight.tip > summary::before {
+  background-color: #00bfa5;
+}
+
+.md-typeset .admonition.output-behavior {
+  border-color: var(--md-default-fg-color--lighter);
+}
+
+.md-typeset .output-behavior > .admonition-title {
+  background-color: var(--md-code-bg-color);
+}
+
+.md-typeset .output-behavior > .admonition-title::before {
+  background-color: var(--md-default-fg-color--light);
+  -webkit-mask-image: var(--md-admonition-icon--warning);
+  mask-image: var(--md-admonition-icon--warning);
+}
+
+.next-step {
+  border-left: 0.16rem solid var(--md-typeset-a-color);
+  margin-top: 2rem;
+  padding: 0.1rem 0.9rem;
+}
+
+.next-step p {
+  margin: 0.25rem 0;
+}
+
+.workflow-flow {
+  align-items: end;
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: 6.75rem auto 22.5rem auto 7rem;
+  margin: 1.25rem auto 1.5rem;
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 0.15rem 0.1rem 0.65rem;
+  width: max-content;
+}
+
+.workflow-flow > .workflow-node,
+.workflow-flow > .workflow-arrow {
+  margin-bottom: 0.5rem;
+}
+
+.workflow-flow > .workflow-arrow {
+  align-items: center;
+  align-self: end;
+  display: flex;
+  height: 3.7rem;
+}
+
+.workflow-repeat {
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.45rem;
+  padding: 0.35rem 0.5rem 0.5rem;
+  width: 100%;
+}
+
+.workflow-repeat-label {
+  color: var(--md-default-fg-color--light);
+  display: block;
+  font-size: 0.6rem;
+  margin-bottom: 0.3rem;
+  text-align: center;
+}
+
+.workflow-row {
+  align-items: stretch;
+  display: grid;
+  gap: 0.35rem;
+  grid-template-columns: minmax(0, 0.9fr) auto minmax(0, 1.15fr) auto minmax(0, 0.9fr);
+}
+
+.workflow-node {
+  align-items: center;
+  background: var(--md-code-bg-color);
+  border: 0.05rem solid var(--md-default-fg-color--lightest);
+  border-radius: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  min-height: 3.7rem;
+  padding: 0.45rem 0.35rem;
+  text-align: center;
+}
+
+.workflow-node strong {
+  font-size: 0.76rem;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.workflow-node code,
+.workflow-node span {
+  font-size: 0.58rem;
+  line-height: 1.35;
+}
+
+.workflow-node code {
+  background: transparent;
+  margin-top: 0.22rem;
+  padding-left: 0;
+  padding-right: 0;
+  white-space: nowrap;
+}
+
+.workflow-node span {
+  color: var(--md-default-fg-color--light);
+  margin-bottom: 0.22rem;
+  white-space: nowrap;
+}
+
+.workflow-arrow {
+  align-self: center;
+  color: var(--md-typeset-a-color);
+  font-size: 1.15rem;
+}
+
 .docs-intro {
   margin-bottom: 1.5rem;
 }
@@ -47,7 +196,7 @@
   float: right;
   height: auto;
   margin: 0 0 1rem 1.5rem;
-  width: 6rem;
+  width: 7rem;
 }
 
 @media screen and (min-width: 76.25em) {
@@ -69,7 +218,7 @@
     display: block;
     float: none;
     margin: 0 auto 1rem;
-    width: 4.5rem;
+    width: 6rem;
   }
 
   .md-typeset table:not([class]) th {
@@ -81,4 +230,5 @@
     overflow-wrap: anywhere;
     white-space: normal;
   }
+
 }

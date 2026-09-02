@@ -23,12 +23,12 @@ use crate::{CliError, RunReport};
 pub(crate) const HELP: &str = r"bsbit align - standard bisulfite read alignment
 
 USAGE:
-  bsbit align --index PATH --read1 PATH [--read2 PATH] --output-bam PATH [OPTIONS]
+  bsbit align -i PATH -1 PATH [-2 PATH] -o PATH [OPTIONS]
 
 REQUIRED:
-  --index PATH                       complete index created by `bsbit index`
+  -i, --index PATH                   complete index created by `bsbit index`
   -1, --read1 PATH                   single-end FASTQ, or R1 FASTQ when paired
-  --output-bam PATH                  create-only published BAM path
+  -o, --output PATH                  BAM path; an existing file is atomically replaced
 
 INPUT LAYOUT:
   --read1 only                       directional single-end alignment
@@ -44,9 +44,9 @@ OPTIONS FOR BOTH LAYOUTS:
   --non-directional                  search all four bisulfite strands
   --output-contract CONTRACT         minimal|bismark; default: minimal
   --mapped-only                      omit primary records without a placement
-  --threads N                        mapping workers; default: 1
-  --bam-threads N                    BGZF workers; default: 1
-  --bam-compression-level LEVEL      default|0..9; default: 1
+  -t, --threads N                    mapping workers; default: 1
+  --compression-threads N            BGZF workers; default: 1
+  --compression-level LEVEL          default|0..9; default: 1
   --metrics                          write the layout-specific profiling TSV
 
 PAIRED-END OPTIONS:
@@ -221,13 +221,13 @@ fn option_takes_value(flag: &str) -> bool {
         "--index"
             | "--read1"
             | "--read2"
-            | "--output-bam"
+            | "--output"
             | "--batch-pairs"
             | "--alignment-queue-batches"
             | "--total-threads"
             | "--threads"
-            | "--bam-threads"
-            | "--bam-compression-level"
+            | "--compression-threads"
+            | "--compression-level"
             | "--output-contract"
             | "--min-template-span"
             | "--max-template-span"
@@ -268,8 +268,13 @@ fn parse_options_from(
             .to_str()
             .ok_or_else(|| invalid("argument name is not UTF-8"))?;
         let flag = match flag {
+            "-i" => "--index",
             "-1" => "--read1",
             "-2" => "--read2",
+            "-o" | "--output-bam" => "--output",
+            "-t" => "--threads",
+            "--bam-threads" => "--compression-threads",
+            "--bam-compression-level" => "--compression-level",
             flag => flag,
         };
         if flag == "--sensitive" {
@@ -321,23 +326,21 @@ fn parse_options_from(
             "--index" => index = Some(PathBuf::from(value)),
             "--read1" => read1 = Some(PathBuf::from(value)),
             "--read2" => read2 = Some(PathBuf::from(value)),
-            "--output-bam" => output_bam = Some(PathBuf::from(value)),
+            "--output" => output_bam = Some(PathBuf::from(value)),
             "--batch-pairs" => batch_pairs = parse_usize(flag, &value)?,
             "--alignment-queue-batches" => {
                 alignment_queue_batches = parse_usize(flag, &value)?;
             }
             "--total-threads" => total_threads = Some(parse_usize(flag, &value)?),
             "--threads" => threads = parse_usize(flag, &value)?,
-            "--bam-threads" => bam_threads = parse_u32(flag, &value)?,
-            "--bam-compression-level" => {
+            "--compression-threads" => bam_threads = parse_u32(flag, &value)?,
+            "--compression-level" => {
                 if value == "default" {
                     bam_compression_level = None;
                 } else {
                     let level = parse_u32(flag, &value)?;
                     if level > 9 {
-                        return Err(invalid(
-                            "--bam-compression-level must be default or in 0..=9",
-                        ));
+                        return Err(invalid("--compression-level must be default or in 0..=9"));
                     }
                     bam_compression_level =
                         Some(u8::try_from(level).expect("level is at most nine"));
@@ -352,9 +355,11 @@ fn parse_options_from(
         }
     }
     let auxiliary_core_budget = if let Some(total_threads) = total_threads {
-        if seen_value_flags.contains("--threads") || seen_value_flags.contains("--bam-threads") {
+        if seen_value_flags.contains("--threads")
+            || seen_value_flags.contains("--compression-threads")
+        {
             return Err(invalid(
-                "--total-threads conflicts with --threads and --bam-threads",
+                "--total-threads conflicts with --threads and --compression-threads",
             ));
         }
         if total_threads == 0 || total_threads > 64 {
@@ -371,7 +376,7 @@ fn parse_options_from(
         return Err(invalid("--threads must be in 1..=64"));
     }
     if bam_threads > 64 {
-        return Err(invalid("--bam-threads must be in 0..=64"));
+        return Err(invalid("--compression-threads must be in 0..=64"));
     }
     if batch_pairs == 0 {
         return Err(invalid("--batch-pairs must be positive"));
@@ -391,7 +396,7 @@ fn parse_options_from(
         (None, Some(_)) => return Err(invalid("--read2 requires --read1")),
         (None, None) => return Err(invalid("missing --read1")),
     };
-    let output_bam = required(output_bam, "--output-bam")?;
+    let output_bam = required(output_bam, "--output")?;
     if matches!(layout, ReadLayout::SingleEnd) {
         let unsupported_flag = [
             "--batch-pairs",

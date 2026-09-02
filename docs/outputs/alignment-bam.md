@@ -5,8 +5,8 @@ alignment decision, reference identity, read sequence and qualities, and the
 bisulfite strand information required by bsbit callers. It is not
 coordinate-sorted when first written.
 
-For the full artifact sequence, see the [outputs overview](index.md). To use a
-paired-end BAM for calling, follow [Prepare a BAM for calling](../guides/prepare-bam.md).
+For the full artifact sequence, see the [outputs overview](index.md). To use an
+alignment BAM for calling, follow [Prepare BAM file](../guides/prepare-bam.md).
 
 ## Header and provenance
 
@@ -109,10 +109,9 @@ rewrites the header.
 
 The current caller requires caller-compatible single- or paired-end provenance,
 mapped primary records with available MAPQ and `XG`, a coordinate-sorted
-BAI/CSI-indexed BAM, and the exact indexed FASTA used by alignment. Both
-directional and non-directional single-end modes satisfy that provenance
-boundary.
+BAI/CSI-indexed BAM, and the exact FASTA used by alignment. Both directional
+and non-directional single-end modes satisfy that provenance boundary.
 
-See the [calling input contract](../reference/input-data.md#calling-bam-and-indexed-reference)
+See the [calling input contract](../reference/input-data.md#calling-bam-and-reference)
 for the complete validation rules and the [scientific contract](../scientific-contract.md#sambam-semantics)
 for strand, coordinate, and methylation semantics.

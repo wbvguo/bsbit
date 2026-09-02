@@ -13,7 +13,7 @@ pub enum CombineErrorKind {
     Worker,
     /// Output staging or encoding failed.
     Output,
-    /// Create-only publication failed.
+    /// Replacement publication or rollback failed.
     Publication,
 }
 

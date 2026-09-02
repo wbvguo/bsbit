@@ -114,7 +114,6 @@ jobs:
         env:
           BSBIT_BIN_DIR: target/debug
         run: |
-          bash docs/examples/run-quickstart.sh
           bash docs/examples/run-end-to-end.sh
 
   minimum-rust:

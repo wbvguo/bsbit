@@ -13,9 +13,10 @@ mod publication;
 pub use file::{
     FileIdentity, absolute_path, create_new, hard_link_descriptor_create_new,
     remove_if_identity_matches, reopen_read_write, validate_absent, validate_create_target,
-    validate_distinct_paths, validate_regular_file_or_absent,
+    validate_distinct_paths, validate_regular_file_or_absent, validate_replace_target,
 };
 pub use publication::{
     CompletedFile, PublicationError, PublicationPhase, PublishedFile, StagedFile,
-    select_sibling_staging_path, validate_sibling_publication_paths,
+    select_sibling_staging_path, select_sibling_staging_path_replace,
+    validate_sibling_publication_paths,
 };

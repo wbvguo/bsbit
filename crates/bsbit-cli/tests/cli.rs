@@ -2,7 +2,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -13,15 +13,19 @@ use bsbit_core::bisulfite::{AlignmentOrientation, BisulfiteStrand};
 use bsbit_core::coordinate::{ReferenceInterval, ReferenceLength};
 use bsbit_core::sequence::normalize_dna;
 use bsbit_hts::{
-    AlignmentRecord, AlignmentRecordLimits, BamStagingWriter, DecodedReader, MappedAlignmentRecord,
-    RecordMappingQuality, RecordReference, RecordSegment, SamHeader, SamHeaderReference,
-    SamSortOrder, build_bam_index_create_new,
+    AlignmentRecord, AlignmentRecordLimits, BamStagingWriter, BgzfWriter, DecodedReader,
+    MappedAlignmentRecord, RecordMappingQuality, RecordReference, RecordSegment, SamHeader,
+    SamHeaderReference, SamSortOrder, build_bam_index_create_new,
 };
 use bsbit_index::reference::{ContigInput, ReferenceBuildLimits, ReferenceIndex};
 use bsbit_index::storage::combined::{CombinedIndex, CombinedIndexSaStride};
 
 const BAM_CIGAR_CODES: &[u8; 10] = b"MIDNSHP=XB";
 const BAM_BASES: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
+const GZIP_FASTA: &[u8] = &[
+    0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03, 0xb3, 0x4b, 0xce, 0x28, 0x32, 0xe4,
+    0x72, 0xe4, 0x02, 0x00, 0x8e, 0x7b, 0x39, 0x64, 0x08, 0x00, 0x00, 0x00,
+];
 
 fn unique_directory(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -208,9 +212,9 @@ fn run(arguments: impl IntoIterator<Item = impl AsRef<OsStr>>) -> Output {
 fn index(reference: &Path, output: &Path) -> Output {
     run([
         OsString::from("index"),
-        OsString::from("--reference"),
+        OsString::from("-r"),
         reference.as_os_str().to_owned(),
-        OsString::from("--output"),
+        OsString::from("-o"),
         output.as_os_str().to_owned(),
     ])
 }
@@ -255,7 +259,7 @@ fn align(snapshot: &Path, read1: &Path, read2: Option<&Path>, output_bam: &Path)
         arguments.push(path.as_os_str().to_owned());
     }
     arguments.extend([
-        OsString::from("--output-bam"),
+        OsString::from("--output"),
         output_bam.as_os_str().to_owned(),
     ]);
     run(arguments)
@@ -270,7 +274,7 @@ fn align_paired_metrics(snapshot: &Path, read1: &Path, read2: &Path, output_bam:
         read1.as_os_str().to_owned(),
         OsString::from("-2"),
         read2.as_os_str().to_owned(),
-        OsString::from("--output-bam"),
+        OsString::from("--output"),
         output_bam.as_os_str().to_owned(),
         OsString::from("--metrics"),
     ])
@@ -290,7 +294,7 @@ fn align_paired_non_directional(
         read1.as_os_str().to_owned(),
         OsString::from("-2"),
         read2.as_os_str().to_owned(),
-        OsString::from("--output-bam"),
+        OsString::from("--output"),
         output_bam.as_os_str().to_owned(),
         OsString::from("--non-directional"),
     ])
@@ -303,7 +307,7 @@ fn align_single_sensitive(snapshot: &Path, read1: &Path, output_bam: &Path) -> O
         snapshot.as_os_str().to_owned(),
         OsString::from("-1"),
         read1.as_os_str().to_owned(),
-        OsString::from("--output-bam"),
+        OsString::from("--output"),
         output_bam.as_os_str().to_owned(),
         OsString::from("--sensitive"),
         OsString::from("--threads"),
@@ -318,7 +322,7 @@ fn align_single_metrics(snapshot: &Path, read1: &Path, output_bam: &Path) -> Out
         snapshot.as_os_str().to_owned(),
         OsString::from("-1"),
         read1.as_os_str().to_owned(),
-        OsString::from("--output-bam"),
+        OsString::from("--output"),
         output_bam.as_os_str().to_owned(),
         OsString::from("--metrics"),
         OsString::from("--threads"),
@@ -333,7 +337,7 @@ fn align_single_bismark_mapped_only(snapshot: &Path, read1: &Path, output_bam: &
         snapshot.as_os_str().to_owned(),
         OsString::from("-1"),
         read1.as_os_str().to_owned(),
-        OsString::from("--output-bam"),
+        OsString::from("--output"),
         output_bam.as_os_str().to_owned(),
         OsString::from("--output-contract"),
         OsString::from("bismark"),
@@ -373,7 +377,7 @@ fn align_single_non_directional(
         snapshot.as_os_str().to_owned(),
         OsString::from("-1"),
         read1.as_os_str().to_owned(),
-        OsString::from("--output-bam"),
+        OsString::from("--output"),
         output_bam.as_os_str().to_owned(),
         OsString::from("--non-directional"),
     ]
@@ -741,13 +745,7 @@ fn option_usage_errors_are_golden() {
     );
 
     let retired_reads = run([
-        "align",
-        "--index",
-        "index",
-        "--reads",
-        "reads",
-        "--output-bam",
-        "out.bam",
+        "align", "--index", "index", "--reads", "reads", "--output", "out.bam",
     ]);
     assert_eq!(retired_reads.status.code(), Some(2));
     assert_eq!(retired_reads.stderr, b"bsbit: unknown option --reads\n");
@@ -782,7 +780,7 @@ fn umbrella_call_validates_inputs_and_joint_destinations() {
         OsString::from("meth"),
         OsString::from("-i"),
         input.as_os_str().to_owned(),
-        OsString::from("--reference"),
+        OsString::from("-r"),
         OsString::from("missing.fa"),
         OsString::from("-o"),
         output.as_os_str().to_owned(),
@@ -800,7 +798,7 @@ fn umbrella_call_validates_inputs_and_joint_destinations() {
         OsString::from("joint"),
         OsString::from("-i"),
         input.as_os_str().to_owned(),
-        OsString::from("--reference"),
+        OsString::from("-r"),
         OsString::from("missing.fa"),
         OsString::from("--meth"),
         vcf.as_os_str().to_owned(),
@@ -819,7 +817,7 @@ fn combine_command_builds_a_filtered_named_methylation_matrix() {
     let directory = unique_directory("combine-command");
     fs::create_dir(&directory).expect("fresh directory");
     let first = directory.join("first.bed");
-    let second = directory.join("second.bed");
+    let second = directory.join("second.cgmap");
     let matrix = directory.join("matrix.bed");
     fs::write(
         &first,
@@ -832,11 +830,11 @@ fn combine_command_builds_a_filtered_named_methylation_matrix() {
     fs::write(
         &second,
         concat!(
-            "chr1\t0\t1\tm,CG,0\t5\t+\t0\t1\t255,0,0\t5\t20.00\t1\t4\t0\t0\t0\t0\t0\n",
-            "chr1\t1\t2\tm,CHH,0\t6\t+\t1\t2\t255,0,0\t6\t0.00\t0\t6\t0\t0\t0\t0\t0\n",
+            "chr1\tC\t1\tCG\tCG\t0.200000\t1\t5\n",
+            "chr1\tC\t2\tCHH\tCA\t0.000000\t0\t6\n",
         ),
     )
-    .expect("second bedMethyl");
+    .expect("second CGmap");
     let result = run([
         OsString::from("combine"),
         OsString::from("--input"),
@@ -923,7 +921,7 @@ fn run_meth_call(input: &Path, reference: &Path, output: &Path) {
         OsString::from("meth"),
         OsString::from("-i"),
         input.as_os_str().to_owned(),
-        OsString::from("--reference"),
+        OsString::from("-r"),
         reference.as_os_str().to_owned(),
         OsString::from("-o"),
         output.as_os_str().to_owned(),
@@ -943,7 +941,7 @@ fn run_snp_call(input: &Path, reference: &Path, output: &Path) {
         OsString::from("snp"),
         OsString::from("-i"),
         input.as_os_str().to_owned(),
-        OsString::from("--reference"),
+        OsString::from("-r"),
         reference.as_os_str().to_owned(),
         OsString::from("-o"),
         output.as_os_str().to_owned(),
@@ -961,7 +959,7 @@ fn run_joint_call(input: &Path, reference: &Path, meth_output: &Path, vcf_output
         OsString::from("joint"),
         OsString::from("-i"),
         input.as_os_str().to_owned(),
-        OsString::from("--reference"),
+        OsString::from("-r"),
         reference.as_os_str().to_owned(),
         OsString::from("--meth"),
         meth_output.as_os_str().to_owned(),
@@ -1000,6 +998,33 @@ fn umbrella_call_modules_are_consistent_on_real_bam() {
         fs::read(&joint_vcf_output).expect("joint variant bytes")
     );
 
+    let expected_meth = fs::read(&meth_output).expect("expected methylation bytes");
+    let expected_snp = fs::read(&snp_output).expect("expected variant bytes");
+    for path in [
+        &meth_output,
+        &snp_output,
+        &joint_meth_output,
+        &joint_vcf_output,
+    ] {
+        fs::write(path, b"existing output\n").expect("existing output fixture");
+    }
+    run_meth_call(&input, &reference, &meth_output);
+    run_snp_call(&input, &reference, &snp_output);
+    run_joint_call(&input, &reference, &joint_meth_output, &joint_vcf_output);
+    assert_eq!(
+        fs::read(&meth_output).expect("replaced meth"),
+        expected_meth
+    );
+    assert_eq!(fs::read(&snp_output).expect("replaced SNP"), expected_snp);
+    assert_eq!(
+        fs::read(&joint_meth_output).expect("replaced joint meth"),
+        expected_meth
+    );
+    assert_eq!(
+        fs::read(&joint_vcf_output).expect("replaced joint VCF"),
+        expected_snp
+    );
+
     let mut decoded = String::new();
     let mut reader = DecodedReader::open(&snp_output).expect("VCF opens");
     reader.read_to_string(&mut decoded).expect("VCF decodes");
@@ -1026,7 +1051,7 @@ fn removed_oracle_options_are_rejected() {
         "scalar",
         "--read1",
         "reads",
-        "--output-bam",
+        "--output",
         "out.bam",
     ]);
     assert_eq!(backend.status.code(), Some(2));
@@ -1044,7 +1069,7 @@ fn removed_oracle_options_are_rejected() {
 }
 
 #[test]
-fn index_is_one_public_operation_and_rolls_back_an_incomplete_bundle() {
+fn index_replaces_an_existing_bundle_as_one_public_operation() {
     let directory = unique_directory("opaque-index");
     fs::create_dir(&directory).expect("fresh directory");
     let reference = directory.join("reference.fa");
@@ -1053,21 +1078,17 @@ fn index_is_one_public_operation_and_rolls_back_an_incomplete_bundle() {
     fs::write(&reference, b">chr\nACGTACGT\n").expect("reference fixture");
     fs::write(&internal, b"caller-owned").expect("internal collision fixture");
 
-    let failure = index(&reference, &output);
-    assert_eq!(failure.status.code(), Some(1));
-    assert!(!output.exists(), "logical index must roll back as a unit");
-    assert_eq!(
-        fs::read(&internal).expect("caller-owned collision retained"),
-        b"caller-owned"
-    );
-
-    fs::remove_file(&internal).expect("remove collision fixture");
     assert_success(&index(&reference, &output));
     assert!(output.is_file());
     assert!(
         internal.is_file(),
         "internal search data was built by index"
     );
+    assert_ne!(
+        fs::read(&internal).expect("replaced internal component"),
+        b"caller-owned"
+    );
+    assert_success(&index(&reference, &output));
 
     let hidden_subcommand = run([
         OsString::from("index"),
@@ -1092,6 +1113,35 @@ fn fast_index_publishes_a_stride8_image_accepted_by_the_runtime_reader() {
     let combined = CombinedIndex::open(&internal_index_prefix(&output))
         .expect("fast combined index opens through the production reader");
     assert_eq!(combined.sa_stride(), CombinedIndexSaStride::Eight);
+
+    fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+#[test]
+fn index_accepts_bgzf_and_rejects_ordinary_gzip_by_content() {
+    let directory = unique_directory("reference-compression");
+    fs::create_dir(&directory).expect("fresh directory");
+    let bgzf_reference = directory.join("reference.data");
+    let bgzf_output = directory.join("bgzf.bsbit");
+    let bgzf_file = fs::File::create(&bgzf_reference).expect("BGZF reference target");
+    let mut bgzf = BgzfWriter::from_file(bgzf_file, 0).expect("BGZF writer opens");
+    bgzf.write_all(b">chr1\nACGT\n").expect("BGZF FASTA writes");
+    bgzf.finish()
+        .expect("BGZF FASTA finishes")
+        .sync_all()
+        .expect("BGZF FASTA synchronizes");
+    assert_success(&index(&bgzf_reference, &bgzf_output));
+
+    let gzip_reference = directory.join("ordinary-gzip.data");
+    let gzip_output = directory.join("gzip.bsbit");
+    fs::write(&gzip_reference, GZIP_FASTA).expect("ordinary gzip FASTA writes");
+    let rejected = index(&gzip_reference, &gzip_output);
+    assert_eq!(rejected.status.code(), Some(1));
+    let diagnostic = String::from_utf8_lossy(&rejected.stderr);
+    assert!(diagnostic.contains("ordinary gzip compression"));
+    assert!(diagnostic.contains("bgzip -c"));
+    assert!(diagnostic.contains("samtools faidx"));
+    assert!(!gzip_output.exists());
 
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }
@@ -1179,15 +1229,16 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
             .windows(b"alignment-mode=caller-compatible-nondirectional-paired".len())
             .any(|window| { window == b"alignment-mode=caller-compatible-nondirectional-paired" })
     );
+    assert_success(&align(&index_path, &read1, Some(&read2), &paired_bam));
+    assert_eq!(decode_process_bam(&paired_bam).len(), 2);
 
     let occupied = directory.join("occupied.bam");
     fs::write(&occupied, b"caller-owned").expect("occupied target");
-    let rejected = align(&index_path, &single_reads, None, &occupied);
-    assert_eq!(rejected.status.code(), Some(1));
-    assert_eq!(
-        fs::read(&occupied).expect("target retained"),
-        b"caller-owned"
-    );
+    assert_success(&align(&index_path, &single_reads, None, &occupied));
+    let replaced = decode_process_bam(&occupied);
+    assert_eq!(replaced.len(), 2);
+    assert_eq!(replaced[0][0], b"single");
+    assert_eq!(replaced[1][0], b"unmapped");
 
     let malformed = directory.join("malformed.fq");
     let unpublished = directory.join("unpublished.bam");

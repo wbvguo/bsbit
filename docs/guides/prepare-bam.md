@@ -1,29 +1,60 @@
-# Prepare a BAM for calling { #prepare-bam-for-calling }
+# Prepare BAM file { #prepare-bam-for-calling }
 
-`bsbit align` writes caller-compatible single- or paired-end records in input order. Inspect
-the new BAM before transforming it, but do not try to index it until it is
-coordinate-sorted:
+`bsbit call` requires a coordinate-sorted and indexed BAM. Starting from the
+input-order BAM produced by `bsbit align`, prepare it according to the duplicate
+policy for the library.
+
+## Decide whether to mark duplicates
+
+PCR or optical duplicates can cause evidence from the same source molecule to
+be counted more than once and bias analysis. `samtools markdup` identifies
+duplicates from alignment position and orientation, then sets the SAM duplicate
+flag so downstream tools can ignore them without removing records. See the
+[samtools duplicate-marking
+algorithm](https://www.htslib.org/algorithms/duplicate.html) for details.
+
+Coordinate-based duplicate marking is commonly appropriate for randomly
+fragmented libraries, but is generally not recommended for RRBS, amplicon, or
+other fixed-end libraries because independent molecules may have the same
+coordinates by design. UMI libraries require a UMI-aware method. See the
+[Bismark deduplication
+guidance](https://felixkrueger.github.io/Bismark/usage/deduplication/) for
+additional bisulfite-library recommendations.
+
+## Prepare the BAM
+
+For a library using coordinate-based duplicate marking, name-sort the BAM, add
+mate information, coordinate-sort it, mark duplicates, and create the BAM
+index:
 
 ```bash
-samtools quickcheck -v sample.bam
-samtools flagstat sample.bam
+samtools sort -n -o sample.qname.bam sample.bam
+samtools fixmate -m sample.qname.bam sample.fixmate.bam
+samtools sort -o sample.sorted.bam sample.fixmate.bam
+samtools markdup sample.sorted.bam sample.prep.bam
+samtools index sample.prep.bam
 ```
 
-The paired-end recipe below produces the coordinate-ready
-`sample.analysis.bam` used throughout the calling guides.
+`samtools markdup` marks duplicate records rather than removing them; bsbit
+callers ignore records with the duplicate flag.
 
-## Prepare paired-end output
+??? note "Prepare without duplicate marking"
 
-Group mates, populate the mate tags used for duplicate decisions,
-coordinate-sort, mark duplicates, and create the BAM index:
+    When duplicate marking is not part of the selected policy, coordinate-sort
+    the alignment BAM and create its index directly:
+
+    ```bash
+    samtools sort -o sample.prep.bam sample.bam
+    samtools index sample.prep.bam
+    ```
+
+## Validate the BAM
+
+Check the final BAM before calling:
 
 ```bash
-samtools sort -n -o sample.name.bam sample.bam
-samtools fixmate -m sample.name.bam sample.fixmate.bam
-samtools sort -o sample.position.bam sample.fixmate.bam
-samtools markdup sample.position.bam sample.analysis.bam
-samtools index sample.analysis.bam
-samtools quickcheck -v sample.analysis.bam
+samtools quickcheck -v sample.prep.bam
+samtools flagstat sample.prep.bam
 ```
 
 Duplicate marking is a study-design decision: identical starts can be expected
@@ -37,9 +68,11 @@ contract, not a tag repeated on every read. It records the exact normalized
 reference fingerprint and whether the alignment mode is caller-compatible.
 Calling recomputes the normalized semantic digest of the FASTA and requires it
 to equal the BAM digest; matching contig names and lengths alone is
-insufficient. The FASTA needs `.fai` plus `.gzi` when it is BGZF-compressed.
+insufficient. A plain FASTA uses an existing adjacent FAI when available and is
+otherwise scanned once into an in-memory position table. A BGZF-compressed
+FASTA requires both `.fai` and `.gzi`; ordinary gzip FASTA is unsupported.
 
-The shared [calling input contract](../reference/input-data.md#calling-bam-and-indexed-reference)
+The shared [calling input contract](../reference/input-data.md#calling-bam-and-reference)
 lists all checks in one place. The [alignment BAM reference](../outputs/alignment-bam.md)
 defines record completeness, MAPQ, provenance, and auxiliary tags.
 
@@ -66,6 +99,6 @@ realigned rather than relabeled.
 
 ## Next
 
-- [Call methylation](../outputs/methylation.md)
-- [Call SNVs](../outputs/variant-calling.md)
-- [Review the calling input contract](../reference/input-data.md#calling-bam-and-indexed-reference)
+- [Call methylation](methylation.md)
+- [Call SNVs](variant-calling.md)
+- [Review the calling input requirements](../reference/input-data.md#calling-bam-and-reference)

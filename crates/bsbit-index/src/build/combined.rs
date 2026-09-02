@@ -2,7 +2,7 @@
 //!
 //! libsais supplies only the cyclic BWT and inverse-SA samples. Rust owns the
 //! reference projection, Occ64/Occ65536 packing, dense 16-mer lookup, sparse-SA
-//! row inversion, validation, and create-only multi-file publication.
+//! row inversion, validation, and transactional multi-file publication.
 
 use core::ffi::c_int;
 #[cfg(test)]
@@ -648,6 +648,17 @@ struct StagedCombinedIndex {
 
 impl StagedCombinedIndex {
     fn create(target_prefix: &Path) -> Result<Self, CombinedIndexBuildError> {
+        Self::create_with_policy(target_prefix, false)
+    }
+
+    fn create_replace(target_prefix: &Path) -> Result<Self, CombinedIndexBuildError> {
+        Self::create_with_policy(target_prefix, true)
+    }
+
+    fn create_with_policy(
+        target_prefix: &Path,
+        replace: bool,
+    ) -> Result<Self, CombinedIndexBuildError> {
         let target_prefix = bsbit_io::absolute_path(target_prefix)?;
         if target_prefix.file_name().is_none() {
             return Err(CombinedIndexBuildError::Argument(
@@ -655,12 +666,20 @@ impl StagedCombinedIndex {
             ));
         }
         let target = IndexComponentPaths::from_prefix(&target_prefix);
-        if target.any_exists()? {
+        if replace {
+            for path in target.all() {
+                bsbit_io::validate_replace_target(path)?;
+            }
+        } else if target.any_exists()? {
             return Err(CombinedIndexBuildError::Argument(
                 "combined index target or one of its components already exists",
             ));
         }
-        let stage_prefix = bsbit_io::select_sibling_staging_path(&target.meta, "combined-index")?;
+        let stage_prefix = if replace {
+            bsbit_io::select_sibling_staging_path_replace(&target.meta, "combined-index")?
+        } else {
+            bsbit_io::select_sibling_staging_path(&target.meta, "combined-index")?
+        };
         let stage = IndexComponentPaths::from_prefix(&stage_prefix);
         let meta = StagedComponent::create(&stage.meta)?;
         let bwt = StagedComponent::create(&stage.bwt)?;
@@ -721,6 +740,14 @@ impl CompletedCombinedIndex {
     }
 
     fn publish(self) -> Result<(), CombinedIndexBuildError> {
+        self.publish_with_policy(false)
+    }
+
+    fn publish_replace(self) -> Result<(), CombinedIndexBuildError> {
+        self.publish_with_policy(true)
+    }
+
+    fn publish_with_policy(self, replace: bool) -> Result<(), CombinedIndexBuildError> {
         // Components become visible first; the versioned metadata file is the
         // commit marker opened first by every combined-index reader.
         let Self {
@@ -739,7 +766,12 @@ impl CompletedCombinedIndex {
         ];
         let mut published = Vec::<PublishedFile>::with_capacity(ordered.len());
         for (completed, target) in ordered {
-            match completed.publish_create_new_at(&target) {
+            let result = if replace {
+                completed.publish_replace_at(&target)
+            } else {
+                completed.publish_create_new_at(&target)
+            };
+            match result {
                 Ok(component) => published.push(component),
                 Err(error) => {
                     for component in published.into_iter().rev() {
@@ -1967,7 +1999,54 @@ pub fn build_combined_index_from_catalog_create_new(
         ));
     }
     drop(contigs);
-    build_combined_index_bounded_create_new(projected, reference_semantic_digest, prefix, options)
+    build_combined_index_bounded(projected, reference_semantic_digest, prefix, options, false)
+}
+
+/// Projects a consumed catalog and atomically replaces a complete compatible
+/// SA16 image.
+///
+/// # Errors
+///
+/// Returns the first projection, allocation, libsais, serialization,
+/// validation, backup, or replacement failure.
+pub fn build_combined_index_from_catalog_replace(
+    contigs: Vec<ContigInput>,
+    reference_semantic_digest: ReferenceSemanticDigest,
+    prefix: &Path,
+    options: CombinedIndexBuildOptions,
+) -> Result<(), CombinedIndexBuildError> {
+    let observed_reference_digest = compute_reference_semantic_digest(&contigs);
+    if observed_reference_digest != reference_semantic_digest {
+        return Err(CombinedIndexBuildError::ReferenceDigestMismatch {
+            expected: reference_semantic_digest,
+            observed: observed_reference_digest,
+        });
+    }
+    let [
+        byte_0,
+        byte_1,
+        byte_2,
+        byte_3,
+        byte_4,
+        byte_5,
+        byte_6,
+        byte_7,
+        ..,
+    ] = observed_reference_digest.into_bytes();
+    let projection_salt = u64::from_le_bytes([
+        byte_0, byte_1, byte_2, byte_3, byte_4, byte_5, byte_6, byte_7,
+    ]);
+    let projected = project_combined_packed_text(&contigs, projection_salt, options.threads)?;
+    let text_length = u64::try_from(projected.len())
+        .map_err(|_| CombinedIndexBuildError::Argument("projected text length exceeds u64"))?;
+    validate_combined_text_length(text_length, DEFAULT_COMBINED_INDEX_SA_STRIDE)?;
+    if projected.reference_bases().checked_mul(2) != Some(text_length) {
+        return Err(CombinedIndexBuildError::Argument(
+            "projected text length differs from twice the reference",
+        ));
+    }
+    drop(contigs);
+    build_combined_index_bounded(projected, reference_semantic_digest, prefix, options, true)
 }
 
 fn compute_reference_semantic_digest(contigs: &[ContigInput]) -> ReferenceSemanticDigest {
@@ -1985,11 +2064,12 @@ fn compute_reference_semantic_digest(contigs: &[ContigInput]) -> ReferenceSemant
 }
 
 #[allow(clippy::too_many_lines)]
-fn build_combined_index_bounded_create_new(
+fn build_combined_index_bounded(
     projected: PackedProjectedText,
     reference_semantic_digest: ReferenceSemanticDigest,
     prefix: &Path,
     options: CombinedIndexBuildOptions,
+    replace: bool,
 ) -> Result<(), CombinedIndexBuildError> {
     let text_length = u64::try_from(projected.len())
         .map_err(|_| CombinedIndexBuildError::Argument("projected text length exceeds u64"))?;
@@ -2005,7 +2085,11 @@ fn build_combined_index_bounded_create_new(
         .map(|position| projected.get(position))
         .collect::<Vec<_>>();
     let short_thresholds = short_suffix_thresholds(&tail)?;
-    let staging = StagedCombinedIndex::create(prefix)?;
+    let staging = if replace {
+        StagedCombinedIndex::create_replace(prefix)?
+    } else {
+        StagedCombinedIndex::create(prefix)?
+    };
 
     let config = BoundedBwtConfig::new(options.memory_mib, options.threads)?
         .with_sample_stride(usize::try_from(sa_stride).expect("validated SA stride fits usize"))?;
@@ -2051,7 +2135,11 @@ fn build_combined_index_bounded_create_new(
             "staged combined-index component identity changed during validation",
         ));
     }
-    completed.publish()?;
+    if replace {
+        completed.publish_replace()?;
+    } else {
+        completed.publish()?;
+    }
     Ok(())
 }
 

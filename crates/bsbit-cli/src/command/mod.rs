@@ -13,7 +13,7 @@ use bsbit_call::meth::Options as CallMethOptions;
 use bsbit_call::snp::Options as CallSnpOptions;
 use bsbit_combine::Options as CombineOptions;
 use bsbit_hts::BsbitAlignmentMode;
-use bsbit_io::select_sibling_staging_path;
+use bsbit_io::select_sibling_staging_path_replace;
 
 use crate::{CliError, GENERAL_HELP};
 
@@ -56,7 +56,7 @@ fn unused_staging_path(
     label: &str,
     error_subject: &str,
 ) -> Result<PathBuf, CliError> {
-    select_sibling_staging_path(target, label).map_err(|error| {
+    select_sibling_staging_path_replace(target, label).map_err(|error| {
         CliError::operation(format!(
             "{error_subject}: inspect staging path {}: {error}",
             target.display()

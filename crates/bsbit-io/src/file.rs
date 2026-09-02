@@ -158,6 +158,47 @@ pub fn validate_create_target(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Verifies that a future replaceable file target has an existing directory
+/// as its parent.
+///
+/// A missing target and an existing regular file or symbolic link are valid.
+/// Directories and other special filesystem objects are never replaced.
+///
+/// # Errors
+///
+/// Returns `Unsupported` for an existing non-file target, `NotADirectory` when
+/// the parent exists but is not a directory, and propagates absolutization or
+/// metadata errors otherwise.
+pub fn validate_replace_target(path: &Path) -> io::Result<()> {
+    let target = absolute_path(path)?;
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "existing output target is not a regular file or symbolic link",
+            ));
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(source),
+    }
+    let parent = target.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "replacement target has no parent directory",
+        )
+    })?;
+    let metadata = fs::metadata(parent)?;
+    if metadata.is_dir() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "replacement target parent is not a directory",
+        ))
+    }
+}
+
 /// Verifies that two paths are lexically distinct after absolutization.
 ///
 /// # Errors

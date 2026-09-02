@@ -134,11 +134,11 @@ cargo test --locked -p bsbit-cli --test cli
 The maintained caller tests cover authoritative FASTA projection with `MD`
 ignored, required-XG plus FLAG strand handling, overlap collapse, single-sample header rules,
 region-union planning, deterministic plain/BGZF publication, and VCF, CGmap,
-and bedMethyl schemas. Matrix tests cover strict input validation, missing-cell and
-threshold semantics, common contig-order derivation, bounded parallel merge,
-and rollback-protected `both` publication. Alignment tests also cover the
-complete non-directional four-strand decision for both read layouts and both
-BAM tag contracts.
+and bedMethyl schemas. Matrix tests cover mixed CGmap/bedMethyl normalization,
+strict input validation, missing-cell and threshold semantics, common contig-order
+derivation, bounded parallel merge, and rollback-protected `both` publication.
+Alignment tests also cover the complete non-directional four-strand decision
+for both read layouts and both BAM tag contracts.
 
 ## Formal extended checks
 

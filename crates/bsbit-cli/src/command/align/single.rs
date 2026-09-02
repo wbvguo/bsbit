@@ -22,7 +22,7 @@ use bsbit_hts::{
 };
 use bsbit_index::reference::{ContigId, ReferenceIndex};
 use bsbit_index::storage::combined::load_combined_reference_catalog;
-use bsbit_io::validate_create_target;
+use bsbit_io::validate_replace_target;
 
 use super::{ReadOutputMode, library_profile_name, output_contract_name};
 use crate::parallel::{
@@ -791,7 +791,7 @@ impl OutputWriter {
             .finish()
             .map_err(|error| operation_error("align", "finalize BAM output", target, &error))?;
         let publication = completed
-            .publish_create_new(target)
+            .publish_replace(target)
             .map_err(|error| operation_error("align", "publish BAM output", target, &error))?;
         let warning = publication.cleanup_warning().map(|kind| {
             CliWarning::new(format!(
@@ -859,14 +859,8 @@ fn write_single_metrics(
 }
 
 fn validate_output_target(path: &Path) -> Result<(), CliError> {
-    match validate_create_target(path) {
+    match validate_replace_target(path) {
         Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            Err(CliError::operation(format!(
-                "output destination {} already exists",
-                path.display()
-            )))
-        }
         Err(error) if error.kind() == std::io::ErrorKind::NotADirectory => {
             let parent = output_parent(path);
             Err(CliError::operation(format!(

@@ -188,6 +188,21 @@ impl BamStagingWriter {
         Self::create_sibling_with_threads(target, header, limits, 0)
     }
 
+    /// Creates a private sibling staging file beside a missing or replaceable
+    /// BAM target.
+    ///
+    /// # Errors
+    ///
+    /// Returns target validation, header encoding, staging reservation, or
+    /// native BAM-open errors.
+    pub fn create_sibling_replace(
+        target: impl AsRef<Path>,
+        header: &SamHeader,
+        limits: AlignmentRecordLimits,
+    ) -> Result<Self, HtsError> {
+        Self::create_sibling_replace_with_threads(target, header, limits, 0)
+    }
+
     /// Creates a private sibling staging file with BGZF worker threads.
     ///
     /// # Errors
@@ -205,6 +220,26 @@ impl BamStagingWriter {
             .map_err(|source| encode_error(HtsOperation::EncodeHeader, &target, None, source))?;
         let staged =
             StagedFile::create_sibling(&target, "bam").map_err(map_bam_publication_error)?;
+        Self::open_staged(staged, &header_bytes, compression_threads, None)
+    }
+
+    /// Creates a replaceable private sibling staging file with BGZF workers.
+    ///
+    /// # Errors
+    ///
+    /// Returns target validation, header encoding, staging reservation, or
+    /// native compression-worker setup failures.
+    pub fn create_sibling_replace_with_threads(
+        target: impl AsRef<Path>,
+        header: &SamHeader,
+        limits: AlignmentRecordLimits,
+        compression_threads: u32,
+    ) -> Result<Self, HtsError> {
+        let target = absolute_path(target.as_ref(), HtsOperation::ValidatePath)?;
+        let header_bytes = sam_header_bytes(header, limits)
+            .map_err(|source| encode_error(HtsOperation::EncodeHeader, &target, None, source))?;
+        let staged = StagedFile::create_sibling_replace(&target, "bam")
+            .map_err(map_bam_publication_error)?;
         Self::open_staged(staged, &header_bytes, compression_threads, None)
     }
 
@@ -226,6 +261,33 @@ impl BamStagingWriter {
             .map_err(|source| encode_error(HtsOperation::EncodeHeader, &target, None, source))?;
         let staged =
             StagedFile::create_sibling(&target, "bam").map_err(map_bam_publication_error)?;
+        Self::open_staged(
+            staged,
+            &header_bytes,
+            compression_threads,
+            Some(compression_level),
+        )
+    }
+
+    /// Creates a replaceable private sibling staging file with BGZF workers
+    /// and an explicit compression level in `0..=9`.
+    ///
+    /// # Errors
+    ///
+    /// Returns target validation, header encoding, staging reservation, or
+    /// native compression-worker setup failures.
+    pub fn create_sibling_replace_with_threads_and_compression_level(
+        target: impl AsRef<Path>,
+        header: &SamHeader,
+        limits: AlignmentRecordLimits,
+        compression_threads: u32,
+        compression_level: u8,
+    ) -> Result<Self, HtsError> {
+        let target = absolute_path(target.as_ref(), HtsOperation::ValidatePath)?;
+        let header_bytes = sam_header_bytes(header, limits)
+            .map_err(|source| encode_error(HtsOperation::EncodeHeader, &target, None, source))?;
+        let staged = StagedFile::create_sibling_replace(&target, "bam")
+            .map_err(map_bam_publication_error)?;
         Self::open_staged(
             staged,
             &header_bytes,
@@ -689,6 +751,24 @@ impl CompletedBam {
         })
     }
 
+    /// Synchronizes and atomically publishes this BAM, replacing an existing
+    /// regular-file or symbolic-link target.
+    ///
+    /// # Errors
+    ///
+    /// Returns a path, staging-identity, synchronization, backup, or rename
+    /// failure.
+    pub fn publish_replace(self, target: impl AsRef<Path>) -> Result<BamPublication, HtsError> {
+        let published = self
+            .completed
+            .publish_replace_at(target)
+            .map_err(map_bam_publication_error)?;
+        Ok(BamPublication {
+            published,
+            records_written: self.records_written,
+        })
+    }
+
     /// Explicitly removes this completed staging file.
     ///
     /// # Errors
@@ -699,8 +779,8 @@ impl CompletedBam {
     }
 }
 
-/// Successful create-only BAM publication details.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Successful BAM publication details and rollback authority.
+#[derive(Debug, Eq, PartialEq)]
 pub struct BamPublication {
     published: PublishedFile,
     records_written: u64,

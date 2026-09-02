@@ -877,16 +877,19 @@ fn write_batches(
     emit_metrics: bool,
 ) -> Result<WriterObservation, String> {
     let mut writer = match bam_compression_level {
-        Some(level) => BamStagingWriter::create_sibling_with_threads_and_compression_level(
+        Some(level) => BamStagingWriter::create_sibling_replace_with_threads_and_compression_level(
             output_bam,
             header,
             limits,
             bam_threads,
             level,
         ),
-        None => {
-            BamStagingWriter::create_sibling_with_threads(output_bam, header, limits, bam_threads)
-        }
+        None => BamStagingWriter::create_sibling_replace_with_threads(
+            output_bam,
+            header,
+            limits,
+            bam_threads,
+        ),
     }
     .map_err(|error| error.to_string())?;
     let mut bam_write_ns = 0_u128;
@@ -905,7 +908,7 @@ fn write_batches(
     let publication = writer
         .finish()
         .map_err(|error| error.to_string())?
-        .publish_create_new(output_bam)
+        .publish_replace(output_bam)
         .map_err(|error| error.to_string())?;
     let warning = publication.cleanup_warning().map(|kind| {
         CliWarning::new(format!(

@@ -58,8 +58,9 @@ does not infer `MM/ML` modification probabilities.
   and caller-compatibility coverage, not that large-corpus qualification.
 - Directional single-end alignment is supported by `bsbit align`, has three
   retained 5M-R1 timing runs, and has exact plus within-5-bp truth evaluation
-  on one controlled simulated corpus. That corpus does not qualify other read
-  lengths, assays, references, or hosts. Its exact 3' Illumina-adapter recovery
+  on one controlled simulated corpus. That corpus does not qualify
+  non-directional reads, other read lengths, assays, references, or hosts. Its
+  exact 3' Illumina-adapter recovery
   has focused process-level regression coverage, not replicated large-corpus
   MAPQ or throughput qualification.
 - Preprocessed RRBS and targeted reads are accepted when chemistry and
@@ -74,6 +75,7 @@ does not infer `MM/ML` modification probabilities.
   is diploid and does not call indels or haplotypes; no clinical-use claim is
   made.
 
-See [supported workflows](getting-started/workflow.md#supported-workflows) for the compact
-supported/qualified/unsupported view and the
-[scientific contract](scientific-contract.md) for biological semantics.
+See [sequencing data support](getting-started/workflow.md#sequencing-data-support)
+and the [limitations and roadmap](getting-started/workflow.md#limitations-and-roadmap)
+for the current scope, and the [scientific contract](scientific-contract.md)
+for biological semantics.

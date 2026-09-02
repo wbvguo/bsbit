@@ -9,20 +9,19 @@ mkdir -p "$output_dir"
 cd "$repository_root"
 
 cp docs/examples/quickstart-reference.fa "$output_dir/reference.fa"
-samtools faidx "$output_dir/reference.fa"
 
 "$binary_dir/bsbit" index \
-  --reference "$output_dir/reference.fa" \
-  --output "$output_dir/reference.bsbit" \
-  --threads 2
+  -r "$output_dir/reference.fa" \
+  -o "$output_dir/reference.bsbit" \
+  -t 2
 
 "$binary_dir/bsbit" align \
   --index "$output_dir/reference.bsbit" \
   --read1 docs/examples/quickstart_R1.fastq \
   --read2 docs/examples/quickstart_R2.fastq \
-  --output-bam "$output_dir/alignment.bam" \
+  --output "$output_dir/alignment.bam" \
   --threads 2 \
-  --bam-threads 1 \
+  --compression-threads 1 \
   --min-template-span 100 \
   --max-template-span 250 \
   --metrics \
@@ -37,7 +36,7 @@ samtools quickcheck -v "$output_dir/alignment.analysis.bam"
 
 "$binary_dir/bsbit" call joint \
   --input "$output_dir/alignment.analysis.bam" \
-  --reference "$output_dir/reference.fa" \
+  -r "$output_dir/reference.fa" \
   --meth "$output_dir/methylation.bed" \
   --meth-format bed \
   --vcf "$output_dir/variants.vcf" \
@@ -60,5 +59,6 @@ grep -q $'demo\t40\t.\tA\tG\t' "$output_dir/variants.vcf"
 test -s "$output_dir/methylation.bed"
 test -s "$output_dir/cohort.level.bed"
 test -s "$output_dir/cohort.count.bed"
+test ! -e "$output_dir/reference.fa.fai"
 
 echo "end-to-end smoke test passed: $output_dir"

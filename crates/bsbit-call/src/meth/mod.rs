@@ -57,11 +57,11 @@ impl Parameters {
 pub struct Options {
     /// Coordinate-sorted, indexed canonical bsbit BAM input.
     pub input: PathBuf,
-    /// Indexed FASTA used for authoritative cytosine context.
+    /// Authoritative FASTA; an existing FAI is used, otherwise plain FASTA is scanned.
     pub reference: PathBuf,
     /// Optional interval restriction; empty means the whole BAM dictionary.
     pub regions: RegionSelection,
-    /// Create-only `CGmap` or BED destination.
+    /// `CGmap` or BED destination, replacing an existing file after completion.
     pub output: PathBuf,
     /// Output schema.
     pub format: OutputFormat,
@@ -73,7 +73,7 @@ pub struct Options {
     pub parameters: Parameters,
 }
 
-/// Calls methylation and publishes one create-only output.
+/// Calls methylation and atomically publishes one output.
 ///
 /// # Errors
 ///

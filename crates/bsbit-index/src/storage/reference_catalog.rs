@@ -91,7 +91,7 @@ pub enum ReferenceCatalogError {
     Catalog(ReferenceBuildError),
     /// Semantic digest construction failed.
     Semantic(ReferenceSemanticDigestBuildError),
-    /// Create-only staging or publication failed.
+    /// Staging, publication, or replacement failed.
     Publication(PublicationError),
     /// A fixed field, offset, or packed-base invariant was invalid.
     Structure(&'static str),
@@ -170,7 +170,7 @@ impl From<PublicationError> for ReferenceCatalogError {
     }
 }
 
-/// Successful create-only publication details.
+/// Successful reference-catalog publication details.
 #[derive(Debug)]
 pub struct ReferenceCatalogPublication {
     summary: ReferenceCatalogSummary,
@@ -361,6 +361,29 @@ pub fn publish_reference_catalog_create_new(
     target: &Path,
     staging: &Path,
 ) -> Result<ReferenceCatalogPublication, ReferenceCatalogError> {
+    publish_reference_catalog(contigs, target, staging, false)
+}
+
+/// Publishes one compact catalog, atomically replacing an existing target.
+///
+/// # Errors
+///
+/// Returns encoding, staging, synchronization, backup, or replacement
+/// failures.
+pub fn publish_reference_catalog_replace(
+    contigs: &[ContigInput],
+    target: &Path,
+    staging: &Path,
+) -> Result<ReferenceCatalogPublication, ReferenceCatalogError> {
+    publish_reference_catalog(contigs, target, staging, true)
+}
+
+fn publish_reference_catalog(
+    contigs: &[ContigInput],
+    target: &Path,
+    staging: &Path,
+    replace: bool,
+) -> Result<ReferenceCatalogPublication, ReferenceCatalogError> {
     let mut staged = StagedFile::create_new(staging)?;
     let file = staged.take_file()?;
     let mut writer = BufWriter::new(file);
@@ -370,7 +393,11 @@ pub fn publish_reference_catalog_create_new(
         .into_inner()
         .map_err(|error| ReferenceCatalogError::Io(error.into_error()))?;
     let completed = staged.complete(file)?;
-    let published = completed.publish_create_new_at(target)?;
+    let published = if replace {
+        completed.publish_replace_at(target)?
+    } else {
+        completed.publish_create_new_at(target)?
+    };
     Ok(ReferenceCatalogPublication { summary, published })
 }
 

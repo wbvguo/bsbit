@@ -5,7 +5,7 @@ alignment, methylation and SNP calling, and cohort-matrix construction. The
 qualified release target is 64-bit Linux on an Intel or AMD CPU with
 x86-64-v3 support—roughly Intel Haswell or AMD Zen and newer. It builds a
 memory-efficient reference index, reads plain or gzip FASTQ directly, and
-publishes create-only BAM through HTSlib.
+publishes finalized BAM atomically through HTSlib.
 
 Start with the [documentation site](docs/index.md). It is the authoritative
 source for installation, workflows, command arguments, output contracts,
@@ -52,9 +52,9 @@ Create the complete reference index:
 
 ```sh
 target/release/bsbit index \
-  --reference GRCh38.fa.gz \
-  --output GRCh38.bsbit \
-  --threads 8
+  -r GRCh38.fa \
+  -o GRCh38.bsbit \
+  -t 8
 ```
 
 Use the same command for either read layout. This paired-end example supplies
@@ -63,17 +63,17 @@ and never builds or changes it:
 
 ```sh
 target/release/bsbit align \
-  --index GRCh38.bsbit \
-  --read1 sample_R1.fastq.gz \
-  --read2 sample_R2.fastq.gz \
-  --output-bam sample.bam \
-  --threads 8 \
-  --bam-threads 2
+  -i GRCh38.bsbit \
+  -1 sample_R1.fastq.gz \
+  -2 sample_R2.fastq.gz \
+  -o sample.bam \
+  -t 8 \
+  --compression-threads 2
 ```
 
 For single-end input, supply only `--read1` (or `-1`). Directional alignment is
 the default; add `--non-directional` to make one decision across OT, OB, CTOT,
-and CTOB. The single-end path accepts the shared runtime/BAM controls and
+and CTOB. The single-end path accepts the shared runtime/output controls and
 `--sensitive`, writes numeric MAPQ from the retained search evidence, performs
 conservative exact 3' Illumina-adapter recovery for directional output,
 supports `--metrics`, and declares caller-compatible provenance; see the
@@ -102,14 +102,17 @@ default BAM retains mapped MAPQ-0 representatives and unmapped primary records;
 `--mapped-only` removes only truly unmapped records.
 
 `bsbit call meth`, `bsbit call snp`, and `bsbit call joint` consume a
-coordinate-sorted, duplicate-marked, indexed BAM plus its indexed reference.
-`bsbit combine` merges named extended bedMethyl files into count and/or level
-matrices. Output schemas and preprocessing contracts are maintained in:
+coordinate-sorted, duplicate-marked, indexed BAM plus its matching reference
+FASTA. An existing FAI is used when available; otherwise plain FASTA is scanned
+directly without creating a sidecar.
+`bsbit combine` merges named CGmap and/or extended bedMethyl files into count
+and/or level matrices. Output schemas and preprocessing contracts are
+maintained in:
 
 - [workflow outputs](docs/outputs/index.md)
-- [methylation calls](docs/outputs/methylation.md)
-- [variant and joint calls](docs/outputs/variant-calling.md)
-- [methylation matrices](docs/outputs/methylation-matrices.md)
+- [methylation calls](docs/guides/methylation.md)
+- [variant and joint calls](docs/guides/variant-calling.md)
+- [methylation matrices](docs/guides/methylation-matrices.md)
 
 The full command reference is [docs/reference/cli.md](docs/reference/cli.md).
 

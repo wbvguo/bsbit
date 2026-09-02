@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 24">
+  <title>bsbit digital DNA and methylation marks</title>
+
+  <!-- The two continuous strands keep the mark legible at navigation-icon size. -->
+  <g
+    fill="none"
+    stroke="#fff"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path
+      stroke-width="1.8"
+      d="M10 2v2c0 3.7 3.2 5.8 6.6 8 3.7 2.4 7.4 4.7 7.4 8v2M24 2v2c0 3.3-3.7 5.6-7.4 8C13.2 14.2 10 16.3 10 20v2"
+    />
+
+    <!-- Binary base pairs: rings read as 0, short strokes read as 1. -->
+    <g stroke-width="0.9">
+      <circle cx="12.1" cy="3.4" r="0.65" />
+      <path d="M14.5 2.75v1.3" />
+      <circle cx="16.9" cy="3.4" r="0.65" />
+      <path d="M19.3 2.75v1.3" />
+      <circle cx="21.7" cy="3.4" r="0.65" />
+
+      <path d="M13.7 6.35v1.3" />
+      <circle cx="16" cy="7" r="0.65" />
+      <path d="M18.3 6.35v1.3" />
+      <circle cx="20.6" cy="7" r="0.65" />
+
+      <circle cx="13.7" cy="17" r="0.65" />
+      <path d="M16 16.35v1.3" />
+      <circle cx="18.3" cy="17" r="0.65" />
+      <path d="M20.6 16.35v1.3" />
+
+      <path d="M12.1 19.95v1.3" />
+      <circle cx="14.5" cy="20.6" r="0.65" />
+      <path d="M16.9 19.95v1.3" />
+      <circle cx="19.3" cy="20.6" r="0.65" />
+      <path d="M21.7 19.95v1.3" />
+    </g>
+
+    <!-- Unmethylated and methylated cytosine marks. -->
+    <g stroke-width="1.4">
+      <path d="M7.6 2.9H10" />
+      <circle cx="5.5" cy="2.9" r="2.1" />
+      <path d="M24 21.1h2.4" />
+      <circle cx="30.5" cy="21.1" r="2.1" fill="#fff" />
+    </g>
+  </g>
+</svg>

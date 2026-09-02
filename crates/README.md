@@ -5,12 +5,12 @@ The root Cargo workspace is split by responsibility:
 | Crate | Responsibility |
 |---|---|
 | `bsbit-core` | Stable DNA, bisulfite-chemistry, coordinate, structural CIGAR, and reference-identity values |
-| `bsbit-io` | Format-neutral file staging, identity validation, synchronization, and create-only publication |
+| `bsbit-io` | Format-neutral file staging, identity validation, synchronization, atomic replacement, and rollback |
 | `bsbit-hts` | FASTA/FASTQ/BED3/SAM/BAM and shared biological text formats, including the private audited HTSlib adapter |
 | `bsbit-index` | Reference ownership, FM/rank/locate representations, `build/` construction, and `storage/` persistence formats |
 | `bsbit-align` | Complete read alignment: edit distance, CIGAR/DP/Myers/SIMD verification, seeding, candidates, extension, paired placement, rescue, and MAPQ |
 | `bsbit-call` | Shared fragment-evidence analysis plus independent methylation, SNP, and joint calling APIs |
-| `bsbit-combine` | Bounded-memory parallel k-way merge of extended bedMethyl files into count/level matrices |
+| `bsbit-combine` | Bounded-memory parallel k-way merge of CGmap and/or extended bedMethyl files into count/level matrices |
 | `bsbit-cli` | The single user-facing `bsbit` executable and cross-crate command orchestration |
 
 Crate-local public API tests live in `crates/*/tests/*.rs`; checks that require

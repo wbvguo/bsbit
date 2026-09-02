@@ -1,4 +1,4 @@
-# Prepare input data
+# Input data
 
 bsbit reads local FASTA and FASTQ files using strict validation. Malformed
 records and unsupported encodings are reported as errors.
@@ -13,18 +13,21 @@ to bsbit.
 
 ## Compression and paths
 
-FASTA and FASTQ may be plain, gzip, or BGZF. Compression is decoded directly;
-do not pre-decompress FASTQ as a performance workaround.
+Reference FASTA may be plain or BGZF-compressed. Ordinary gzip FASTA and other
+compression formats are rejected. FASTQ may be plain, gzip, or BGZF, and is
+decoded directly; do not pre-decompress FASTQ as a performance workaround.
+Compression is detected from content rather than filename suffixes.
 
-Reference-index construction and alignment stream sequentially through FASTA
-and FASTQ files. Calling requires random access: FASTA needs an adjacent `.fai`
-(and `.gzi` for BGZF), while BAM needs BAI or CSI. Ordinary gzip-compressed
-FASTA is not supported for calling.
+Reference-index construction streams through FASTA, while alignment streams
+through FASTQ. Calling always requires BAI or CSI for the BAM. For a plain
+reference FASTA, bsbit uses an adjacent `.fai` when present; otherwise it scans
+the FASTA once and builds a shared in-memory position table without creating a
+sidecar. BGZF reference FASTA requires adjacent `.fai` and `.gzi` files.
 
 Inputs must be regular local paths. stdin (`-`), URLs, object-store paths, and
 remote streaming are unsupported.
 
-## Calling BAM and indexed reference
+## Calling BAM and reference
 
 Every `bsbit call meth`, `bsbit call snp`, and `bsbit call joint` run requires:
 
@@ -35,13 +38,15 @@ Every `bsbit call meth`, `bsbit call snp`, and `bsbit call joint` run requires:
   per-read tag) declaring a caller-compatible alignment mode and exact reference
   semantic digest, plus a string `XG:Z:CT|GA` tag on every mapped primary
   record;
-- an authoritative FASTA with an adjacent `.fai`, plus `.gzi` when that FASTA
-  is BGZF-compressed; and
+- an authoritative plain FASTA, optionally with an adjacent `.fai`; or a BGZF
+  FASTA with adjacent `.fai` and `.gzi`; and
 - one biological sample per BAM. Multiple read groups are accepted only when
   all nonempty `SM` fields agree.
 
-The FASTA must be the same assembly used for alignment. The caller fetches it
-in BAM dictionary order, normalizes case, recomputes the semantic digest, and
+The FASTA must be the same assembly used for alignment. When a plain FASTA has
+no `.fai`, one startup scan builds the position table shared by all calling
+workers and no index file is written. The caller reads reference sequence in
+BAM dictionary order, normalizes case, recomputes the semantic digest, and
 compares it with BAM provenance. A same-name, same-length FASTA with different
 bases is rejected. The caller projects `SEQ` through `CIGAR` and ignores `MD`.
 

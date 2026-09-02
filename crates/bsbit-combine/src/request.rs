@@ -10,7 +10,7 @@ pub(crate) const MAX_THREADS: u64 = 64;
 pub struct Input {
     /// Unique matrix-column label.
     pub sample: String,
-    /// Plain, gzip, or BGZF extended bedMethyl path.
+    /// Plain, gzip, or BGZF `CGmap` or extended bedMethyl path.
     pub path: PathBuf,
 }
 
@@ -48,7 +48,7 @@ impl Default for Parameters {
 pub struct Options {
     /// Ordered sample inputs. This order defines matrix column order.
     pub inputs: Vec<Input>,
-    /// Create-only destination, or filename template for `Both`.
+    /// Replaceable destination, or filename template for `Both`.
     ///
     /// `Both` inserts `.level` and `.count` before the recognized BED/gzip
     /// suffix and does not create this path itself.

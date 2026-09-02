@@ -89,14 +89,14 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
             error,
         )
     })?;
-    let meth_publication = meth_completed.publish_create_new().map_err(|error| {
+    let meth_publication = meth_completed.publish_replace().map_err(|error| {
         CallError::with_source(
             CallErrorKind::Publication,
             "call joint: publish methylation output",
             error,
         )
     })?;
-    let vcf_publication = match vcf_completed.publish_create_new() {
+    let vcf_publication = match vcf_completed.publish_replace() {
         Ok(publication) => publication,
         Err(error) => {
             meth_publication.rollback().map_err(|rollback| {

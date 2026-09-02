@@ -28,7 +28,9 @@ approximated.
 
 ## Input and identity
 
-- FASTA and FASTQ may be plain, gzip, or BGZF local regular files.
+- Reference FASTA may be plain or BGZF-compressed; ordinary gzip FASTA is
+  rejected. FASTQ may be plain, gzip, or BGZF. All inputs are local regular
+  files, and compression is detected from content.
 - Sequence is normalized case-insensitively to A/C/G/T/N. Malformed records,
   other symbols, mate-name disagreement, and unequal paired EOF are errors.
 - Reference contigs and N runs are hard search barriers.
@@ -36,7 +38,7 @@ approximated.
   reference digest. Missing or mismatched bundle data fails before mapping.
 - URLs, stdin aliases, devices, and object-store paths are unsupported.
 
-Complete calling requirements, including indexed FASTA and BAM identity, are
+Complete calling requirements, including FASTA access and BAM identity, are
 defined in [Prepare input data](reference/input-data.md).
 
 ## Placement and classification
@@ -126,9 +128,9 @@ classification, record order, and output bytes are deterministic. Paired-end
 alignment does not learn an insert-size prior; the explicit template bounds are
 the complete span policy.
 
-Every result destination is create-only. Writers stage private bytes and expose
-the final target only after successful finalization. Malformed input, reference
+Writers stage private bytes and atomically replace an existing regular-file
+destination only after successful finalization. Malformed input, reference
 identity failure, corrupt dimensions or offsets, arithmetic overflow, resource
-failure, worker failure, output collision, and publication failure terminate
-without publishing a successful target. A failure never selects a legacy,
-high-memory, or otherwise unqualified fallback backend.
+failure, worker failure, invalid output type, and publication failure terminate
+without damaging a prior result. A failure never selects a legacy, high-memory,
+or otherwise unqualified fallback backend.
