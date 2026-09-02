@@ -4,8 +4,8 @@
 //! invariants can be tested without widening the crate API.
 
 use super::{
-    AlignmentAuxiliaryMode, HELP, LibraryProfile, MetricsTimer, PairedSearchMode, ReadLayout,
-    ReadOutputMode, parse_options_from, sensitive_mapq_zero_strategy_id,
+    AlignmentAuxiliaryMode, HELP, LibraryProfile, MetricsTimer, ReadLayout, ReadOutputMode,
+    SearchMode, parse_options_from, sensitive_mapq_zero_strategy_id,
     sensitive_read_complete_strategy_id, strategy_id, throughput_thread_split,
 };
 use std::ffi::OsString;
@@ -55,7 +55,7 @@ fn help_exposes_only_default_and_sensitive_modes() {
 }
 
 #[test]
-fn standard_single_input_supports_both_library_profiles_and_pair_only_options_fail_closed() {
+fn standard_single_input_supports_shared_output_policy_and_pair_only_options_fail_closed() {
     let single = [
         "--index",
         "reference.bsbit",
@@ -74,12 +74,14 @@ fn standard_single_input_supports_both_library_profiles_and_pair_only_options_fa
     assert_eq!(parsed.auxiliary_core_budget, None);
     assert_eq!(parsed.total_thread_budget, None);
     assert_eq!(parsed.bam_compression_level, Some(1));
+    assert_eq!(parsed.output_contract, AlignmentAuxiliaryMode::Minimal);
+    assert_eq!(parsed.read_output, ReadOutputMode::Complete);
 
     let mut sensitive = single.clone();
     sensitive.push(OsString::from("--sensitive"));
     let parsed = parse_options_from(sensitive).expect("single-end sensitive input parses");
     assert_eq!(parsed.layout, ReadLayout::SingleEnd);
-    assert_eq!(parsed.search_mode, PairedSearchMode::Sensitive);
+    assert_eq!(parsed.search_mode, SearchMode::Sensitive);
 
     let mut non_directional = single.clone();
     non_directional.push(OsString::from("--non-directional"));
@@ -112,14 +114,26 @@ fn standard_single_input_supports_both_library_profiles_and_pair_only_options_fa
             .emit_metrics
     );
 
-    let pair_only = [
-        single,
-        vec![
-            OsString::from("--output-contract"),
-            OsString::from("bismark"),
-        ],
-    ]
-    .concat();
+    let mut bismark = single.clone();
+    bismark.extend(["--output-contract", "bismark"].map(OsString::from));
+    assert_eq!(
+        parse_options_from(bismark)
+            .expect("single-end Bismark output parses")
+            .output_contract,
+        AlignmentAuxiliaryMode::Bismark
+    );
+
+    let mut mapped_only = single.clone();
+    mapped_only.push(OsString::from("--mapped-only"));
+    assert_eq!(
+        parse_options_from(mapped_only)
+            .expect("single-end mapped-only output parses")
+            .read_output,
+        ReadOutputMode::MappedOnly
+    );
+
+    let mut pair_only = single;
+    pair_only.extend(["--batch-pairs", "32"].map(OsString::from));
     assert!(
         parse_options_from(pair_only)
             .expect_err("paired-only option must reject single input")
@@ -422,7 +436,7 @@ fn public_modes_select_fixed_default_and_sensitive_strategies() {
         strategy_id(&default),
         "balanced-d5-adapter-recovery-read-complete-v2"
     );
-    assert_eq!(default.search_mode, PairedSearchMode::Default);
+    assert_eq!(default.search_mode, SearchMode::Default);
     assert_eq!(default.read_output, ReadOutputMode::Complete);
 
     let mut default_mapped_only = required();
@@ -442,7 +456,7 @@ fn public_modes_select_fixed_default_and_sensitive_strategies() {
         strategy_id(&sensitive),
         sensitive_read_complete_strategy_id()
     );
-    assert_eq!(sensitive.search_mode, PairedSearchMode::Sensitive);
+    assert_eq!(sensitive.search_mode, SearchMode::Sensitive);
     assert_eq!(sensitive.read_output, ReadOutputMode::Complete);
 
     let mut mapped_only = required();

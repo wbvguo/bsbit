@@ -1,6 +1,6 @@
 //! Compatible-pair selection, biological-origin collapse, and score evidence.
 
-use super::adapter::{
+use super::endpoint::{
     best_ungapped_origin_endpoint_placement, pair_endpoint_key, placement_endpoint_cost,
     read_has_supported_three_prime_adapter,
 };

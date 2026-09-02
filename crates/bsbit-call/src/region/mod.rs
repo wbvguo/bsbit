@@ -1,6 +1,7 @@
 //! Public region-selection contract.
 
 mod planner;
+pub(crate) mod workers;
 
 pub(crate) use planner::{CallRegion, plan_call_regions};
 

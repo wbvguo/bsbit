@@ -11,7 +11,6 @@ mod call_input;
 mod evidence;
 mod publication;
 mod reference_context;
-mod region_workers;
 
 pub mod joint;
 pub mod meth;

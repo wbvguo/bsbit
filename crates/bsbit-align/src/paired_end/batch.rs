@@ -1,6 +1,6 @@
 //! Paired-batch orchestration and reusable worker state.
 
-use super::adapter::supported_three_prime_adapter_start;
+use super::endpoint::supported_three_prime_adapter_start;
 use super::frontier::{
     append_ranked_block_candidates, collect_ranked_block_seeds,
     selective_unmapped_frontier_deepening_required,

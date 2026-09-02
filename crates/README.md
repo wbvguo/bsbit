@@ -35,9 +35,10 @@ policy test in `tests/tools/test_crate_boundaries.py` rejects accidental
 reverse dependencies, retired experiment module names, and product crates
 without a crate-level contract test.
 
-Command modules mirror the public command names. `command/align.rs` selects
-single-end or paired-end layout from `--read1` and `--read2`; the shared mapping
-implementation lives in `bsbit-align`, while CLI modules own FASTQ/BAM wiring
-and publication. Shared domain identities such as `ReferenceSemanticDigest`
-are imported directly from `bsbit-core`; downstream crates do not re-export
-them through compatibility facades.
+Command modules mirror the public command names. `command/align/mod.rs` owns
+shared parsing and selects single-end or paired-end layout from `--read1` and
+`--read2`; parallel `single.rs` and `paired.rs` children own their FASTQ/BAM
+runtimes. The mapping implementation lives in `bsbit-align`. Shared domain
+identities such as `ReferenceSemanticDigest` are imported directly from
+`bsbit-core`; downstream crates do not re-export them through compatibility
+facades.

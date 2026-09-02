@@ -1,4 +1,4 @@
-//! Adapter evidence and bounded endpoint-placement policy.
+//! Bounded endpoint-placement policy with shared adapter evidence.
 
 pub(super) use crate::adapter::{
     read_has_supported_three_prime_adapter, sequencing_three_prime_adapter_supported,

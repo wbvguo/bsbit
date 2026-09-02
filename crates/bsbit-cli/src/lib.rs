@@ -69,9 +69,7 @@ pub fn run(
             Ok(RunReport::default())
         }
         Action::Index(options) => command::index::run(&options),
-        Action::Align(options) => command::align::run(options)
-            .map(|()| RunReport::default())
-            .map_err(|error| CliError::operation(error.to_string())),
+        Action::Align(options) => command::align::run(options),
         Action::CallMeth(options) => adapt_call_report(bsbit_call::meth::call(&options)),
         Action::CallSnp(options) => adapt_call_report(bsbit_call::snp::call(&options)),
         Action::CallJoint(options) => adapt_call_report(bsbit_call::joint::call(&options)),

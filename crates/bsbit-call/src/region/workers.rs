@@ -57,7 +57,7 @@ enum RegionWorkerMessage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) enum IndexedCallMode {
+pub(crate) enum IndexedCallMode {
     Meth(MethParameters),
     Snp(SnpConfig),
     Joint(SnpConfig),
@@ -100,7 +100,7 @@ impl IndexedCallMode {
     }
 }
 
-pub(super) fn region_bases_for(mode: IndexedCallMode, threads: usize) -> u32 {
+pub(crate) fn region_bases_for(mode: IndexedCallMode, threads: usize) -> u32 {
     debug_assert!(threads > 0);
     let bounded_regions = threads.saturating_mul(REGION_REORDER_FACTOR).max(1);
     let bytes_per_region = REGION_STATE_BUDGET_BYTES / bounded_regions;
@@ -131,9 +131,9 @@ fn likelihood_batch_sites_for(worker_count: usize) -> usize {
 }
 
 #[derive(Debug, Default)]
-pub(super) struct RegionAggregation {
-    pub(super) meth: Option<DenseMethRegion>,
-    pub(super) variants: Vec<(u32, VariantCall)>,
+pub(crate) struct RegionAggregation {
+    pub(crate) meth: Option<DenseMethRegion>,
+    pub(crate) variants: Vec<(u32, VariantCall)>,
 }
 
 #[cfg(test)]
@@ -198,7 +198,7 @@ fn collect_indexed_region_workers_mode(
     Ok(aggregation)
 }
 
-pub(super) fn stream_indexed_region_workers_mode(
+pub(crate) fn stream_indexed_region_workers_mode(
     path: &Path,
     references: &[BamReference],
     regions: &[CallRegion],

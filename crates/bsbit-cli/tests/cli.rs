@@ -326,6 +326,41 @@ fn align_single_metrics(snapshot: &Path, read1: &Path, output_bam: &Path) -> Out
     ])
 }
 
+fn align_single_bismark_mapped_only(snapshot: &Path, read1: &Path, output_bam: &Path) -> Output {
+    run([
+        OsString::from("align"),
+        OsString::from("--index"),
+        snapshot.as_os_str().to_owned(),
+        OsString::from("-1"),
+        read1.as_os_str().to_owned(),
+        OsString::from("--output-bam"),
+        output_bam.as_os_str().to_owned(),
+        OsString::from("--output-contract"),
+        OsString::from("bismark"),
+        OsString::from("--mapped-only"),
+    ])
+}
+
+fn assert_single_bismark_mapped_only(path: &Path) {
+    let records = decode_process_bam(path);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0][0], b"single");
+    for tag in [b"MD:Z:".as_slice(), b"XM:Z:", b"XR:Z:", b"XG:Z:"] {
+        assert!(
+            records[0].iter().any(|field| field.starts_with(tag)),
+            "single-end Bismark record omitted {}",
+            String::from_utf8_lossy(tag)
+        );
+    }
+}
+
+fn bam_record_flag(record: &[Vec<u8>], label: &str) -> u16 {
+    std::str::from_utf8(&record[1])
+        .unwrap_or_else(|_| panic!("{label} flag is not UTF-8"))
+        .parse::<u16>()
+        .unwrap_or_else(|_| panic!("{label} flag is not an integer"))
+}
+
 fn align_single_non_directional(
     snapshot: &Path,
     read1: &Path,
@@ -1071,17 +1106,27 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     let read1 = directory.join("r1.fq");
     let read2 = directory.join("r2.fq");
     let single_bam = directory.join("single.bam");
+    let single_bismark_mapped_only_bam = directory.join("single-bismark-mapped-only.bam");
     let paired_bam = directory.join("paired.bam");
     let paired_non_directional_bam = directory.join("paired-non-directional.bam");
     let paired_metrics_bam = directory.join("paired-metrics.bam");
 
     fs::write(&reference, b">chr\nAACCGTGATCTAGGCTTACGGAAT\n").expect("reference");
-    fs::write(&single_reads, b"@single\nCCGTGA\n+\nIIIIII\n").expect("single reads");
+    fs::write(
+        &single_reads,
+        b"@single\nAATTGTGATTTAGGTTTATGGAAT\n+\nIIIIIIIIIIIIIIIIIIIIIIII\n@unmapped\nNNNNNNNNNNNNNNNNNNNNNNNN\n+\nIIIIIIIIIIIIIIIIIIIIIIII\n",
+    )
+    .expect("single reads");
     fs::write(&read1, b"@pair/1\nCCGTGA\n+\nIIIIII\n").expect("R1");
     fs::write(&read2, b"@pair/2\nTCCGTA\n+\nJJJJJJ\n").expect("R2");
 
     assert_success(&index(&reference, &index_path));
     assert_success(&align(&index_path, &single_reads, None, &single_bam));
+    assert_success(&align_single_bismark_mapped_only(
+        &index_path,
+        &single_reads,
+        &single_bismark_mapped_only_bam,
+    ));
     assert_success(&align(&index_path, &read1, Some(&read2), &paired_bam));
     assert_success(&align_paired_non_directional(
         &index_path,
@@ -1093,26 +1138,21 @@ fn standard_align_selects_single_or_paired_layout_and_publishes_complete_bam() {
     assert_paired_metrics_v2(&metrics_output);
 
     let single = decode_process_bam(&single_bam);
-    assert_eq!(single.len(), 1);
+    assert_eq!(single.len(), 2);
     assert_eq!(single[0][0], b"single");
-    let single_flag = std::str::from_utf8(&single[0][1])
-        .expect("flag UTF-8")
-        .parse::<u16>()
-        .expect("flag integer");
+    let single_flag = bam_record_flag(&single[0], "single");
     assert_eq!(single_flag & 0x1, 0);
+    let unmapped_flag = bam_record_flag(&single[1], "unmapped single");
+    assert_ne!(unmapped_flag & 0x4, 0);
+
+    assert_single_bismark_mapped_only(&single_bismark_mapped_only_bam);
 
     let paired = decode_process_bam(&paired_bam);
     assert_eq!(paired.len(), 2);
     assert_eq!(paired[0][0], b"pair");
     assert_eq!(paired[1][0], b"pair");
-    let first_flag = std::str::from_utf8(&paired[0][1])
-        .expect("R1 flag UTF-8")
-        .parse::<u16>()
-        .expect("R1 flag integer");
-    let second_flag = std::str::from_utf8(&paired[1][1])
-        .expect("R2 flag UTF-8")
-        .parse::<u16>()
-        .expect("R2 flag integer");
+    let first_flag = bam_record_flag(&paired[0], "R1");
+    let second_flag = bam_record_flag(&paired[1], "R2");
     assert_eq!(first_flag & 0x41, 0x41);
     assert_eq!(second_flag & 0x81, 0x81);
 
@@ -1332,11 +1372,14 @@ fn single_end_recovers_exact_three_prime_adapter_and_preserves_full_read() {
             .position(|candidate| *candidate == name)
             .expect(name)]
     };
-    assert_eq!(field("schema"), "bsbit-single-alignment-metrics-v1");
+    assert_eq!(field("schema"), "bsbit-single-alignment-metrics-v2");
     assert_eq!(field("reads"), "4");
     assert_eq!(field("unique"), "3");
     assert_eq!(field("unmapped"), "1");
     assert_eq!(field("bam_records"), "4");
+    assert_eq!(field("output_contract"), "minimal");
+    assert_eq!(field("library_profile"), "directional");
+    assert_eq!(field("read_output"), "complete");
     assert_eq!(field("adapter_attempted_reads"), "2");
     assert_eq!(field("adapter_unique_reads"), "2");
 

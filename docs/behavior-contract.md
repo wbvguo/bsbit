@@ -84,12 +84,13 @@ and QUAL and use terminal soft clipping.
 
 ## BAM output and MAPQ
 
-`bsbit align` writes one primary record per input read by default. Unique pairs
-are mapped proper pairs. An ambiguous pair may retain one deterministic mapped
-representative, normally at MAPQ 0, while remaining `ambiguous` in the summary.
-A pair without a retained placement produces two unmapped primary records.
-`--mapped-only` removes only truly unmapped records; it does not mean
-`MAPQ > 0` and does not remove mapped MAPQ-0 representatives.
+`bsbit align` writes one primary record per input read by default for both
+single- and paired-end input. Unique pairs are mapped proper pairs. An
+ambiguous result may retain one deterministic mapped representative, normally
+at MAPQ 0, while remaining `ambiguous` in the summary. A result without a
+retained placement produces unmapped primary records. For either layout,
+`--mapped-only` removes those records; it does not mean `MAPQ > 0` and does not
+remove mapped MAPQ-0 representatives.
 
 The `minimal` contract emits literal `NM` and conversion-strand `XG`. The
 explicit `bismark` contract adds compatible `MD`, `XM`, and `XR` tags without

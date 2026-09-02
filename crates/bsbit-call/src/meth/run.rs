@@ -4,7 +4,7 @@ use super::Options;
 use super::output::{UnresolvedContextSummary, render_region};
 use crate::call_input::prepare_call_input;
 use crate::publication::{create_text_staging, finish_and_publish, publication_warning};
-use crate::region_workers::{IndexedCallMode, stream_indexed_region_workers_mode};
+use crate::region::workers::{IndexedCallMode, stream_indexed_region_workers_mode};
 use crate::{CallError, CallReport};
 
 pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {

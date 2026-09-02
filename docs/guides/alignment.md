@@ -69,13 +69,15 @@ CTOT/CTOB passes and make one global decision. An equal-best cross-pass result
 is ambiguous at MAPQ 0; a weaker cross-pass placement contributes to MAPQ
 separation and repeat pressure. PBAT remains unsupported.
 
-Shared options including `--sensitive`, `--non-directional`, `--threads`, `--bam-threads`,
-`--bam-compression-level`, and `--metrics` apply to the read-1-only layout.
-Single-end metrics use the `bsbit-single-alignment-metrics-v1` schema and
-include search work, adapter outcomes, and direct-versus-traceback record
-counts. Paired-only controls including template span,
-`--mapped-only`, output-contract selection, and paired batching fail explicitly
-on single-end input instead of being ignored.
+Shared options including `--sensitive`, `--non-directional`, `--output-contract`,
+`--mapped-only`, `--threads`, `--bam-threads`, `--bam-compression-level`, and
+`--metrics` apply to the read-1-only layout. Single-end Bismark output takes
+the traceback path when auxiliary replay is required; mapped-only output omits
+records without an accepted placement. Single-end metrics use the
+`bsbit-single-alignment-metrics-v2` schema and include the selected output
+policy alongside search work, adapter outcomes, and direct-versus-traceback
+record counts. Template-span, total-thread-budget, and paired batching controls
+remain paired-only and fail explicitly on single-end input.
 
 ## Align paired reads
 

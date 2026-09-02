@@ -54,8 +54,8 @@ use bsbit_core::bisulfite::{AlignmentOrientation, BisulfiteStrand, strand_semant
 use bsbit_index::reference::ReferenceIndex;
 use bsbit_index::storage::fm::{ProjectedBase, SearchBase};
 
-mod adapter;
 mod batch;
+mod endpoint;
 mod frontier;
 mod mapq;
 mod options;
@@ -64,15 +64,15 @@ mod result;
 mod selection;
 
 #[cfg(test)]
-use self::adapter::{
-    best_ungapped_semi_global_placement, placement_endpoint_cost,
-    sequencing_three_prime_adapter_supported, supported_three_prime_adapter_start,
-};
-#[cfg(test)]
 use self::batch::{
     conservatively_mark_incomplete_frontier, empty_pair_metrics,
     merge_non_directional_batch_results, sensitive_repeat_recheck_required,
     sensitive_targeted_semi_global_required, swap_batch_result_mates,
+};
+#[cfg(test)]
+use self::endpoint::{
+    best_ungapped_semi_global_placement, placement_endpoint_cost,
+    sequencing_three_prime_adapter_supported, supported_three_prime_adapter_start,
 };
 #[cfg(test)]
 use self::frontier::{

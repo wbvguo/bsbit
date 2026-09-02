@@ -4,6 +4,9 @@
 //! invariants can be tested without widening the crate API.
 
 use super::*;
+use crate::reference::validate_reference_catalog;
+#[cfg(feature = "combined-index")]
+use crate::storage::fm::ProjectedBase;
 use bsbit_core::sequence::normalize_dna;
 
 #[cfg(feature = "combined-index")]

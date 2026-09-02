@@ -7,7 +7,7 @@ use crate::call_input::{prepare_call_input, resolve_sample_name, validate_explic
 use crate::publication::{
     create_text_staging, finish_and_publish, output_write_error, publication_warning,
 };
-use crate::region_workers::{IndexedCallMode, stream_indexed_region_workers_mode};
+use crate::region::workers::{IndexedCallMode, stream_indexed_region_workers_mode};
 use crate::{CallError, CallReport};
 
 pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {

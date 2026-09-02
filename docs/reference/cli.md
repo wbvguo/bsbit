@@ -87,6 +87,8 @@ bsbit align \
 | `--index PATH` | Required | Opaque index handle created by `bsbit index` |
 | `--sensitive` | Off | Audit the default result against the wider bounded candidate frontier |
 | `--non-directional` | Off | Make one placement decision across all four bisulfite directions |
+| `--output-contract minimal\|bismark` | `minimal` | Emit `NM/XG`, or add Bismark-compatible `MD/XM/XR` tags |
+| `--mapped-only` | Off | Omit primary records without an accepted placement; retained MAPQ-0 placements remain |
 | `--threads N` | 1 | Mapping workers, 1–64 |
 | `--bam-threads N` | 1 | BGZF output workers; use 0 for synchronous compression |
 | `--bam-compression-level default\|0..9` | 1 | HTSlib/BGZF compression setting |
@@ -107,8 +109,6 @@ Pair-specific options fail explicitly when only read 1 is supplied.
 | `--total-threads N` | None | Split one 1–64 physical-core budget between mapping and output according to the index speed; conflicts with `--threads` and `--bam-threads` |
 | `--batch-pairs N` | 16384 | Input pairs per mapping batch |
 | `--alignment-queue-batches N` | 2 | Bounded completed-batch queue depth |
-| `--output-contract minimal\|bismark` | `minimal` | Emit `NM/XG`, or add Bismark-compatible `MD/XM/XR` tags |
-| `--mapped-only` | Off | Omit truly unmapped primary records; retained MAPQ-0 placements remain |
 | `--min-template-span N` | 0 | Inclusive minimum template span |
 | `--max-template-span N` | 1000 | Inclusive maximum template span |
 
@@ -120,9 +120,10 @@ composer flush. Optional work columns report directional pair passes,
 maximal-suffix lanes and rank operations, sampled-SA locate calls/rows/LF/rank,
 candidate starts, verified placements, and compatible pair frontiers. These
 are profiling counters, not output-quality scores, and are collected only
-when `--metrics` is present. Single-end rows continue to start with
-`bsbit-single-alignment-metrics-v1` and report read classes, search work,
-adapter outcomes, and direct-versus-traceback record counts.
+when `--metrics` is present. Single-end rows start with
+`bsbit-single-alignment-metrics-v2` and additionally bind the output contract,
+library profile, and complete-versus-mapped-only policy to the reported read
+classes, search work, adapter outcomes, and direct-versus-traceback counts.
 
 Default and `--sensitive` are the only public search modes for either layout.
 Single-end sensitive preserves the default result as an incumbent, completes
@@ -132,7 +133,7 @@ and unmapped incumbents, while a Q20-or-better result at distance two or less
 uses the sufficient d3 audit boundary. A different-origin replacement or new
 rescue must be unique at Q20 or above; a lower-confidence conflict retains the
 incumbent at Q0. Both modes emit
-one primary record for each input read unless paired input uses
+one primary record for each input read or read pair unless either layout uses
 `--mapped-only`. The BAM `@PG` line binds the exact reference semantic digest
 and alignment mode. The output still needs coordinate sorting, duplicate
 handling, and indexing before calling; “caller-compatible” does not mean

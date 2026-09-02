@@ -44,12 +44,21 @@ RETIRED_MODULE_NAMES = {f"{RETIRED_PRODUCT_PREFIX}_native", "native", "native_in
 EXPECTED_SOURCE_FAMILIES = {
     "bsbit-core": set(),
     "bsbit-io": set(),
-    "bsbit-hts": set(),
-    "bsbit-index": {"build", "storage"},
+    "bsbit-hts": {"bam"},
+    "bsbit-index": {"build", "reference", "storage"},
     "bsbit-align": {"paired_end", "search", "single_end", "verification"},
     "bsbit-call": {"evidence", "joint", "meth", "region", "snp"},
     "bsbit-combine": set(),
-    "bsbit-cli": {"command"},
+    "bsbit-cli": {"command", "record_composition"},
+}
+
+# These exact implementation boundaries justify one additional directory
+# level. No other family may grow deeper without an explicit architecture
+# change here.
+EXPECTED_NESTED_SOURCE_FAMILIES = {
+    "bsbit-align": {Path("verification/narrow")},
+    "bsbit-index": {Path("reference/runtime")},
+    "bsbit-cli": {Path("command/align")},
 }
 
 # Promotion into this inventory is an explicit architecture change. Candidate
@@ -312,12 +321,15 @@ class CrateBoundaryTests(unittest.TestCase):
 
     def test_alignment_command_modules_match_the_public_command_names(self) -> None:
         commands = CRATES / "bsbit-cli" / "src" / "command"
-        self.assertTrue((commands / "align.rs").is_file())
-        self.assertTrue((commands / "single_end.rs").is_file())
+        align = commands / "align"
+        self.assertTrue((align / "mod.rs").is_file())
+        self.assertTrue((align / "single.rs").is_file())
+        self.assertTrue((align / "paired.rs").is_file())
+        self.assertFalse((commands / "single_end.rs").exists())
         self.assertFalse((commands / "align_general.rs").exists())
         self.assertFalse((commands / "pipeline.rs").exists())
         self.assertFalse((commands / "production_align.rs").exists())
-        standard = (commands / "align.rs").read_text(encoding="utf-8")
+        standard = (align / "mod.rs").read_text(encoding="utf-8")
         dispatch = (commands / "mod.rs").read_text(encoding="utf-8")
         self.assertNotIn("align_general", standard)
         self.assertNotIn("AlignGeneral", dispatch)
@@ -326,7 +338,8 @@ class CrateBoundaryTests(unittest.TestCase):
         align = CRATES / "bsbit-align" / "src"
         paired = align / "paired_end"
         single = align / "single_end"
-        cli_single = CRATES / "bsbit-cli" / "src" / "command" / "single_end.rs"
+        cli_align = CRATES / "bsbit-cli" / "src" / "command" / "align"
+        cli_single = cli_align / "single.rs"
         shared = align / "read_mapping.rs"
         combined_search = align / "search" / "combined_adaptive.rs"
 
@@ -358,9 +371,9 @@ class CrateBoundaryTests(unittest.TestCase):
         self.assertNotIn("bsbit_align::paired_end", cli_source)
         self.assertNotIn("super::index", cli_source)
 
-        paired_cli_source = (
-            CRATES / "bsbit-cli" / "src" / "command" / "align.rs"
-        ).read_text(encoding="utf-8")
+        paired_cli_source = "\n".join(
+            source.read_text(encoding="utf-8") for source in cli_align.glob("*.rs")
+        )
         self.assertNotIn("super::index", paired_cli_source)
 
         single_source = (single / "mapper.rs").read_text(encoding="utf-8")
@@ -412,7 +425,7 @@ class CrateBoundaryTests(unittest.TestCase):
                     f"{crate} has no crate-level contract test",
                 )
 
-    def test_source_trees_use_only_one_intentional_family_level(self) -> None:
+    def test_source_trees_use_only_intentional_family_levels(self) -> None:
         for crate, expected_families in EXPECTED_SOURCE_FAMILIES.items():
             src = CRATES / crate / "src"
             observed_families = {
@@ -422,10 +435,13 @@ class CrateBoundaryTests(unittest.TestCase):
                 self.assertEqual(observed_families, expected_families)
                 for source in src.rglob("*.rs"):
                     relative = source.relative_to(src)
-                    self.assertLessEqual(
-                        len(relative.parts),
-                        2,
-                        f"source tree is deeper than one family level: {relative}",
+                    if len(relative.parts) <= 2:
+                        continue
+                    self.assertEqual(len(relative.parts), 3)
+                    self.assertIn(
+                        relative.parent,
+                        EXPECTED_NESTED_SOURCE_FAMILIES.get(crate, set()),
+                        f"source tree uses an unapproved nested family: {relative}",
                     )
 
     def test_development_features_do_not_enter_product_manifests(self) -> None:
@@ -681,13 +697,16 @@ class CrateBoundaryTests(unittest.TestCase):
                 self.assertIn(declaration, alignment)
         self.assertNotIn("crate::bam", alignment)
 
-        for codec in ("sam.rs", "bam.rs"):
+        for codec in ("sam.rs", "bam/writer.rs"):
             with self.subTest(codec=codec):
                 source = (hts / codec).read_text(encoding="utf-8")
                 self.assertIn("crate::alignment_record", source)
 
         sam = (hts / "sam.rs").read_text(encoding="utf-8")
-        bam = (hts / "bam.rs").read_text(encoding="utf-8")
+        bam = "\n".join(
+            source.read_text(encoding="utf-8")
+            for source in (hts / "bam").glob("*.rs")
+        )
         self.assertIn("BorrowedAlignmentRecord", sam)
         self.assertIn("sam_borrowed_record_bytes", sam)
         self.assertIn("BorrowedAlignmentRecord", bam)
@@ -751,9 +770,10 @@ class CrateBoundaryTests(unittest.TestCase):
                 self.assertNotIn("BSBITSNP", contents)
 
     def test_canonical_alignment_cannot_construct_an_index(self) -> None:
-        source = (
-            CRATES / "bsbit-cli" / "src" / "command" / "align.rs"
-        ).read_text(encoding="utf-8")
+        source = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (CRATES / "bsbit-cli" / "src" / "command" / "align").glob("*.rs")
+        )
         self.assertNotIn("bsbit_index::build", source)
         self.assertNotIn("build_combined_index", source)
         self.assertNotIn("load_or_build", source)

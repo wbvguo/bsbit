@@ -15,7 +15,7 @@ use core::iter::FusedIterator;
 use core::mem::size_of;
 
 use crate::score::EditDistance;
-use crate::search::candidate::{FixedSeedPlan, FixedSeedRequest, SeedPlanError, SeedPlanLimits};
+use crate::search::fixed_seed::{FixedSeedPlan, FixedSeedRequest, SeedPlanError, SeedPlanLimits};
 use bsbit_core::bisulfite::BisulfiteStrand;
 use bsbit_core::coordinate::{CoordinateError, QueryInterval, QueryLength};
 use bsbit_core::sequence::NormalizedSequence;

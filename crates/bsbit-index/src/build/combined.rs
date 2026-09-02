@@ -9,7 +9,6 @@ use core::ffi::c_int;
 use core::ffi::c_longlong;
 use core::fmt;
 use core::mem::size_of;
-use std::ffi::OsString;
 use std::fs::File;
 #[cfg(test)]
 use std::fs::OpenOptions;
@@ -35,17 +34,14 @@ use crate::storage::combined::{
     lf_all_boundaries,
 };
 use crate::storage::combined::{CombinedIndex, CombinedIndexError, ReadOnlyMapping};
+use crate::storage::combined_format::{
+    HIGH_OCC_STRIDE, LOOKUP_BASES, LOOKUP_ENTRIES, LOOKUP_KEYS_USIZE, OCC_STRIDE, suffixed_path,
+};
 
 /// Default sparse suffix-array stride used by the qualified low-memory index.
 pub const DEFAULT_COMBINED_INDEX_SA_STRIDE: u32 = 16;
-const OCC_STRIDE: u32 = 64;
-const HIGH_OCC_STRIDE: u32 = 128;
 const SA_VALUE_BITS: u32 = 30;
 const SA_VALUE_MASK: u64 = (1_u64 << SA_VALUE_BITS) - 1;
-const LOOKUP_BASES: usize = 16;
-const LOOKUP_KEYS: u64 = 43_046_721;
-const LOOKUP_KEYS_USIZE: usize = 43_046_721;
-const LOOKUP_ENTRIES: u64 = LOOKUP_KEYS + 1;
 const LOOKUP_GAP_BITS: u32 = 4;
 const LOOKUP_BOUNDARY_HIGH_MASK: u64 = 0x0fff_ffff;
 const IO_BUFFER_BYTES: usize = 8 * 1024 * 1024;
@@ -757,12 +753,6 @@ impl CompletedCombinedIndex {
         }
         Ok(())
     }
-}
-
-fn suffixed_path(prefix: &Path, suffix: &str) -> PathBuf {
-    let mut name = prefix.as_os_str().to_os_string();
-    name.push(OsString::from(suffix));
-    PathBuf::from(name)
 }
 
 #[derive(Clone, Copy, Debug)]

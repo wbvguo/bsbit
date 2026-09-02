@@ -24,23 +24,24 @@ use bsbit_index::reference::{ContigId, ReferenceIndex};
 use bsbit_index::storage::combined::load_combined_reference_catalog;
 use bsbit_io::validate_create_target;
 
+use super::{ReadOutputMode, output_contract_name};
 use crate::parallel::{
     DispatchError, ProducerOutcome, WorkDispatcher, WorkerOutcome, run_ordered_parallel,
 };
 use crate::record_composition::{RecordBuildError, SingleRecordComposer, build_sam_header};
 use crate::{CliError, CliWarning, RunReport};
 
-use super::{
+use crate::command::{
     ReadLayout, caller_compatible_alignment_mode, internal_search_file_prefix, unused_staging_path,
 };
 
 const MAX_CLI_READ_BASES: u64 = 1_000_000;
 const MAX_CLI_DESCRIPTION_BYTES: u64 = 1_000_000;
-const SINGLE_SEARCH_BATCH_SIZE: usize = 64;
-const SINGLE_METRICS_SCHEMA: &str = "bsbit-single-alignment-metrics-v1";
+const SEARCH_BATCH_SIZE: usize = 64;
+const METRICS_SCHEMA: &str = "bsbit-single-alignment-metrics-v2";
 
 #[derive(Clone, Copy, Debug, Default)]
-struct SingleObservation {
+struct Observation {
     reads: u64,
     unique: u64,
     ambiguous: u64,
@@ -58,7 +59,7 @@ struct SingleObservation {
     record_worker_ns: u128,
 }
 
-impl SingleObservation {
+impl Observation {
     fn merge(&mut self, other: Self) {
         self.reads = self.reads.saturating_add(other.reads);
         self.unique = self.unique.saturating_add(other.unique);
@@ -122,19 +123,20 @@ impl SingleObservation {
     }
 }
 
-struct SingleBatchOutput {
+struct BatchOutput {
     records: AlignmentRecordBatch,
-    observation: SingleObservation,
+    observation: Observation,
 }
 
-struct SingleRunCompletion {
+struct RunCompletion {
     report: RunReport,
-    observation: SingleObservation,
+    observation: Observation,
     records_written: u64,
 }
 
 #[derive(Clone, Copy)]
-enum SingleRecordPath {
+enum RecordPath {
+    Omitted,
     Unmapped,
     Direct,
     Traceback,
@@ -142,21 +144,23 @@ enum SingleRecordPath {
 
 /// Validated inputs for canonical single-end alignment.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SingleEndCommandOptions {
-    pub(crate) index: PathBuf,
-    pub(crate) read1: PathBuf,
-    pub(crate) output_bam: PathBuf,
-    pub(crate) search_mode: SingleSearchMode,
-    pub(crate) library_profile: LibraryProfile,
-    pub(crate) max_edit_distance: u64,
-    pub(crate) batch_records: u64,
-    pub(crate) threads: u64,
-    pub(crate) bam_threads: u32,
-    pub(crate) bam_compression_level: Option<u8>,
-    pub(crate) emit_metrics: bool,
+pub(crate) struct Options {
+    pub(super) index: PathBuf,
+    pub(super) read1: PathBuf,
+    pub(super) output_bam: PathBuf,
+    pub(super) search_mode: SingleSearchMode,
+    pub(super) library_profile: LibraryProfile,
+    pub(super) max_edit_distance: u64,
+    pub(super) batch_records: u64,
+    pub(super) threads: u64,
+    pub(super) bam_threads: u32,
+    pub(super) bam_compression_level: Option<u8>,
+    pub(super) output_contract: AlignmentAuxiliaryMode,
+    pub(super) read_output: ReadOutputMode,
+    pub(super) emit_metrics: bool,
 }
 
-pub(crate) fn run_single_end(options: &SingleEndCommandOptions) -> Result<RunReport, CliError> {
+pub(super) fn run(options: &Options) -> Result<RunReport, CliError> {
     let process_started = options.emit_metrics.then(Instant::now);
     validate_output_target(&options.output_bam)?;
     let staging = unused_staging_path(&options.output_bam, "align", "output")?;
@@ -183,12 +187,12 @@ pub(crate) fn run_single_end(options: &SingleEndCommandOptions) -> Result<RunRep
 }
 
 fn run_single_align(
-    options: &SingleEndCommandOptions,
+    options: &Options,
     reference: &ReferenceIndex,
     semantic_digest: ReferenceSemanticDigest,
     staging: &Path,
     alignment_mode: BsbitAlignmentMode,
-) -> Result<SingleRunCompletion, CliError> {
+) -> Result<RunCompletion, CliError> {
     if options.threads == 1 {
         run_single_align_scalar(options, reference, semantic_digest, staging, alignment_mode)
     } else {
@@ -197,12 +201,12 @@ fn run_single_align(
 }
 
 fn run_single_align_scalar(
-    options: &SingleEndCommandOptions,
+    options: &Options,
     reference: &ReferenceIndex,
     semantic_digest: ReferenceSemanticDigest,
     staging: &Path,
     alignment_mode: BsbitAlignmentMode,
-) -> Result<SingleRunCompletion, CliError> {
+) -> Result<RunCompletion, CliError> {
     let mut reader = DecodedFastqReader::open(&options.read1, read_text_limits())
         .map_err(|error| operation_error("align", "open reads", &options.read1, &error))?;
     let record_limits = AlignmentRecordLimits::default();
@@ -219,8 +223,8 @@ fn run_single_align_scalar(
         options.bam_compression_level,
     )?;
     let batch_size = physical_batch_size(options.batch_records)?;
-    let mut aligner = SingleBatchAligner::with_capacity(SINGLE_SEARCH_BATCH_SIZE);
-    let mut observation = SingleObservation::default();
+    let mut aligner = SingleBatchAligner::with_capacity(SEARCH_BATCH_SIZE);
+    let mut observation = Observation::default();
     loop {
         match reader.next_batch(batch_size) {
             Ok(batch) if batch.is_empty() => break,
@@ -248,7 +252,7 @@ fn run_single_align_scalar(
         .close()
         .map_err(|error| operation_error("align", "close reads", &options.read1, &error))?;
     let (report, records_written) = writer.finish(&options.output_bam)?;
-    Ok(SingleRunCompletion {
+    Ok(RunCompletion {
         report,
         observation,
         records_written,
@@ -262,19 +266,19 @@ struct PreparedSingleInput {
 
 struct SingleSink {
     writer: OutputWriter,
-    observation: SingleObservation,
+    observation: Observation,
 }
 
 fn run_single_align_parallel(
-    options: &SingleEndCommandOptions,
+    options: &Options,
     reference: &ReferenceIndex,
     semantic_digest: ReferenceSemanticDigest,
     staging: &Path,
     alignment_mode: BsbitAlignmentMode,
-) -> Result<SingleRunCompletion, CliError> {
+) -> Result<RunCompletion, CliError> {
     let workers = physical_thread_count(options.threads)?;
     let aligners = (0..workers)
-        .map(|_| Mutex::new(SingleBatchAligner::with_capacity(SINGLE_SEARCH_BATCH_SIZE)))
+        .map(|_| Mutex::new(SingleBatchAligner::with_capacity(SEARCH_BATCH_SIZE)))
         .collect::<Vec<_>>();
     let record_limits = AlignmentRecordLimits::default();
     run_ordered_parallel(
@@ -314,13 +318,13 @@ fn run_single_align_parallel(
             )?;
             Ok(SingleSink {
                 writer,
-                observation: SingleObservation::default(),
+                observation: Observation::default(),
             })
         },
         write_parallel_records,
         |sink| {
             let (report, records_written) = sink.writer.finish(&options.output_bam)?;
-            Ok(SingleRunCompletion {
+            Ok(RunCompletion {
                 report,
                 observation: sink.observation,
                 records_written,
@@ -333,7 +337,7 @@ fn produce_single_batches(
     prepared: PreparedSingleInput,
     dispatcher: &mut WorkDispatcher<FastqRecordBatch>,
     cancellation: &AtomicBool,
-    options: &SingleEndCommandOptions,
+    options: &Options,
 ) -> ProducerOutcome {
     let PreparedSingleInput {
         mut reader,
@@ -389,10 +393,10 @@ fn dispatch_failure(error: DispatchError) -> ProducerOutcome {
 fn map_single_batch_parallel(
     reference: &ReferenceIndex,
     input: &FastqRecordBatch,
-    options: &SingleEndCommandOptions,
+    options: &Options,
     cancellation: &AtomicBool,
     aligner: &mut SingleBatchAligner,
-) -> WorkerOutcome<SingleBatchOutput> {
+) -> WorkerOutcome<BatchOutput> {
     match map_single_records(reference, input, options, Some(cancellation), aligner) {
         Ok(records) => WorkerOutcome::Completed(records),
         Err(_error) if cancellation.load(Ordering::Relaxed) => WorkerOutcome::Cancelled,
@@ -400,10 +404,7 @@ fn map_single_batch_parallel(
     }
 }
 
-fn write_parallel_records(
-    sink: &mut SingleSink,
-    output: SingleBatchOutput,
-) -> Result<(), CliError> {
+fn write_parallel_records(sink: &mut SingleSink, output: BatchOutput) -> Result<(), CliError> {
     let written = sink.writer.write_batch(&output.records);
     sink.observation.merge(output.observation);
     drop(output.records);
@@ -413,10 +414,10 @@ fn write_parallel_records(
 fn map_and_write_single_batch(
     reference: &ReferenceIndex,
     input: &FastqRecordBatch,
-    options: &SingleEndCommandOptions,
+    options: &Options,
     aligner: &mut SingleBatchAligner,
     writer: &mut OutputWriter,
-) -> Result<SingleObservation, CliError> {
+) -> Result<Observation, CliError> {
     let output = map_single_records(reference, input, options, None, aligner)?;
     writer.write_batch(&output.records)?;
     Ok(output.observation)
@@ -425,10 +426,10 @@ fn map_and_write_single_batch(
 fn map_single_records(
     reference: &ReferenceIndex,
     input: &FastqRecordBatch,
-    options: &SingleEndCommandOptions,
+    options: &Options,
     cancellation: Option<&AtomicBool>,
     aligner: &mut SingleBatchAligner,
-) -> Result<SingleBatchOutput, CliError> {
+) -> Result<BatchOutput, CliError> {
     let maximum_edit_distance = u8::try_from(options.max_edit_distance).map_err(|_| {
         CliError::operation(format!(
             "align: single edit distance {} is not representable",
@@ -438,12 +439,13 @@ fn map_single_records(
     let limits = AlignmentRecordLimits::default();
     let mut output = AlignmentRecordBatch::new();
     let mut composer = SingleRecordComposer::new();
-    let mut reads = Vec::with_capacity(SINGLE_SEARCH_BATCH_SIZE);
-    let mut observation = SingleObservation::default();
-    for chunk_start in (0..input.len()).step_by(SINGLE_SEARCH_BATCH_SIZE) {
+    let mut reads = Vec::with_capacity(SEARCH_BATCH_SIZE);
+    let mut observation = Observation::default();
+    let mut expected_records = 0_usize;
+    for chunk_start in (0..input.len()).step_by(SEARCH_BATCH_SIZE) {
         let chunk_end = input
             .len()
-            .min(chunk_start.saturating_add(SINGLE_SEARCH_BATCH_SIZE));
+            .min(chunk_start.saturating_add(SEARCH_BATCH_SIZE));
         if cancellation.is_some_and(|flag| flag.load(Ordering::Relaxed)) {
             return Err(CliError::operation("align: single mapping cancelled"));
         }
@@ -488,16 +490,21 @@ fn map_single_records(
                 &mut composer,
                 limits,
             )?;
+            if !matches!(path, RecordPath::Omitted) {
+                expected_records = expected_records.checked_add(1).ok_or_else(|| {
+                    CliError::operation("align: single output record count overflow")
+                })?;
+            }
             if options.emit_metrics {
                 match path {
-                    SingleRecordPath::Direct => {
+                    RecordPath::Direct => {
                         observation.direct_records = observation.direct_records.saturating_add(1);
                     }
-                    SingleRecordPath::Traceback => {
+                    RecordPath::Traceback => {
                         observation.traceback_records =
                             observation.traceback_records.saturating_add(1);
                     }
-                    SingleRecordPath::Unmapped => {}
+                    RecordPath::Omitted | RecordPath::Unmapped => {}
                 }
             }
         }
@@ -508,14 +515,13 @@ fn map_single_records(
             .record_worker_ns
             .saturating_add(elapsed_ns(record_started));
     }
-    if output.len() != input.len() {
+    if output.len() != expected_records {
         return Err(CliError::operation(format!(
-            "align: single record cardinality mismatch: input {} output {}",
-            input.len(),
+            "align: single record cardinality mismatch: expected {expected_records} output {}",
             output.len()
         )));
     }
-    Ok(SingleBatchOutput {
+    Ok(BatchOutput {
         records: output,
         observation,
     })
@@ -525,22 +531,13 @@ fn materialize_single_record(
     reference: &ReferenceIndex,
     source: BorrowedFastqRecord<'_>,
     result: SingleAlignmentResult,
-    options: &SingleEndCommandOptions,
+    options: &Options,
     composer: &mut SingleRecordComposer,
     limits: AlignmentRecordLimits,
-) -> Result<SingleRecordPath, CliError> {
+) -> Result<RecordPath, CliError> {
     let full_read = BorrowedAlignmentRead::new(source.sequence(), source.quality());
     let Some(placement) = result.placement() else {
-        composer
-            .push_unmapped_single(source.name(), full_read, limits)
-            .map_err(|error| {
-                CliError::operation(format!(
-                    "align: construct unmapped record {} from {}: {error}",
-                    source.ordinal().get(),
-                    options.read1.display()
-                ))
-            })?;
-        return Ok(SingleRecordPath::Unmapped);
+        return push_or_omit_unmapped_single(source, full_read, options, composer, limits);
     };
     let retained_range = result.retained_query_interval();
     let (contig_id, interval) = resolve_single_reference_interval(
@@ -566,25 +563,29 @@ fn materialize_single_record(
         placement.strand(),
         placement.distance(),
     );
-    let pushed = try_push_direct_single(
-        composer,
-        reference,
-        source,
-        full_read,
-        retained_range.clone(),
-        direct_placement,
-        limits,
-        mapping_quality,
-    )
-    .map_err(|error| {
-        CliError::operation(format!(
-            "align: construct record {} from {}: {error}",
-            source.ordinal().get(),
-            options.read1.display()
-        ))
-    })?;
+    let pushed = if matches!(options.output_contract, AlignmentAuxiliaryMode::Minimal) {
+        try_push_direct_single(
+            composer,
+            reference,
+            source,
+            full_read,
+            retained_range.clone(),
+            direct_placement,
+            limits,
+            mapping_quality,
+        )
+        .map_err(|error| {
+            CliError::operation(format!(
+                "align: construct record {} from {}: {error}",
+                source.ordinal().get(),
+                options.read1.display()
+            ))
+        })?
+    } else {
+        false
+    };
     if pushed {
-        return Ok(SingleRecordPath::Direct);
+        return Ok(RecordPath::Direct);
     }
 
     let retained_sequence =
@@ -613,7 +614,7 @@ fn materialize_single_record(
             &retained_sequence,
             &alignment,
             limits,
-            AlignmentAuxiliaryMode::Minimal,
+            options.output_contract,
             mapping_quality,
         )
         .map_err(|error| {
@@ -623,7 +624,29 @@ fn materialize_single_record(
                 options.read1.display()
             ))
         })?;
-    Ok(SingleRecordPath::Traceback)
+    Ok(RecordPath::Traceback)
+}
+
+fn push_or_omit_unmapped_single(
+    source: BorrowedFastqRecord<'_>,
+    full_read: BorrowedAlignmentRead<'_>,
+    options: &Options,
+    composer: &mut SingleRecordComposer,
+    limits: AlignmentRecordLimits,
+) -> Result<RecordPath, CliError> {
+    if matches!(options.read_output, ReadOutputMode::MappedOnly) {
+        return Ok(RecordPath::Omitted);
+    }
+    composer
+        .push_unmapped_single(source.name(), full_read, limits)
+        .map_err(|error| {
+            CliError::operation(format!(
+                "align: construct unmapped record {} from {}: {error}",
+                source.ordinal().get(),
+                options.read1.display()
+            ))
+        })?;
+    Ok(RecordPath::Unmapped)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -677,9 +700,7 @@ fn resolve_single_reference_interval(
     Ok((contig_id, interval))
 }
 
-fn load_index(
-    options: &SingleEndCommandOptions,
-) -> Result<(ReferenceIndex, ReferenceSemanticDigest), CliError> {
+fn load_index(options: &Options) -> Result<(ReferenceIndex, ReferenceSemanticDigest), CliError> {
     let internal_prefix = internal_search_file_prefix(&options.index);
     let threads = physical_thread_count(options.threads)?;
     let loaded =
@@ -791,8 +812,8 @@ fn elapsed_ns(started: Option<Instant>) -> u128 {
 }
 
 fn write_single_metrics(
-    options: &SingleEndCommandOptions,
-    observation: &SingleObservation,
+    options: &Options,
+    observation: &Observation,
     records_written: u64,
     reference_load_ns: u128,
     process_total_ns: u128,
@@ -801,14 +822,14 @@ fn write_single_metrics(
         return;
     }
     println!(
-        "schema\treads\tunique\tambiguous\tunmapped\tbam_records\tmapping_threads\tbam_threads\tsearch_mode\treference_load_ns\tprocess_total_ns\tmapping_worker_total_ns\trecord_worker_total_ns\tlocated_rows\tverified_placements\tadapter_attempted_reads\tadapter_unique_reads\tadapter_ambiguous_reads\tadapter_unmapped_reads\tadapter_clipped_bases\tdirect_ungapped_records\ttraceback_records"
+        "schema\treads\tunique\tambiguous\tunmapped\tbam_records\tmapping_threads\tbam_threads\toutput_contract\tlibrary_profile\tsearch_mode\treference_load_ns\tprocess_total_ns\tmapping_worker_total_ns\trecord_worker_total_ns\tlocated_rows\tverified_placements\tadapter_attempted_reads\tadapter_unique_reads\tadapter_ambiguous_reads\tadapter_unmapped_reads\tadapter_clipped_bases\tdirect_ungapped_records\ttraceback_records\tread_output"
     );
     let search_mode = match options.search_mode {
         SingleSearchMode::Default => "default",
         SingleSearchMode::Sensitive => "sensitive",
     };
     let fields = [
-        SINGLE_METRICS_SCHEMA.to_owned(),
+        METRICS_SCHEMA.to_owned(),
         observation.reads.to_string(),
         observation.unique.to_string(),
         observation.ambiguous.to_string(),
@@ -816,6 +837,11 @@ fn write_single_metrics(
         records_written.to_string(),
         options.threads.to_string(),
         options.bam_threads.to_string(),
+        output_contract_name(options.output_contract).to_owned(),
+        match options.library_profile {
+            LibraryProfile::Directional => "directional".to_owned(),
+            LibraryProfile::NonDirectional => "non-directional".to_owned(),
+        },
         search_mode.to_owned(),
         reference_load_ns.to_string(),
         process_total_ns.to_string(),
@@ -830,6 +856,7 @@ fn write_single_metrics(
         observation.adapter_clipped_bases.to_string(),
         observation.direct_records.to_string(),
         observation.traceback_records.to_string(),
+        options.read_output.name().to_owned(),
     ];
     println!("{}", fields.join("\t"));
 }

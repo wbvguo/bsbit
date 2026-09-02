@@ -33,19 +33,20 @@ their own program records is normal.
 
 ## Record completeness and ordering
 
-By default, paired alignment writes one primary record for every input read:
+By default, alignment writes one primary record for every input read:
 
 - unique pairs are mapped proper pairs;
 - an ambiguous pair may retain a deterministic mapped representative, normally
   at MAPQ 0, while remaining classified as ambiguous;
 - a pair without a retained placement produces two unmapped primary records;
   and
-- `--mapped-only` removes only truly unmapped records, not mapped MAPQ-0
-  representatives.
+- single-end input follows the same complete-record rule for unique,
+  ambiguous, and unmapped reads.
 
-Single-end input also writes one primary record per input read. Unique origins
-receive numeric evidence tiers; tied mapped representatives use MAPQ 0 and
-unmapped reads remain explicit.
+For either layout, `--mapped-only` removes records without an accepted
+placement, not retained mapped MAPQ-0 representatives. Single-end unique
+origins receive numeric evidence tiers and tied mapped representatives use
+MAPQ 0.
 
 The initial header declares unsorted order and records follow FASTQ input
 order. Run `samtools sort` before coordinate indexing; do not create a BAI or

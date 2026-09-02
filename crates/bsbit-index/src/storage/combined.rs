@@ -9,12 +9,13 @@ use core::fmt;
 use core::mem::size_of;
 use core::ptr::NonNull;
 use std::cell::RefCell;
-use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 use crate::reference::{
     CombinedIndexBackendError, PrivateCombinedIndex, PrivateCombinedLocateMetrics,
@@ -26,8 +27,14 @@ use crate::storage::reference_catalog::{
 };
 use bsbit_core::reference::ReferenceSemanticDigest;
 
-pub(crate) const BWT_WORDS_PER_128_ROWS: u64 = 5;
-pub(crate) const SA_FLAG_WORDS_PER_256_ROWS: u64 = 5;
+pub(crate) use super::combined_format::{
+    BWT_WORDS_PER_128_ROWS, META_BYTES, META_BYTES_U32, META_DIGEST_OFFSET, META_EXTENSION_MAGIC,
+    META_EXTENSION_MAJOR, META_EXTENSION_MINOR, META_EXTENSION_MINOR_SA8, META_EXTENSION_OFFSET,
+    SA_FLAG_WORDS_PER_256_ROWS,
+};
+use super::combined_format::{
+    HIGH_OCC_STRIDE, LOOKUP_BASES, LOOKUP_ENTRIES, OCC_STRIDE, suffixed_path,
+};
 
 /// Returns all three LF boundaries from one validated packed-rank boundary.
 ///
@@ -92,18 +99,6 @@ pub(crate) fn lf_all_boundaries(
     ])
 }
 
-pub(crate) const META_BYTES: usize = 120;
-pub(crate) const META_BYTES_U32: u32 = 120;
-pub(crate) const META_EXTENSION_MAGIC: &[u8; 8] = b"BSBICMB1";
-pub(crate) const META_EXTENSION_MAJOR: u16 = 1;
-/// Original bound format containing a stride-16 sparse suffix array.
-pub(crate) const META_EXTENSION_MINOR: u16 = 0;
-/// Bound format extension containing a stride-8 sparse suffix array.
-pub(crate) const META_EXTENSION_MINOR_SA8: u16 = 1;
-pub(crate) const META_EXTENSION_OFFSET: usize = 68;
-pub(crate) const META_DIGEST_OFFSET: usize = 84;
-const LOOKUP_BASES: usize = 16;
-const LOOKUP_ENTRIES: u64 = 43_046_722;
 const SA_VALUE_MASK: u32 = 0x3fff_ffff;
 const MAX_WAVEFRONT_LANES: usize = 64;
 const MAX_WAVEFRONT_BOUNDARIES: usize = MAX_WAVEFRONT_LANES * 2;
@@ -660,7 +655,7 @@ impl CombinedIndex {
                 "metadata sparse-SA stride and format minor are unsupported",
             ),
         )?;
-        if occ_stride != 64 || high_occ_stride != 128 {
+        if occ_stride != OCC_STRIDE || high_occ_stride != HIGH_OCC_STRIDE {
             return Err(CombinedIndexError::Structure(
                 "only the current Occ64/Occ128 layout is supported",
             ));
@@ -2098,12 +2093,6 @@ impl PrivateCombinedIndex for CombinedIndex {
 fn map_suffix(prefix: &Path, suffix: &str) -> Result<ReadOnlyMapping, CombinedIndexError> {
     let file = File::open(suffixed_path(prefix, suffix))?;
     ReadOnlyMapping::map(&file)
-}
-
-fn suffixed_path(prefix: &Path, suffix: &str) -> PathBuf {
-    let mut name: OsString = prefix.as_os_str().to_owned();
-    name.push(suffix);
-    PathBuf::from(name)
 }
 
 fn checked_component_end(

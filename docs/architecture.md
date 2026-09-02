@@ -86,9 +86,11 @@ shared SAM/BAM alignment record therefore happens at the `bsbit-cli` composition
 boundary. Tests may use lower-level crates as development dependencies to
 construct fixtures without changing the dependency graph.
 
-Within `bsbit-cli`, `command/align.rs` owns the one user-visible alignment
-entry point. It selects single-end input when only `--read1` is present and
-paired-end input when both `--read1` and `--read2` are present. The CLI owns
+Within `bsbit-cli`, `command/align/mod.rs` owns shared parsing and the one
+user-visible alignment entry point. It selects single-end input when only
+`--read1` is present and paired-end input when both reads are present, then
+dispatches to parallel `single.rs` and `paired.rs` runtimes. Shared output
+contract and record-retention policy stay above that split. The CLI owns
 FASTQ/BAM orchestration and record composition; both alignment algorithms live
 in `bsbit-align`.
 
@@ -102,7 +104,9 @@ application can retain those records without first constructing the owned
 general record; both the BAM field encoder and the SAM encoder consume that
 same contract, with the SAM writer resolving reference ordinals through its
 header dictionary.
-The BAM-specific binary CIGAR encoding and HTSlib calls remain in `bam.rs`.
+The BAM façade is `bam/mod.rs`; native read/index/decode lifecycle and
+stage/encode/publish lifecycle remain in substantive `reader.rs` and
+`writer.rs` modules.
 
 The practical boundary test is based on inputs and outputs, not a word in a
 symbol name. Comparing an already selected reference slice with a query and
@@ -116,9 +120,11 @@ their constructors belong to `bsbit_index::build`. Stable DNA, coordinate, and
 semantic reference-identity values belong to `bsbit-core`.
 
 Directory depth is deliberately limited. A crate keeps stable top-level
-concepts as files and introduces one directory level only for a cohesive
-family such as `build`, `storage`, `verification`, `search`, `paired_end`,
-`meth`, `snp`, `evidence`, `region`, or `command`.
+concepts as files and introduces a directory for a cohesive family such as
+`build`, `storage`, `verification`, `search`, `paired_end`, `meth`, `snp`,
+`evidence`, `region`, or `command`. A second level is reserved for a real
+backend boundary, such as scalar/x86 narrow verification or reference runtime
+and its combined-index query façade.
 Files are split on ownership and change boundaries, not on a line-count quota;
 a tightly coupled implementation may remain large rather than expose private
 state merely to make the tree look symmetrical.

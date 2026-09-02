@@ -2,7 +2,6 @@ pub(crate) mod align;
 mod call;
 mod combine;
 pub(crate) mod index;
-pub(crate) mod single_end;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;

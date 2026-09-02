@@ -1,6 +1,6 @@
 //! Bounded mate-rescue window construction and exact-anchor completion.
 
-use super::adapter::best_ungapped_semi_global_placement;
+use super::endpoint::best_ungapped_semi_global_placement;
 use super::frontier::{append_local_flexible_proof_candidates, balanced_rescue_blocks};
 use super::selection::{counterpart_strand, expected_mate2_strand, is_inward};
 use super::{
