@@ -44,6 +44,8 @@ complete user guide:
 
 ## Citation
 
+If you use bsbit in your research, please cite:
+
 ```text
 Coming soon...
 ```

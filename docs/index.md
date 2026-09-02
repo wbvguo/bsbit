@@ -26,3 +26,11 @@ alignment, methylation and SNP calling, and cohort-matrix construction.
 - [File formats](reference/file-formats.md)
 - [Outputs](outputs/index.md)
 - [Troubleshoot](help/troubleshooting.md)
+
+## Citation
+
+If you use bsbit in your research, please cite:
+
+```text
+Coming soon...
+```
