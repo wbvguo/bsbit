@@ -55,7 +55,7 @@ pub enum HtsOperation {
     DetectCompression,
     /// Decode bytes.
     Read,
-    /// Open a BAM together with its BAI or CSI index.
+    /// Open a BAM together with its index.
     OpenIndexedBam,
     /// Copy and validate an indexed BAM header.
     ReadIndexedBamHeader,

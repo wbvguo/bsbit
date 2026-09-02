@@ -12,8 +12,9 @@ use std::thread;
 
 use bsbit_align::score::EditDistance;
 use bsbit_align::search::candidate::{
-    CandidateAnchor, CandidateError, CandidateLimits, SeedPlanLimits, candidates_for_fixed_seeds,
+    CandidateAnchor, CandidateError, CandidateLimits, candidates_for_fixed_seeds,
 };
+use bsbit_align::search::fixed_seed::SeedPlanLimits;
 use bsbit_align::search::seed::{
     AdmissibleStrands, ProofSeedLimits, ProofSeedOutcome, schedule_proof_seeds,
 };

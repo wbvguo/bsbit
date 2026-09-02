@@ -40,8 +40,8 @@ fn parse_call_snp(arguments: &[String]) -> Result<Action, CliError> {
         return Ok(Action::Help(CALL_SNP_HELP));
     }
     let normalized = normalize_call_snp_options(arguments)?;
-    let (normalized, region_specs) = extract_repeatable_option(&normalized, "--region")?;
-    let (mut values, _) = option_map(
+    let (normalized, region_spec) = extract_region_option(&normalized, &["--ignore-orphan"])?;
+    let (mut values, flags) = option_map(
         &normalized,
         &[
             "--input",
@@ -51,7 +51,7 @@ fn parse_call_snp(arguments: &[String]) -> Result<Action, CliError> {
             "--regions-file",
             "--compress",
             "--threads",
-            "--min-base-quality",
+            "--min-bq",
             "--min-mapq",
             "--min-depth",
             "--min-alt-count",
@@ -62,20 +62,23 @@ fn parse_call_snp(arguments: &[String]) -> Result<Action, CliError> {
             "--underconversion-rate",
             "--overconversion-rate",
         ],
-        &[],
+        &["--ignore-orphan"],
     )?;
     let input = required_path(&mut values, "--input")?;
     let reference = required_path(&mut values, "--reference")?;
     let output = required_path(&mut values, "--output")?;
     let sample_name = values.remove("--sample-name");
-    let regions = parse_call_regions(region_specs, optional_path(&mut values, "--regions-file")?)?;
+    let regions = parse_call_regions(
+        region_spec.as_deref(),
+        optional_path(&mut values, "--regions-file")?,
+    )?;
     let compress = values
         .remove("--compress")
         .map(|value| parse_bool("--compress", &value))
         .transpose()?
-        .unwrap_or(false);
+        .unwrap_or(true);
     let threads = parse_threads(&mut values)?;
-    let parameters = parse_snp_parameters(&mut values)?;
+    let parameters = parse_snp_parameters(&mut values, flags.contains("--ignore-orphan"))?;
     Ok(Action::CallSnp(CallSnpOptions {
         input,
         reference,
@@ -93,8 +96,9 @@ fn parse_call_joint(arguments: &[String]) -> Result<Action, CliError> {
         return Ok(Action::Help(CALL_JOINT_HELP));
     }
     let normalized = normalize_call_joint_options(arguments)?;
-    let (normalized, region_specs) = extract_repeatable_option(&normalized, "--region")?;
-    let (mut values, _) = option_map(
+    let (normalized, region_spec) =
+        extract_region_option(&normalized, &["--cg-only", "--ignore-orphan"])?;
+    let (mut values, flags) = option_map(
         &normalized,
         &[
             "--input",
@@ -106,7 +110,7 @@ fn parse_call_joint(arguments: &[String]) -> Result<Action, CliError> {
             "--vcf",
             "--compress",
             "--threads",
-            "--min-base-quality",
+            "--min-bq",
             "--min-mapq",
             "--min-depth",
             "--min-alt-count",
@@ -117,12 +121,15 @@ fn parse_call_joint(arguments: &[String]) -> Result<Action, CliError> {
             "--underconversion-rate",
             "--overconversion-rate",
         ],
-        &[],
+        &["--cg-only", "--ignore-orphan"],
     )?;
     let input = required_path(&mut values, "--input")?;
     let reference = required_path(&mut values, "--reference")?;
     let sample_name = values.remove("--sample-name");
-    let regions = parse_call_regions(region_specs, optional_path(&mut values, "--regions-file")?)?;
+    let regions = parse_call_regions(
+        region_spec.as_deref(),
+        optional_path(&mut values, "--regions-file")?,
+    )?;
     let meth_output = required_path(&mut values, "--meth")?;
     let vcf_output = required_path(&mut values, "--vcf")?;
     if meth_output == vcf_output {
@@ -143,9 +150,9 @@ fn parse_call_joint(arguments: &[String]) -> Result<Action, CliError> {
         .remove("--compress")
         .map(|value| parse_bool("--compress", &value))
         .transpose()?
-        .unwrap_or(false);
+        .unwrap_or(true);
     let threads = parse_threads(&mut values)?;
-    let parameters = parse_snp_parameters(&mut values)?;
+    let parameters = parse_snp_parameters(&mut values, flags.contains("--ignore-orphan"))?;
     Ok(Action::CallJoint(CallJointOptions {
         input,
         reference,
@@ -156,6 +163,7 @@ fn parse_call_joint(arguments: &[String]) -> Result<Action, CliError> {
         vcf_output,
         compress,
         threads,
+        cg_only: flags.contains("--cg-only"),
         parameters,
     }))
 }
@@ -165,8 +173,9 @@ fn parse_call_meth(arguments: &[String]) -> Result<Action, CliError> {
         return Ok(Action::Help(CALL_METH_HELP));
     }
     let normalized = normalize_call_meth_options(arguments)?;
-    let (normalized, region_specs) = extract_repeatable_option(&normalized, "--region")?;
-    let (mut values, _) = option_map(
+    let (normalized, region_spec) =
+        extract_region_option(&normalized, &["--cg-only", "--ignore-orphan"])?;
+    let (mut values, flags) = option_map(
         &normalized,
         &[
             "--input",
@@ -176,14 +185,18 @@ fn parse_call_meth(arguments: &[String]) -> Result<Action, CliError> {
             "--format",
             "--compress",
             "--threads",
-            "--min-base-quality",
+            "--min-bq",
             "--min-mapq",
+            "--min-depth",
         ],
-        &[],
+        &["--cg-only", "--ignore-orphan"],
     )?;
     let input = required_path(&mut values, "--input")?;
     let reference = required_path(&mut values, "--reference")?;
-    let regions = parse_call_regions(region_specs, optional_path(&mut values, "--regions-file")?)?;
+    let regions = parse_call_regions(
+        region_spec.as_deref(),
+        optional_path(&mut values, "--regions-file")?,
+    )?;
     let output = required_path(&mut values, "--output")?;
     let format = match required(&mut values, "--format")?.as_str() {
         "cgmap" => MethylationOutputFormat::Cgmap,
@@ -198,9 +211,13 @@ fn parse_call_meth(arguments: &[String]) -> Result<Action, CliError> {
         .remove("--compress")
         .map(|value| parse_bool("--compress", &value))
         .transpose()?
-        .unwrap_or(false);
+        .unwrap_or(true);
     let threads = parse_threads(&mut values)?;
-    let parameters = parse_meth_parameters(&mut values)?;
+    let parameters = parse_meth_parameters(
+        &mut values,
+        flags.contains("--cg-only"),
+        flags.contains("--ignore-orphan"),
+    )?;
     Ok(Action::CallMeth(CallMethOptions {
         input,
         reference,
@@ -219,6 +236,7 @@ fn normalize_call_meth_options(arguments: &[String]) -> Result<Vec<String>, CliE
         .map(|argument| {
             Ok(match argument.as_str() {
                 "-i" => String::from("--input"),
+                "-r" => String::from("--reference"),
                 "-o" => String::from("--output"),
                 "-f" => String::from("--format"),
                 "-c" => String::from("--compress"),
@@ -246,6 +264,7 @@ fn normalize_call_options(arguments: &[String], joint: bool) -> Result<Vec<Strin
         .map(|argument| {
             Ok(match argument.as_str() {
                 "-i" => String::from("--input"),
+                "-r" => String::from("--reference"),
                 "-o" if !joint => String::from("--output"),
                 "-m" if joint => String::from("--meth"),
                 "-v" if joint => String::from("--vcf"),
@@ -261,15 +280,20 @@ fn normalize_call_options(arguments: &[String], joint: bool) -> Result<Vec<Strin
         .collect()
 }
 
-fn extract_repeatable_option(
+fn extract_region_option(
     arguments: &[String],
-    repeatable: &str,
-) -> Result<(Vec<String>, Vec<String>), CliError> {
+    accepted_flags: &[&str],
+) -> Result<(Vec<String>, Option<String>), CliError> {
     let mut remaining = Vec::with_capacity(arguments.len());
-    let mut repeated = Vec::new();
+    let mut region = None;
     let mut cursor = 0;
     while cursor < arguments.len() {
         let option = &arguments[cursor];
+        if accepted_flags.contains(&option.as_str()) {
+            remaining.push(option.clone());
+            cursor += 1;
+            continue;
+        }
         let Some(value) = arguments.get(cursor + 1) else {
             return Err(CliError::usage(format!("missing value for `{option}`")));
         };
@@ -279,24 +303,34 @@ fn extract_repeatable_option(
         if value.starts_with("--") {
             return Err(CliError::usage(format!("missing value for `{option}`")));
         }
-        if option == repeatable {
-            repeated.push(value.clone());
+        if option == "--region" {
+            if region.replace(value.clone()).is_some() {
+                return Err(CliError::usage(
+                    "`--region` may be specified only once; separate multiple regions with commas",
+                ));
+            }
         } else {
             remaining.push(option.clone());
             remaining.push(value.clone());
         }
         cursor += 2;
     }
-    Ok((remaining, repeated))
+    Ok((remaining, region))
 }
 
 fn parse_call_regions(
-    specifications: Vec<String>,
+    specification: Option<&str>,
     regions_file: Option<PathBuf>,
 ) -> Result<RegionSelection, CliError> {
-    let intervals = specifications
+    if specification.is_some() && regions_file.is_some() {
+        return Err(CliError::usage(
+            "`--region` conflicts with `--regions-file`",
+        ));
+    }
+    let intervals = specification
         .into_iter()
-        .map(|specification| parse_call_region(&specification))
+        .flat_map(|specification| specification.split(','))
+        .map(parse_call_region)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(RegionSelection {
         intervals,
@@ -331,20 +365,11 @@ fn parse_call_region(specification: &str) -> Result<GenomicInterval, CliError> {
 }
 
 fn parse_one_based_region_coordinate(specification: &str, value: &str) -> Result<u64, CliError> {
-    let groups = value.split(',').collect::<Vec<_>>();
-    let all_digits = groups
-        .iter()
-        .all(|group| !group.is_empty() && group.bytes().all(|byte| byte.is_ascii_digit()));
-    let valid_grouping = all_digits
-        && (groups.len() == 1
-            || (groups.first().is_some_and(|group| group.len() <= 3)
-                && groups.iter().skip(1).all(|group| group.len() == 3)));
-    if !valid_grouping {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(invalid_call_region(specification));
     }
     value
         .bytes()
-        .filter(|byte| *byte != b',')
         .try_fold(0_u64, |coordinate, digit| {
             coordinate
                 .checked_mul(10)?
@@ -361,34 +386,30 @@ fn invalid_call_region(specification: &str) -> CliError {
 
 fn parse_meth_parameters(
     values: &mut BTreeMap<String, String>,
+    cg_only: bool,
+    ignore_orphans: bool,
 ) -> Result<MethylationCallParameters, CliError> {
     let defaults = MethylationCallParameters::default();
     Ok(MethylationCallParameters {
-        minimum_base_quality: bounded_u8(
-            values,
-            "--min-base-quality",
-            defaults.minimum_base_quality,
-            93,
-        )?,
+        minimum_base_quality: bounded_u8(values, "--min-bq", defaults.minimum_base_quality, 93)?,
         minimum_mapping_quality: bounded_u8(
             values,
             "--min-mapq",
             defaults.minimum_mapping_quality,
             254,
         )?,
+        minimum_depth: nonzero_u32(values, "--min-depth", defaults.minimum_depth)?,
+        cg_only,
+        ignore_orphans,
     })
 }
 
 fn parse_snp_parameters(
     values: &mut BTreeMap<String, String>,
+    ignore_orphans: bool,
 ) -> Result<SnpCallParameters, CliError> {
     let defaults = SnpCallParameters::default();
-    let minimum_base_quality = bounded_u8(
-        values,
-        "--min-base-quality",
-        defaults.minimum_base_quality,
-        93,
-    )?;
+    let minimum_base_quality = bounded_u8(values, "--min-bq", defaults.minimum_base_quality, 93)?;
     let minimum_mapping_quality =
         bounded_u8(values, "--min-mapq", defaults.minimum_mapping_quality, 254)?;
     let minimum_depth = nonzero_u32(values, "--min-depth", defaults.minimum_depth)?;
@@ -426,6 +447,7 @@ fn parse_snp_parameters(
     Ok(SnpCallParameters {
         minimum_base_quality,
         minimum_mapping_quality,
+        ignore_orphans,
         minimum_depth,
         minimum_alternate_count,
         minimum_alternate_fraction_parts_per_billion,

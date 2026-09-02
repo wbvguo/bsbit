@@ -60,6 +60,80 @@ pub enum PairMappingStatus {
     Ambiguous,
 }
 
+/// Optional aggregate counters for paired-end candidate and verification work.
+///
+/// The paired batch aligner collects these only when constructed in profiling
+/// mode. One pair may contribute more than once when qualified adapter or
+/// stability remapping runs.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[doc(hidden)]
+pub struct PairedAlignmentWorkMetrics {
+    pub(super) pair_mapping_passes: u64,
+    pub(super) emitted_candidate_starts: u64,
+    pub(super) distinct_candidate_starts: u64,
+    pub(super) verified_placements: u64,
+    pub(super) compatible_pairs: u64,
+    pub(super) best_pair_placements: u64,
+}
+
+impl PairedAlignmentWorkMetrics {
+    /// Returns directional pair mapping passes, including qualified remaps.
+    #[must_use]
+    pub const fn pair_mapping_passes(self) -> u64 {
+        self.pair_mapping_passes
+    }
+
+    /// Returns candidate starts expanded after nominal evidence deduplication.
+    #[must_use]
+    pub const fn emitted_candidate_starts(self) -> u64 {
+        self.emitted_candidate_starts
+    }
+
+    /// Returns candidate starts retained by the read-local evidence filter.
+    #[must_use]
+    pub const fn distinct_candidate_starts(self) -> u64 {
+        self.distinct_candidate_starts
+    }
+
+    /// Returns in-budget placements retained by verification.
+    #[must_use]
+    pub const fn verified_placements(self) -> u64 {
+        self.verified_placements
+    }
+
+    /// Returns compatible read-pair placements examined by pair selection.
+    #[must_use]
+    pub const fn compatible_pairs(self) -> u64 {
+        self.compatible_pairs
+    }
+
+    /// Returns best-score pair placements represented in result frontiers.
+    #[must_use]
+    pub const fn best_pair_placements(self) -> u64 {
+        self.best_pair_placements
+    }
+
+    /// Saturating-merges another worker or batch aggregate.
+    pub fn merge(&mut self, other: Self) {
+        self.pair_mapping_passes = self
+            .pair_mapping_passes
+            .saturating_add(other.pair_mapping_passes);
+        self.emitted_candidate_starts = self
+            .emitted_candidate_starts
+            .saturating_add(other.emitted_candidate_starts);
+        self.distinct_candidate_starts = self
+            .distinct_candidate_starts
+            .saturating_add(other.distinct_candidate_starts);
+        self.verified_placements = self
+            .verified_placements
+            .saturating_add(other.verified_placements);
+        self.compatible_pairs = self.compatible_pairs.saturating_add(other.compatible_pairs);
+        self.best_pair_placements = self
+            .best_pair_placements
+            .saturating_add(other.best_pair_placements);
+    }
+}
+
 /// Final alignment facts for one paired read.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PairedAlignmentResult {

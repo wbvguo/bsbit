@@ -7,27 +7,22 @@
 **bsbit** is an ultrafast, memory-efficient toolkit for bisulfite-sequencing
 alignment, methylation and SNP calling, and cohort-matrix construction.
 
-[Quick start](getting-started/quickstart.md) ·
-[Installation](getting-started/installation.md) ·
-[Workflow](getting-started/workflow.md)
-
 </div>
 
-## Get start
+## Get started
 
-- **Try bsbit:** run the bundled [quick start](getting-started/quickstart.md).
-- **Plan an analysis:** choose a supported path in the
+- Check the supported platforms and build bsbit with the
+  [installation guide](getting-started/installation.md).
+- Find common indexing, alignment, calling, and matrix commands in the
+  [quick start](getting-started/quickstart.md).
+- Choose the stages and inputs for your analysis with the
   [workflow guide](getting-started/workflow.md).
-- **Run on your data:** follow the task guides under **Usage**.
-- **Look up an option:** use the [CLI reference](reference/cli.md).
-
-Published speed, accuracy, and calibrated MAPQ results apply to the qualified
-directional paired-end workload, not every assay or input layout. See
-[performance evidence](performance-evidence.md) and
-[known limitations](known-differences.md) before interpreting results.
+- Look up commands, options, and defaults in the
+  [CLI reference](reference/cli.md).
 
 ## Reference
 
-- [Prepare FASTA, FASTQ, and BAM input](reference/input-data.md)
-- [Understand output files](outputs/index.md)
-- [Troubleshoot an error](help/troubleshooting.md)
+- [Input data](reference/input-data.md)
+- [File formats](reference/file-formats.md)
+- [Outputs](outputs/index.md)
+- [Troubleshoot](help/troubleshooting.md)

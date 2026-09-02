@@ -1,4 +1,4 @@
-//! Create-only staging, completion, publication, and rollback state machine.
+//! Staging, completion, create-only or replacement publication, and rollback.
 
 use std::fs::{self, File};
 use std::io;
@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::file::{
     FileIdentity, absolute_path, create_new, hard_link_descriptor_create_new,
-    remove_if_identity_matches, validate_absent, validate_create_target,
+    remove_if_identity_matches, validate_absent, validate_create_target, validate_replace_target,
 };
 
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -42,6 +42,46 @@ pub fn select_sibling_staging_path(target: &Path, label: &str) -> io::Result<Pat
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "create-only target has no parent directory",
+        )
+    })?;
+    let label = sanitized_staging_label(label);
+    for _ in 0..64 {
+        let staging = sibling_staging_candidate(parent, &label);
+        match validate_absent(&staging) {
+            Ok(()) => return Ok(staging),
+            Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(source) => return Err(source),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not select an unused sibling staging path",
+    ))
+}
+
+/// Selects an unused private sibling staging path for a future replacement.
+///
+/// Unlike [`select_sibling_staging_path`], an existing regular-file or
+/// symbolic-link target is accepted. The returned path is not reserved; the
+/// receiving writer must still create it exclusively.
+///
+/// # Errors
+///
+/// Returns target validation, parent-directory, or staging-path inspection
+/// failures, including `AlreadyExists` after 64 occupied candidates.
+pub fn select_sibling_staging_path_replace(target: &Path, label: &str) -> io::Result<PathBuf> {
+    let target = absolute_path(target)?;
+    if target.file_name().is_none() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "replacement target does not name a file",
+        ));
+    }
+    validate_replace_target(&target)?;
+    let parent = target.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "replacement target has no parent directory",
         )
     })?;
     let label = sanitized_staging_label(label);
@@ -216,10 +256,38 @@ impl StagedFile {
     ///
     /// Returns target validation or staging creation failures.
     pub fn create_sibling(target: impl AsRef<Path>, label: &str) -> Result<Self, PublicationError> {
-        let target = absolute_path(target.as_ref()).map_err(|source| {
-            PublicationError::new(PublicationPhase::ValidatePaths, target.as_ref(), source)
+        Self::create_sibling_with_policy(target.as_ref(), label, false)
+    }
+
+    /// Reserves a unique private sibling of a missing or replaceable target.
+    ///
+    /// Existing regular files and symbolic links are accepted; directories
+    /// and other special filesystem objects are rejected.
+    ///
+    /// # Errors
+    ///
+    /// Returns target validation or staging creation failures.
+    pub fn create_sibling_replace(
+        target: impl AsRef<Path>,
+        label: &str,
+    ) -> Result<Self, PublicationError> {
+        Self::create_sibling_with_policy(target.as_ref(), label, true)
+    }
+
+    fn create_sibling_with_policy(
+        target: &Path,
+        label: &str,
+        replace: bool,
+    ) -> Result<Self, PublicationError> {
+        let target = absolute_path(target).map_err(|source| {
+            PublicationError::new(PublicationPhase::ValidatePaths, target, source)
         })?;
-        validate_absent(&target).map_err(|source| {
+        let validation = if replace {
+            validate_replace_target(&target)
+        } else {
+            validate_absent(&target)
+        };
+        validation.map_err(|source| {
             PublicationError::new(PublicationPhase::ValidatePaths, &target, source)
         })?;
         let parent = target.parent().ok_or_else(|| {
@@ -513,6 +581,48 @@ impl CompletedFile {
         self.publish_to(target)
     }
 
+    /// Atomically publishes at the target recorded by
+    /// [`StagedFile::create_sibling_replace`].
+    ///
+    /// An existing regular file or symbolic link is replaced only after the
+    /// completed staging descriptor is synchronized and revalidated. The old
+    /// target remains available for [`PublishedFile::rollback`] until the
+    /// returned publication is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns path-policy, synchronization, identity, backup, or rename
+    /// failures. A failure before replacement leaves the old target intact.
+    pub fn publish_replace(self) -> Result<PublishedFile, PublicationError> {
+        let target = self.target.clone().ok_or_else(|| {
+            PublicationError::new(
+                PublicationPhase::ValidatePaths,
+                &self.staging,
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "no publication target was recorded",
+                ),
+            )
+        })?;
+        self.replace_to(target)
+    }
+
+    /// Atomically publishes an explicitly staged file at a missing or
+    /// replaceable sibling target.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same lifecycle failures as [`Self::publish_replace`].
+    pub fn publish_replace_at(
+        self,
+        target: impl AsRef<Path>,
+    ) -> Result<PublishedFile, PublicationError> {
+        let target = absolute_path(target.as_ref()).map_err(|source| {
+            PublicationError::new(PublicationPhase::ValidatePaths, target.as_ref(), source)
+        })?;
+        self.replace_to(target)
+    }
+
     /// Publishes with caller-supplied synchronization, linking, and cleanup
     /// operations while retaining this type's path and identity policy.
     ///
@@ -567,6 +677,71 @@ impl CompletedFile {
             },
             remove_if_identity_matches,
         )
+    }
+
+    fn replace_to(mut self, target: PathBuf) -> Result<PublishedFile, PublicationError> {
+        if let Err(source) = validate_sibling_publication_paths(&target, &self.staging) {
+            let error = PublicationError::new(PublicationPhase::ValidatePaths, &target, source);
+            return Err(self.error_with_cleanup(error, &mut remove_if_identity_matches));
+        }
+        if let Err(source) = validate_replace_target(&target) {
+            let error = PublicationError::new(PublicationPhase::ValidatePaths, &target, source);
+            return Err(self.error_with_cleanup(error, &mut remove_if_identity_matches));
+        }
+        if let Err(source) = self.file.sync_all() {
+            let error = PublicationError::new(PublicationPhase::Sync, &self.staging, source);
+            return Err(self.error_with_cleanup(error, &mut remove_if_identity_matches));
+        }
+        let staging_matches = match self.identity.matches_path(&self.staging) {
+            Ok(matches) => matches,
+            Err(source) => {
+                let error =
+                    PublicationError::new(PublicationPhase::ValidateStaging, &self.staging, source);
+                return Err(self.error_with_cleanup(error, &mut remove_if_identity_matches));
+            }
+        };
+        if !staging_matches {
+            self.owns_staging = false;
+            return Err(PublicationError::new(
+                PublicationPhase::ValidateStaging,
+                &self.staging,
+                io::Error::other("staging identity changed"),
+            ));
+        }
+        let backup = match ReplacementBackup::capture(&target) {
+            Ok(backup) => backup,
+            Err(source) => {
+                let error = PublicationError::new(PublicationPhase::Publish, &target, source);
+                return Err(self.error_with_cleanup(error, &mut remove_if_identity_matches));
+            }
+        };
+        if let Err(source) = fs::rename(&self.staging, &target) {
+            let cleanup_warning = backup
+                .and_then(|backup| backup.remove().err())
+                .map(|warning| warning.kind());
+            let error = PublicationError::new(PublicationPhase::Publish, &target, source)
+                .with_cleanup_warning(cleanup_warning);
+            return Err(self.error_with_cleanup(error, &mut remove_if_identity_matches));
+        }
+        self.owns_staging = false;
+        let target_matches = self
+            .identity
+            .matches_path(&target)
+            .map_err(|source| PublicationError::new(PublicationPhase::Publish, &target, source))?;
+        if !target_matches {
+            return Err(PublicationError::new(
+                PublicationPhase::Publish,
+                &target,
+                io::Error::other("replaced target does not identify the completed descriptor"),
+            ));
+        }
+        Ok(PublishedFile {
+            target,
+            staging: self.staging.clone(),
+            identity: self.identity,
+            cleanup_warning: None,
+            replacement_backup: backup,
+        })
     }
 
     fn publish_to_with<Sync, Link, Remove>(
@@ -647,6 +822,7 @@ impl CompletedFile {
             staging: self.staging.clone(),
             identity: self.identity,
             cleanup_warning,
+            replacement_backup: None,
         })
     }
 
@@ -964,13 +1140,84 @@ impl Drop for CompletedFile {
     }
 }
 
-/// One successfully published create-only file.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
+struct ReplacementBackup {
+    path: PathBuf,
+    identity: FileIdentity,
+}
+
+impl ReplacementBackup {
+    fn capture(target: &Path) -> io::Result<Option<Self>> {
+        let metadata = match fs::symlink_metadata(target) {
+            Ok(metadata) => metadata,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => return Err(source),
+        };
+        if !metadata.is_file() && !metadata.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "existing output target is not a regular file or symbolic link",
+            ));
+        }
+        let identity = FileIdentity::from_metadata(&metadata);
+        let parent = target.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "replacement target has no parent directory",
+            )
+        })?;
+        for _ in 0..64 {
+            let path = sibling_staging_candidate(parent, "backup");
+            match fs::hard_link(target, &path) {
+                Ok(()) => {
+                    let backup = Self { path, identity };
+                    if backup.identity.matches_path(&backup.path)?
+                        && backup.identity.matches_path(target)?
+                    {
+                        return Ok(Some(backup));
+                    }
+                    let _ = backup.remove();
+                    return Err(io::Error::other(
+                        "output target changed while its rollback backup was created",
+                    ));
+                }
+                Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(source) => return Err(source),
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "could not reserve an unused replacement-backup path",
+        ))
+    }
+
+    fn remove(self) -> io::Result<()> {
+        remove_if_identity_matches(&self.path, self.identity)
+    }
+
+    fn restore(self, target: &Path) -> io::Result<()> {
+        if !self.identity.matches_path(&self.path)? {
+            return Err(io::Error::other("replacement backup identity changed"));
+        }
+        fs::hard_link(&self.path, target)?;
+        if !self.identity.matches_path(target)? {
+            let _ = remove_if_identity_matches(target, self.identity);
+            return Err(io::Error::other(
+                "restored target does not identify the replacement backup",
+            ));
+        }
+        remove_if_identity_matches(&self.path, self.identity)
+    }
+}
+
+/// One successfully published file with rollback authority.
+#[derive(Debug, Eq, PartialEq)]
 pub struct PublishedFile {
     target: PathBuf,
     staging: PathBuf,
     identity: FileIdentity,
     cleanup_warning: Option<io::ErrorKind>,
+    replacement_backup: Option<ReplacementBackup>,
 }
 
 impl PublishedFile {
@@ -998,7 +1245,8 @@ impl PublishedFile {
     /// # Errors
     ///
     /// Returns identity or removal failures without deleting a replacement.
-    pub fn rollback(self) -> Result<(), PublicationError> {
+    pub fn rollback(mut self) -> Result<(), PublicationError> {
+        let replacement_backup = self.replacement_backup.take();
         let target_result = remove_if_identity_matches(&self.target, self.identity);
         let staging_result = self.cleanup_warning.map_or(Ok(()), |_| {
             remove_if_identity_matches(&self.staging, self.identity)
@@ -1008,6 +1256,20 @@ impl PublishedFile {
         })?;
         staging_result.map_err(|source| {
             PublicationError::new(PublicationPhase::Rollback, &self.staging, source)
+        })?;
+        replacement_backup.map_or(Ok(()), |backup| {
+            let backup_path = backup.path.clone();
+            backup.restore(&self.target).map_err(|source| {
+                PublicationError::new(PublicationPhase::Rollback, &backup_path, source)
+            })
         })
+    }
+}
+
+impl Drop for PublishedFile {
+    fn drop(&mut self) {
+        if let Some(backup) = self.replacement_backup.take() {
+            let _ = backup.remove();
+        }
     }
 }

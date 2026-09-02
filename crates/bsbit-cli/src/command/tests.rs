@@ -1,9 +1,32 @@
-use super::{Action, parse};
+use super::index::IndexSpeed;
+use super::{Action, ReadLayout, caller_compatible_alignment_mode, parse};
+use bsbit_align::library::LibraryProfile;
 use bsbit_call::meth::OutputFormat as MethylationOutputFormat;
 use bsbit_combine::MatrixFormat as CombineMatrixFormat;
+use bsbit_hts::BsbitAlignmentMode;
 
 fn arguments(values: &[&str]) -> Vec<std::ffi::OsString> {
     values.iter().map(std::ffi::OsString::from).collect()
+}
+
+#[test]
+fn alignment_provenance_mode_covers_layout_and_library_profile() {
+    assert_eq!(
+        caller_compatible_alignment_mode(ReadLayout::SingleEnd, LibraryProfile::Directional),
+        BsbitAlignmentMode::CallerCompatibleDirectionalSingle
+    );
+    assert_eq!(
+        caller_compatible_alignment_mode(ReadLayout::SingleEnd, LibraryProfile::NonDirectional),
+        BsbitAlignmentMode::CallerCompatibleNondirectionalSingle
+    );
+    assert_eq!(
+        caller_compatible_alignment_mode(ReadLayout::PairedEnd, LibraryProfile::Directional),
+        BsbitAlignmentMode::CallerCompatibleDirectionalPaired
+    );
+    assert_eq!(
+        caller_compatible_alignment_mode(ReadLayout::PairedEnd, LibraryProfile::NonDirectional),
+        BsbitAlignmentMode::CallerCompatibleNondirectionalPaired
+    );
 }
 
 #[test]
@@ -23,6 +46,61 @@ fn exact_index_options_parse() {
     assert_eq!(index.reference, std::path::Path::new("ref.fa"));
     assert_eq!(index.output, std::path::Path::new("ref.bsbit"));
     assert_eq!(index.threads, 4);
+    assert_eq!(index.speed, IndexSpeed::Balanced);
+}
+
+#[test]
+fn short_index_options_parse() {
+    let Action::Index(index) = parse(arguments(&[
+        "index",
+        "-r",
+        "ref.fa",
+        "-o",
+        "ref.bsbit",
+        "-t",
+        "4",
+    ]))
+    .expect("short index options parse") else {
+        panic!("expected index action");
+    };
+    assert_eq!(index.reference, std::path::Path::new("ref.fa"));
+    assert_eq!(index.output, std::path::Path::new("ref.bsbit"));
+    assert_eq!(index.threads, 4);
+}
+
+#[test]
+fn short_and_long_index_forms_are_one_option() {
+    let error = parse(arguments(&[
+        "index",
+        "-r",
+        "first.fa",
+        "--reference",
+        "second.fa",
+        "-o",
+        "ref.bsbit",
+    ]))
+    .expect_err("short and long reference forms are one option");
+    assert!(error.to_string().contains("duplicate option `--reference`"));
+}
+
+#[test]
+fn uppercase_reference_alias_is_rejected() {
+    assert!(parse(arguments(&["index", "-R", "ref.fa", "-o", "ref.bsbit",])).is_err());
+    assert!(
+        parse(arguments(&[
+            "call",
+            "meth",
+            "-i",
+            "reads.bam",
+            "-R",
+            "ref.fa",
+            "-o",
+            "calls.cgmap",
+            "-f",
+            "cgmap",
+        ]))
+        .is_err()
+    );
 }
 
 #[test]
@@ -34,7 +112,7 @@ fn internal_index_construction_is_not_a_public_subcommand() {
 fn public_help_exposes_only_supported_index_and_alignment_entry_points() {
     let help = crate::GENERAL_HELP;
     assert!(help.contains("bsbit index"));
-    assert!(help.contains("bsbit align --index"));
+    assert!(help.contains("bsbit align -x"));
     for hidden in [
         "align-general",
         "index combined",
@@ -52,14 +130,16 @@ fn public_help_exposes_only_supported_index_and_alignment_entry_points() {
 fn standard_alignment_layout_and_read_aliases_parse() {
     let Action::Align(_) = parse(arguments(&[
         "align",
-        "--index",
+        "-x",
         "ref.bsbit",
         "-1",
         "reads.fq",
-        "--output-bam",
+        "-o",
         "out.bam",
+        "-t",
+        "2",
     ]))
-    .expect("single parses") else {
+    .expect("short alignment options parse") else {
         panic!("expected align action");
     };
 
@@ -77,6 +157,72 @@ fn standard_alignment_layout_and_read_aliases_parse() {
     .expect("paired input parses") else {
         panic!("expected align action");
     };
+}
+
+#[test]
+fn alignment_aliases_share_option_identity() {
+    let duplicate_output = parse(arguments(&[
+        "align",
+        "--index",
+        "ref.bsbit",
+        "--read1",
+        "reads.fq",
+        "--output",
+        "first.bam",
+        "--output-bam",
+        "second.bam",
+    ]))
+    .expect_err("canonical output and compatibility alias are one option");
+    assert!(
+        duplicate_output
+            .to_string()
+            .contains("--output may be specified only once")
+    );
+    let duplicate_index = parse(arguments(&[
+        "align",
+        "-x",
+        "first.bsbit",
+        "--index",
+        "second.bsbit",
+        "-1",
+        "reads.fq",
+        "-o",
+        "out.bam",
+    ]))
+    .expect_err("short and long index forms are one option");
+    assert!(
+        duplicate_index
+            .to_string()
+            .contains("--index may be specified only once")
+    );
+    let duplicate_threads = parse(arguments(&[
+        "align",
+        "-x",
+        "ref.bsbit",
+        "-1",
+        "reads.fq",
+        "-o",
+        "out.bam",
+        "-t",
+        "1",
+        "--threads",
+        "2",
+    ]))
+    .expect_err("short and long thread forms are one option");
+    assert!(
+        duplicate_threads
+            .to_string()
+            .contains("--threads may be specified only once")
+    );
+    let missing_output = parse(arguments(&[
+        "align",
+        "--index",
+        "ref.bsbit",
+        "--read1",
+        "reads.fq",
+    ]))
+    .expect_err("output is required");
+    assert!(missing_output.to_string().contains("missing --output"));
     let duplicate = parse(arguments(&[
         "align",
         "--index",
@@ -85,7 +231,7 @@ fn standard_alignment_layout_and_read_aliases_parse() {
         "first.fq",
         "-1",
         "second.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
     ]))
     .expect_err("short and long read-1 forms are one option");
@@ -97,13 +243,29 @@ fn standard_alignment_layout_and_read_aliases_parse() {
 }
 
 #[test]
+fn alignment_input_alias_is_rejected() {
+    assert!(
+        parse(arguments(&[
+            "align",
+            "-i",
+            "ref.bsbit",
+            "-1",
+            "reads.fq",
+            "-o",
+            "out.bam",
+        ]))
+        .is_err()
+    );
+}
+
+#[test]
 fn nested_methylation_call_accepts_short_and_long_options() {
     let Action::CallMeth(short) = parse(arguments(&[
         "call",
         "meth",
         "-i",
         "reads.bam",
-        "--reference",
+        "-r",
         "reference.fa",
         "-o",
         "calls.cgmap.gz",
@@ -112,11 +274,7 @@ fn nested_methylation_call_accepts_short_and_long_options() {
         "-c",
         "true",
         "--region",
-        "chr1:1-10",
-        "--region",
-        "chr1:21-1,000",
-        "--regions-file",
-        "targets.bed.gz",
+        "chr1:1-10,chr1:21-1000",
     ]))
     .expect("short call options parse") else {
         panic!("expected methylation-call action");
@@ -124,17 +282,17 @@ fn nested_methylation_call_accepts_short_and_long_options() {
     assert_eq!(short.format, MethylationOutputFormat::Cgmap);
     assert!(short.compress);
     assert_eq!(short.threads, 1);
-    assert_eq!(short.parameters.minimum_base_quality, 15);
+    assert_eq!(short.parameters.minimum_base_quality, 20);
     assert_eq!(short.parameters.minimum_mapping_quality, 20);
+    assert_eq!(short.parameters.minimum_depth, 10);
+    assert!(!short.parameters.cg_only);
+    assert!(!short.parameters.ignore_orphans);
     assert_eq!(short.regions.intervals.len(), 2);
     assert_eq!(short.regions.intervals[0].start, 0);
     assert_eq!(short.regions.intervals[0].end, 10);
     assert_eq!(short.regions.intervals[1].start, 20);
     assert_eq!(short.regions.intervals[1].end, 1_000);
-    assert_eq!(
-        short.regions.regions_file.as_deref(),
-        Some(std::path::Path::new("targets.bed.gz"))
-    );
+    assert!(short.regions.regions_file.is_none());
 
     let Action::CallMeth(long) = parse(arguments(&[
         "call",
@@ -149,20 +307,53 @@ fn nested_methylation_call_accepts_short_and_long_options() {
         "bed",
         "--threads",
         "4",
-        "--min-base-quality",
+        "--min-bq",
         "25",
         "--min-mapq",
         "30",
+        "--min-depth",
+        "12",
+        "--cg-only",
+        "--ignore-orphan",
+        "--regions-file",
+        "targets.bed.gz",
     ]))
     .expect("long call options parse") else {
         panic!("expected methylation-call action");
     };
     assert_eq!(long.format, MethylationOutputFormat::Bed);
     assert_eq!(long.reference, std::path::Path::new("reference.fa"));
-    assert!(!long.compress);
+    assert!(long.compress);
     assert_eq!(long.threads, 4);
     assert_eq!(long.parameters.minimum_base_quality, 25);
     assert_eq!(long.parameters.minimum_mapping_quality, 30);
+    assert_eq!(long.parameters.minimum_depth, 12);
+    assert!(long.parameters.cg_only);
+    assert!(long.parameters.ignore_orphans);
+    assert_eq!(
+        long.regions.regions_file.as_deref(),
+        Some(std::path::Path::new("targets.bed.gz"))
+    );
+}
+
+#[test]
+fn short_and_long_call_reference_forms_are_one_option() {
+    let error = parse(arguments(&[
+        "call",
+        "meth",
+        "-i",
+        "reads.bam",
+        "-r",
+        "first.fa",
+        "--reference",
+        "second.fa",
+        "-o",
+        "calls.cgmap",
+        "-f",
+        "cgmap",
+    ]))
+    .expect_err("short and long reference forms are one option");
+    assert!(error.to_string().contains("duplicate option `--reference`"));
 }
 
 #[test]
@@ -171,6 +362,20 @@ fn nested_methylation_call_rejects_invalid_options() {
         arguments(&["call"]),
         arguments(&["call", "unknown"]),
         arguments(&["call", "meth", "-i", "reads.bam"]),
+        arguments(&[
+            "call",
+            "meth",
+            "-i",
+            "reads.bam",
+            "-r",
+            "reference.fa",
+            "-o",
+            "calls",
+            "-f",
+            "cgmap",
+            "--min-depth",
+            "0",
+        ]),
         arguments(&[
             "call",
             "meth",
@@ -226,7 +431,7 @@ fn nested_methylation_call_rejects_invalid_options() {
             "calls",
             "-f",
             "cgmap",
-            "--min-base-quality",
+            "--min-bq",
             "94",
         ]),
         arguments(&[
@@ -248,7 +453,13 @@ fn nested_methylation_call_rejects_invalid_options() {
 
 #[test]
 fn call_region_coordinates_fail_closed() {
-    for region in ["chr1:0-10", "chr1:20-10", "chr1:1,00-200", "chr1"] {
+    for region in [
+        "chr1:0-10",
+        "chr1:20-10",
+        "chr1:1,000",
+        "chr1:1-10,",
+        "chr1",
+    ] {
         assert!(
             parse(arguments(&[
                 "call",
@@ -267,10 +478,56 @@ fn call_region_coordinates_fail_closed() {
             .is_err()
         );
     }
+
+    let repeated = parse(arguments(&[
+        "call",
+        "meth",
+        "-i",
+        "reads.bam",
+        "--reference",
+        "reference.fa",
+        "-o",
+        "calls",
+        "-f",
+        "cgmap",
+        "--region",
+        "chr1:1-10",
+        "--region",
+        "chr2:1-10",
+    ]))
+    .expect_err("--region may be specified only once");
+    assert!(
+        repeated
+            .to_string()
+            .contains("separate multiple regions with commas")
+    );
+
+    let conflicting = parse(arguments(&[
+        "call",
+        "meth",
+        "-i",
+        "reads.bam",
+        "--reference",
+        "reference.fa",
+        "-o",
+        "calls",
+        "-f",
+        "cgmap",
+        "--region",
+        "chr1:1-10",
+        "--regions-file",
+        "targets.bed",
+    ]))
+    .expect_err("region arguments conflict");
+    assert!(
+        conflicting
+            .to_string()
+            .contains("`--region` conflicts with `--regions-file`")
+    );
 }
 
 #[test]
-fn all_call_modules_require_an_indexed_reference_argument() {
+fn all_call_modules_require_a_reference_argument() {
     assert!(
         parse(arguments(&[
             "call",
@@ -320,14 +577,15 @@ fn methylation_combine_parses_comma_separated_inputs_names_and_filters() {
         "tumor.bed.gz,normal.bed",
         "--sample-name",
         "tumor,normal",
-        "-o",
-        "matrix.bed.gz",
+        "-p",
+        "matrix",
         "-m",
         "both",
         "--min-count",
         "10",
         "--min-prop",
         "0.8",
+        "--cg-only",
         "-c",
         "true",
         "-t",
@@ -339,6 +597,7 @@ fn methylation_combine_parses_comma_separated_inputs_names_and_filters() {
     assert_eq!(options.inputs.len(), 2);
     assert_eq!(options.inputs[0].sample, "tumor");
     assert_eq!(options.inputs[1].sample, "normal");
+    assert_eq!(options.output_prefix, std::path::Path::new("matrix"));
     assert_eq!(options.matrix_format, CombineMatrixFormat::Both);
     assert_eq!(options.parameters.minimum_count, 10);
     assert_eq!(
@@ -347,6 +606,7 @@ fn methylation_combine_parses_comma_separated_inputs_names_and_filters() {
             .minimum_sample_proportion_parts_per_billion,
         800_000_000
     );
+    assert!(options.parameters.cg_only);
     assert!(options.compress);
     assert_eq!(options.threads, 8);
 }
@@ -357,13 +617,15 @@ fn methylation_combine_defaults_names_to_exact_paths() {
         "combine",
         "--input",
         "cohort/tumor.bed.gz,cohort/normal sample.bed",
-        "--output",
-        "matrix.bed",
+        "--prefix",
+        "matrix",
     ]))
     .expect("path-derived sample names parse") else {
         panic!("expected combine action");
     };
     assert_eq!(defaulted.inputs.len(), 2);
+    assert!(defaulted.compress);
+    assert!(!defaulted.parameters.cg_only);
     assert_eq!(defaulted.inputs[0].sample, "cohort/tumor.bed.gz");
     assert_eq!(defaulted.inputs[1].sample, "cohort/normal sample.bed");
     assert_eq!(
@@ -375,8 +637,8 @@ fn methylation_combine_defaults_names_to_exact_paths() {
         "combine",
         "--input",
         "tumor=one.bed",
-        "--output",
-        "matrix.bed",
+        "--prefix",
+        "matrix",
     ]))
     .expect("equals sign remains part of the path") else {
         panic!("expected combine action");
@@ -391,41 +653,33 @@ fn methylation_combine_defaults_names_to_exact_paths() {
 #[test]
 fn methylation_combine_rejects_ambiguous_or_invalid_options() {
     for invalid in [
-        arguments(&["combine", "-o", "matrix.bed"]),
+        arguments(&["combine", "-p", "matrix"]),
         arguments(&[
             "combine",
             "-i",
             "one.bed,two.bed",
             "--sample-name",
             "only-one",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
         ]),
-        arguments(&["combine", "-i", "one.bed,,two.bed", "-o", "matrix.bed"]),
+        arguments(&["combine", "-i", "one.bed,,two.bed", "-p", "matrix"]),
         arguments(&[
             "combine",
             "-i",
             "one.bed,two.bed",
             "--sample-name",
             "sample,,control",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
         ]),
-        arguments(&[
-            "combine",
-            "-i",
-            "one.bed",
-            "-i",
-            "one.bed",
-            "-o",
-            "matrix.bed",
-        ]),
+        arguments(&["combine", "-i", "one.bed", "-i", "one.bed", "-p", "matrix"]),
         arguments(&[
             "combine",
             "-i",
             "sample=one.bed",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
             "--matrix",
             "wide",
         ]),
@@ -433,8 +687,8 @@ fn methylation_combine_rejects_ambiguous_or_invalid_options() {
             "combine",
             "-i",
             "sample=one.bed",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
             "--min-prop",
             "1.1",
         ]),
@@ -442,11 +696,22 @@ fn methylation_combine_rejects_ambiguous_or_invalid_options() {
             "combine",
             "-i",
             "sample=one.bed",
-            "-o",
-            "matrix.bed",
+            "-p",
+            "matrix",
             "--threads",
             "0",
         ]),
+        arguments(&[
+            "combine",
+            "-i",
+            "sample=one.bed",
+            "-p",
+            "matrix",
+            "--cg-only",
+            "--cg-only",
+        ]),
+        arguments(&["combine", "-i", "sample=one.bed", "-o", "matrix.bed"]),
+        arguments(&["combine", "-i", "sample=one.bed", "--output", "matrix.bed"]),
     ] {
         assert!(parse(invalid).is_err());
     }
@@ -459,17 +724,15 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "snp",
         "-i",
         "reads.bam",
-        "--reference",
+        "-r",
         "reference.fa",
         "-o",
         "calls.vcf.gz",
         "--sample-name",
         "tumor-A",
-        "-c",
-        "true",
         "-t",
         "8",
-        "--min-base-quality",
+        "--min-bq",
         "25",
         "--min-mapq",
         "30",
@@ -489,6 +752,7 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "0.0025",
         "--overconversion-rate",
         "0.000001",
+        "--ignore-orphan",
     ]))
     .expect("SNP call parses") else {
         panic!("expected SNP-call action");
@@ -499,6 +763,7 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
     assert_eq!(snp.threads, 8);
     assert_eq!(snp.parameters.minimum_base_quality, 25);
     assert_eq!(snp.parameters.minimum_mapping_quality, 30);
+    assert!(snp.parameters.ignore_orphans);
     assert_eq!(snp.parameters.minimum_depth, 6);
     assert_eq!(snp.parameters.minimum_alternate_count, 3);
     assert_eq!(
@@ -516,7 +781,7 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "joint",
         "-i",
         "reads.bam",
-        "--reference",
+        "-r",
         "reference.fa",
         "--sample-name",
         "tumor-A",
@@ -528,6 +793,10 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
         "calls.vcf.gz",
         "--heterozygosity",
         "0.002",
+        "--cg-only",
+        "--ignore-orphan",
+        "-c",
+        "false",
     ]))
     .expect("joint call parses") else {
         panic!("expected joint-call action");
@@ -535,8 +804,10 @@ fn snp_and_joint_call_modules_parse_exact_quality_controls() {
     assert_eq!(joint.meth_format, MethylationOutputFormat::Cgmap);
     assert_eq!(joint.reference, std::path::Path::new("reference.fa"));
     assert_eq!(joint.sample_name.as_deref(), Some("tumor-A"));
-    assert_eq!(joint.parameters.minimum_base_quality, 15);
+    assert_eq!(joint.parameters.minimum_base_quality, 20);
     assert_eq!(joint.parameters.minimum_mapping_quality, 20);
+    assert!(joint.cg_only);
+    assert!(joint.parameters.ignore_orphans);
     assert_eq!(joint.parameters.heterozygosity_parts_per_billion, 2_000_000);
     assert!(!joint.compress);
 }
@@ -565,7 +836,7 @@ fn invalid_snp_and_joint_quality_controls_are_rejected() {
             "reference.fa",
             "-o",
             "calls.vcf",
-            "--min-base-quality",
+            "--min-bq",
             "94",
         ]),
         arguments(&[
@@ -655,7 +926,6 @@ fn internal_cache_and_historical_alignment_options_are_absent() {
 
     for retired in [
         "--reads",
-        "--output",
         "--output-format",
         "--max-edit-distance",
         "--reference-backend",
@@ -668,7 +938,7 @@ fn internal_cache_and_historical_alignment_options_are_absent() {
             "ref.bsbit",
             "--read1",
             "reads.fq",
-            "--output-bam",
+            "--output",
             "out.bam",
             retired,
             "value",
@@ -687,7 +957,7 @@ fn alignment_entry_points_are_explicit() {
         "r1.fq",
         "-2",
         "r2.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
     ]))
     .expect("canonical alignment parses");
@@ -699,7 +969,7 @@ fn alignment_entry_points_are_explicit() {
         "reference.bsbit",
         "--read1",
         "single.fq",
-        "--output-bam",
+        "--output",
         "single.bam",
     ]))
     .expect("canonical single-end alignment parses");
@@ -734,7 +1004,7 @@ fn paired_span_and_fail_closed_rules_are_exact() {
         "r1.fq",
         "-2",
         "r2.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
         "--min-template-span",
         "10",
@@ -752,7 +1022,7 @@ fn paired_span_and_fail_closed_rules_are_exact() {
             "ref.bsbit",
             "--read2",
             "r2",
-            "--output-bam",
+            "--output",
             "o.bam",
         ]),
         arguments(&[
@@ -763,7 +1033,7 @@ fn paired_span_and_fail_closed_rules_are_exact() {
             "r1",
             "--read2",
             "r2",
-            "--output-bam",
+            "--output",
             "o.bam",
             "--min-template-span",
             "501",
@@ -783,7 +1053,7 @@ fn thread_domain_is_exact_and_independent_of_host_cpu_count() {
         "ref.bsbit",
         "--read1",
         "reads.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
         "--threads",
     ];

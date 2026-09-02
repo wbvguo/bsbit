@@ -22,9 +22,9 @@ perf.data*
 flamegraph*.svg
 *.log
 
-# Agent-owned worktrees and shared/user local workspace.
+# Human-maintained development area and Agent local workspace.
 # Product code, tests, and CI must not read these paths.
-/agent/
+/dev/
 /workspace/
 
 # Local planning notes

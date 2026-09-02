@@ -1,10 +1,11 @@
-# Troubleshoot problems
+# Troubleshoot
 
-bsbit rejects inputs and stops publication when validation, reference identity,
-resource, or output requirements are not satisfied. Start with the exact error
-on standard error and the matching section below.
+Start with the exact error written to standard error, then use the matching
+section below.
 
-## A source build cannot find HTSlib, htscodecs, or libsais
+## Installation and platform
+
+### A source build cannot find HTSlib, htscodecs, or libsais
 
 Initialize both submodule levels and rebuild:
 
@@ -13,55 +14,30 @@ git submodule update --init --recursive
 cargo build --locked --release -p bsbit-cli --bin bsbit
 ```
 
-The repository owns pinned native dependencies under `external/`; installing a
-different system HTSlib does not repair a missing submodule checkout.
+The repository includes pinned native dependencies under `external/`.
+Installing a different system HTSlib does not repair missing submodules.
 
-## The binary exits with an illegal instruction
+### The binary exits with an illegal instruction
 
-The tested production target requires a 64-bit Intel or AMD CPU with
-x86-64-v3 support, including AVX2 and POPCNT. Check
-the flags visible inside the actual VM, container, or WSL environment:
+The production build requires a 64-bit Intel or AMD CPU with x86-64-v3 support,
+including AVX2 and POPCNT. Check the features visible inside the active VM,
+container, or WSL environment:
 
 ```bash
 lscpu | grep -E 'Architecture|Flags'
 ```
 
-Move the run to a supported host if the required flags are absent or hidden.
+Use a supported host if these features are absent or hidden.
 
-## Publication fails under `/mnt/c` on WSL2
+## Input and reference
 
-Move the reference build and BAM output to the Linux filesystem, for example:
+### Paired FASTQ names or counts are inconsistent
 
-```bash
-mkdir -p ~/work/bsbit
-```
+R1 and R2 must contain the same number of records in the same order. Names must
+be identical or use matching `/1` and `/2` suffixes. Independent filtering,
+reordering, truncation, and incompatible name rewriting are common causes.
 
-Large index and output publication intentionally relies on Linux descriptor and
-hard-link semantics. Windows-drive 9p mounts can fail this contract even when
-ordinary file creation appears to work.
-
-## The output already exists
-
-Index, SAM, BAM, CGmap, bedMethyl, VCF, and matrix destinations must be
-new. Choose another output path or move the prior artifact aside intentionally.
-bsbit never truncates, appends to, or silently replaces a result.
-
-## A `.staging` file remains after interruption
-
-The final BAM is published only after the writer completes. If the process was
-killed abruptly, a private staging file may remain while the final BAM is
-absent. First confirm that no bsbit process still owns it. Preserve it while
-investigating the failure; it is not a committed output and should not be fed
-to downstream analysis as the result.
-
-## Paired FASTQ names or counts are inconsistent
-
-R1 and R2 must end together and match by ordinal. Names must be identical or
-use corresponding `/1` and `/2` suffixes. Common causes are independently
-filtered mates, reordering, a truncated gzip file, or incompatible read-name
-rewrites.
-
-Validate compression and record counts before rerunning alignment:
+For gzip or BGZF input, check compression and record counts:
 
 ```bash
 gzip -t sample_R1.fastq.gz
@@ -70,74 +46,101 @@ zcat sample_R1.fastq.gz | awk 'END { print NR / 4 }'
 zcat sample_R2.fastq.gz | awk 'END { print NR / 4 }'
 ```
 
-## An index is rejected as corrupt or stale
+Matching counts do not prove matching names; bsbit validates every pair. See
+[Paired-read synchronization](../reference/input-data.md#paired-read-synchronization).
 
-Preserve the exact error for diagnosis. Rebuild the index from the trusted
-original FASTA under a new output path with `bsbit index`; only after that
-single command succeeds, rerun `bsbit align`. Alignment deliberately never
-creates or overwrites missing, corrupt, or mismatched index data.
+### An index is rejected as corrupt or stale
 
-## Alignment produces fewer mapped records than expected
+Rebuild the index from the trusted reference FASTA, then rerun alignment.
+`bsbit align` does not repair or modify an index:
 
-Ambiguous or unmapped reads do not count as successful mappings. Inspect the
-BAM flags and mapping summary rather than comparing only the number of mapped
-rows:
+```bash
+bsbit index -r reference.fa -o reference.bsbit
+```
+
+### A reference FASTA is rejected as ordinary gzip
+
+Reference FASTA must be plain or BGZF-compressed. Convert ordinary gzip to
+BGZF and create the sidecars required for calling:
+
+```bash
+gzip -cd reference.fa.gz | bgzip -c > reference.bgzf.fa.gz
+samtools faidx reference.bgzf.fa.gz
+```
+
+This creates `.fai` and `.gzi` files. Alternatively, use a plain FASTA. See
+[FASTA reference](../reference/input-data.md#fasta-reference).
+
+## BAM and calling
+
+### Alignment produces fewer mapped records than expected
+
+Ambiguous and unmapped reads do not count as successful mappings. Inspect the
+BAM summary rather than comparing only mapped rows:
 
 ```bash
 samtools flagstat sample.bam
 ```
 
-## A downstream tool cannot index the BAM
+### A downstream tool cannot index the BAM
 
-bsbit output is input-order, not coordinate-sorted. Sort before indexing:
+The BAM produced by `bsbit align` follows FASTQ input order. Coordinate-sort it
+before creating its index:
 
 ```bash
 samtools sort -o sample.sorted.bam sample.bam
 samtools index sample.sorted.bam
 ```
 
-## A caller rejects the BAM or reference
+### A caller rejects the BAM or reference
 
-Every caller run, including one using `-t 1`, requires a coordinate-sorted BAM
-with an adjacent BAI or CSI. The BAM must retain the canonical bsbit `@PG`
-record. Prepare paired output as shown in the [BAM-preparation
-guide](../guides/prepare-bam.md), then confirm both files:
+Confirm that:
 
-```bash
-samtools quickcheck -v sample.analysis.bam
-samtools index sample.analysis.bam
-samtools view -H sample.analysis.bam | grep '^@PG'
-```
+- the BAM is coordinate-sorted and has an adjacent `.bai`;
+- the bsbit `@PG` header and mapped-record `XG` tags remain; and
+- the reference is the same FASTA used to build the alignment index.
 
-### A single-end BAM is rejected
-
-Current `bsbit align` output with read 1 only uses numeric MAPQ and declares
-`caller-compatible-directional-single`. If a single-end BAM is rejected,
-inspect `@PG`: an older `standard-directional-single` BAM predates numeric MAPQ
-and must be realigned rather than having its header or scores rewritten.
-
-All three call modules also require the authoritative reference FASTA. A plain
-FASTA needs an adjacent FAI; a BGZF FASTA needs both FAI and GZI. Build the
-index with `samtools faidx`:
+Validate the BAM and recreate its index after final processing:
 
 ```bash
-samtools faidx reference.fa
+samtools quickcheck -v sample.prep.bam
+samtools index sample.prep.bam
+samtools view -H sample.prep.bam | grep '^@PG'
 ```
 
-Every BAM dictionary contig must have one uniquely named FASTA entry with the
-same length; FASTA order may differ. The caller normalizes and hashes those
-sequences in BAM order and compares the result with structured BAM provenance,
-so a same-name, same-length wrong assembly is rejected. It still ignores `MD`.
+For BGZF FASTA, confirm that both `.fai` and `.gzi` exist. The caller also
+verifies the normalized reference digest, so matching contig names and lengths
+alone is not sufficient. See [Calling BAM and
+reference](../reference/input-data.md#calling-bam-and-reference).
 
-## A run is slower than the published result
+## Filesystem and output
 
-Published timing is scoped to the qualified paired-end aligner (historically measured
-under the former `bsbit-align` executable name), host,
-dataset, options, storage, and measurement boundary. Check that large files are
-on local Linux storage, the same mode, template bounds, and worker counts are
-selected, compressed input is read directly, and no competing process is
-consuming CPU, memory bandwidth, or storage.
+### Writing output fails under `/mnt/c` on WSL2
 
-Change one option at a time. See
-[paired-end alignment settings](../guides/alignment.md#choose-an-alignment-mode)
-and the exact [performance protocol](../performance-evidence.md).
+Build the reference index and write large outputs on the Linux filesystem, for
+example under `~/work/bsbit`. Windows-drive 9p mounts may not provide the file
+semantics required to finalize these outputs.
+
+### An output cannot be replaced
+
+The destination must be absent or an existing regular file. Directories and
+special files are rejected. Check the destination type and parent-directory
+permissions.
+
+### A `.staging` file remains after interruption
+
+A staging file may remain if a process is killed while writing output. Confirm
+that no bsbit process is still using it. The staging file is not a completed
+result and must not be used for downstream analysis.
+
+## Performance
+
+### Alignment is slower than expected
+
+Keep large files on local Linux storage and check for competing CPU, memory, or
+storage workloads. `--sensitive` and `--non-directional` perform additional
+search work, and the mapping-worker count also affects throughput.
+
+Change one setting at a time. See [alignment
+settings](../guides/alignment.md#advanced-parameters) and enable `--metrics`
+only when profiling is needed.

@@ -28,6 +28,8 @@ const PROGRAM_MODE_PREFIX: &[u8] = b";alignment-mode=";
 pub enum BsbitAlignmentMode {
     /// Caller-compatible directional single-end alignment.
     CallerCompatibleDirectionalSingle,
+    /// Caller-compatible non-directional single-end alignment.
+    CallerCompatibleNondirectionalSingle,
     /// Caller-compatible directional paired-end alignment.
     CallerCompatibleDirectionalPaired,
     /// Caller-compatible non-directional paired-end alignment.
@@ -38,6 +40,9 @@ impl BsbitAlignmentMode {
     const fn header_value(self) -> &'static [u8] {
         match self {
             Self::CallerCompatibleDirectionalSingle => b"caller-compatible-directional-single",
+            Self::CallerCompatibleNondirectionalSingle => {
+                b"caller-compatible-nondirectional-single"
+            }
             Self::CallerCompatibleDirectionalPaired => b"caller-compatible-directional-paired",
             Self::CallerCompatibleNondirectionalPaired => {
                 b"caller-compatible-nondirectional-paired"
@@ -49,6 +54,9 @@ impl BsbitAlignmentMode {
         match value {
             b"caller-compatible-directional-single" => {
                 Some(Self::CallerCompatibleDirectionalSingle)
+            }
+            b"caller-compatible-nondirectional-single" => {
+                Some(Self::CallerCompatibleNondirectionalSingle)
             }
             b"caller-compatible-directional-paired" => {
                 Some(Self::CallerCompatibleDirectionalPaired)
@@ -67,6 +75,7 @@ impl BsbitAlignmentMode {
         matches!(
             self,
             Self::CallerCompatibleDirectionalSingle
+                | Self::CallerCompatibleNondirectionalSingle
                 | Self::CallerCompatibleDirectionalPaired
                 | Self::CallerCompatibleNondirectionalPaired
         )
@@ -912,11 +921,12 @@ fn parse_program_description(
         .ok_or(BsbitProgramProvenanceError::MalformedDescription)?;
     let (digest_text, mode_text) = digest_text.split_at(delimiter_offset);
     let mode_text = &mode_text[delimiter.len()..];
-    if digest_text.len() != 64 {
+    let mut digest = [0_u8; 32];
+    let (digest_pairs, remainder) = digest_text.as_chunks::<2>();
+    if digest_pairs.len() != digest.len() || !remainder.is_empty() {
         return Err(BsbitProgramProvenanceError::MalformedDescription);
     }
-    let mut digest = [0_u8; 32];
-    for (target, pair) in digest.iter_mut().zip(digest_text.chunks_exact(2)) {
+    for (target, pair) in digest.iter_mut().zip(digest_pairs) {
         *target = (hex_digit(pair[0])? << 4) | hex_digit(pair[1])?;
     }
     let alignment_mode = BsbitAlignmentMode::from_header_value(mode_text)
@@ -1057,7 +1067,7 @@ impl std::error::Error for SamFileError {
 }
 
 /// Successful create-only SAM publication details.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct SamFilePublication {
     published: PublishedFile,
     records_written: u64,
@@ -1417,6 +1427,7 @@ mod tests {
     fn every_alignment_mode_round_trips_and_is_caller_compatible() {
         for mode in [
             BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
+            BsbitAlignmentMode::CallerCompatibleNondirectionalSingle,
             BsbitAlignmentMode::CallerCompatibleDirectionalPaired,
             BsbitAlignmentMode::CallerCompatibleNondirectionalPaired,
         ] {

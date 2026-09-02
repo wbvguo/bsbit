@@ -1,12 +1,9 @@
-use crate::library::PairedLibraryProfile;
+use crate::library::PairConstraints;
 use crate::search::combined_adaptive::{
-    CombinedSearchLimits, DEFAULT_MINIMUM_MULTI_HIT_SEED_BASES, DEFAULT_SEARCH_LIMITS,
+    CombinedSearchLimits, DEFAULT_SEARCH_LIMITS, SENSITIVE_SEARCH_LIMITS,
 };
 
-use super::{
-    PAIRED_MAX_EDIT_DISTANCE, SEMI_GLOBAL_CLIP_PENALTY, SENSITIVE_CLIP_PENALTY,
-    SENSITIVE_MAX_COMBINED_RESCUE_HITS, SENSITIVE_MAX_SEED_HITS, SENSITIVE_MAX_SEED_ROUNDS,
-};
+use super::{PAIRED_MAX_EDIT_DISTANCE, SEMI_GLOBAL_CLIP_PENALTY, SENSITIVE_CLIP_PENALTY};
 
 /// Candidate-search effort for paired-end alignment.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -34,42 +31,29 @@ pub(super) enum AlignmentPhase {
 /// mode. Callers cannot compose internal alignment stages.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PairedAlignmentOptions {
-    pub(super) library_profile: PairedLibraryProfile,
+    pub(super) constraints: PairConstraints,
     pub(super) search_mode: PairedSearchMode,
-    pub(super) minimum_template_span: u64,
-    pub(super) maximum_template_span: u64,
     pub(super) phase: AlignmentPhase,
 }
 
 impl PairedAlignmentOptions {
     /// Creates options for the initial complete-read alignment.
     #[must_use]
-    pub const fn primary(
-        library_profile: PairedLibraryProfile,
-        search_mode: PairedSearchMode,
-        minimum_template_span: u64,
-        maximum_template_span: u64,
-    ) -> Self {
+    pub const fn primary(constraints: PairConstraints, search_mode: PairedSearchMode) -> Self {
         Self {
-            library_profile,
+            constraints,
             search_mode,
-            minimum_template_span,
-            maximum_template_span,
             phase: AlignmentPhase::Primary,
         }
     }
 
     pub(super) const fn adapter_trimmed(
-        library_profile: PairedLibraryProfile,
+        constraints: PairConstraints,
         search_mode: PairedSearchMode,
-        minimum_template_span: u64,
-        maximum_template_span: u64,
     ) -> Self {
         Self {
-            library_profile,
+            constraints,
             search_mode,
-            minimum_template_span,
-            maximum_template_span,
             phase: AlignmentPhase::AdapterTrimmed,
         }
     }
@@ -88,12 +72,7 @@ impl PairedSearchMode {
     pub(super) const fn limits(self) -> CombinedSearchLimits {
         match self {
             Self::Default => DEFAULT_SEARCH_LIMITS,
-            Self::Sensitive => CombinedSearchLimits {
-                minimum_multi_hit_seed_bases: DEFAULT_MINIMUM_MULTI_HIT_SEED_BASES,
-                maximum_seed_hits: SENSITIVE_MAX_SEED_HITS,
-                maximum_combined_rescue_hits: SENSITIVE_MAX_COMBINED_RESCUE_HITS,
-                maximum_seed_rounds: SENSITIVE_MAX_SEED_ROUNDS,
-            },
+            Self::Sensitive => SENSITIVE_SEARCH_LIMITS,
         }
     }
 

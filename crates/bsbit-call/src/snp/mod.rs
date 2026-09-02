@@ -19,6 +19,8 @@ pub struct Parameters {
     pub minimum_base_quality: u8,
     /// Minimum mapping quality in `0..=254`.
     pub minimum_mapping_quality: u8,
+    /// Ignore paired records that do not carry the SAM proper-pair flag.
+    pub ignore_orphans: bool,
     /// Minimum candidate and likelihood depth; must be nonzero.
     pub minimum_depth: u32,
     /// Minimum candidate and selected-ALT informative observations; must be nonzero.
@@ -40,9 +42,10 @@ pub struct Parameters {
 impl Default for Parameters {
     fn default() -> Self {
         Self {
-            minimum_base_quality: 15,
+            minimum_base_quality: 20,
             minimum_mapping_quality: 20,
-            minimum_depth: 4,
+            ignore_orphans: false,
+            minimum_depth: 10,
             minimum_alternate_count: 2,
             minimum_alternate_fraction_parts_per_billion: 100_000_000,
             minimum_genotype_quality: 0,
@@ -104,13 +107,13 @@ impl Parameters {
 pub struct Options {
     /// Coordinate-sorted, indexed canonical bsbit BAM input.
     pub input: PathBuf,
-    /// Indexed FASTA used as the authoritative reference sequence.
+    /// Authoritative FASTA; an existing FAI is used, otherwise plain FASTA is scanned.
     pub reference: PathBuf,
-    /// VCF sample name; defaults to the unique BAM `SM`, then its basename.
+    /// VCF sample name; defaults to the unique BAM `SM`, then its filename stem.
     pub sample_name: Option<String>,
     /// Optional interval restriction; empty means the whole BAM dictionary.
     pub regions: RegionSelection,
-    /// Create-only VCF destination.
+    /// VCF destination, replacing an existing file after completion.
     pub output: PathBuf,
     /// Encode output as BGZF when true, otherwise plain VCF.
     pub compress: bool,

@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bsbit_io::{
     PublicationPhase, StagedFile, reopen_read_write, select_sibling_staging_path,
     validate_create_target, validate_distinct_paths, validate_regular_file_or_absent,
+    validate_replace_target,
 };
 
 fn unique_path(label: &str) -> PathBuf {
@@ -24,6 +25,13 @@ fn unique_path(label: &str) -> PathBuf {
 
 fn complete_bytes(target: &Path, label: &str, bytes: &[u8]) -> bsbit_io::CompletedFile {
     let mut staged = StagedFile::create_sibling(target, label).expect("stage");
+    let mut file = staged.take_file().expect("descriptor");
+    file.write_all(bytes).expect("write");
+    staged.complete(file).expect("complete")
+}
+
+fn complete_replacement_bytes(target: &Path, label: &str, bytes: &[u8]) -> bsbit_io::CompletedFile {
+    let mut staged = StagedFile::create_sibling_replace(target, label).expect("stage replacement");
     let mut file = staged.take_file().expect("descriptor");
     file.write_all(bytes).expect("write");
     staged.complete(file).expect("complete")
@@ -79,6 +87,24 @@ fn generic_reader_path_validation_rejects_non_files_but_preserves_missing_paths(
 }
 
 #[test]
+fn generic_replace_target_validation_accepts_files_and_rejects_directories() {
+    let directory = unique_path("replace-target-directory");
+    fs::create_dir(&directory).expect("directory");
+    let target = directory.join("result.dat");
+    validate_replace_target(&target).expect("missing target");
+    fs::write(&target, b"existing").expect("target");
+    validate_replace_target(&target).expect("regular target");
+    assert_eq!(
+        validate_replace_target(&directory)
+            .expect_err("directory target fails")
+            .kind(),
+        std::io::ErrorKind::Unsupported
+    );
+    fs::remove_file(target).expect("target cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
+}
+
+#[test]
 fn selected_staging_candidates_are_absolute_unused_unique_siblings() {
     let directory = unique_path("selected-staging-directory");
     fs::create_dir(&directory).expect("directory");
@@ -121,6 +147,43 @@ fn completed_bytes_publish_create_only_and_can_roll_back() {
     );
     published.rollback().expect("rollback");
     assert!(!target.exists());
+}
+
+#[test]
+fn completed_bytes_replace_atomically_and_rollback_restores_old_target() {
+    let directory = unique_path("replace-rollback-directory");
+    fs::create_dir(&directory).expect("directory");
+    let target = directory.join("result.dat");
+    fs::write(&target, b"old bytes").expect("old target");
+    let completed = complete_replacement_bytes(&target, "replace", b"new bytes");
+    let published = completed.publish_replace().expect("replace target");
+    assert_eq!(fs::read(&target).expect("new target"), b"new bytes");
+    published.rollback().expect("restore old target");
+    assert_eq!(fs::read(&target).expect("restored target"), b"old bytes");
+    assert_eq!(
+        fs::read_dir(&directory).expect("directory entries").count(),
+        1
+    );
+    fs::remove_file(target).expect("target cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
+}
+
+#[test]
+fn successful_replacement_drop_removes_private_backup() {
+    let directory = unique_path("replace-commit-directory");
+    fs::create_dir(&directory).expect("directory");
+    let target = directory.join("result.dat");
+    fs::write(&target, b"old bytes").expect("old target");
+    let completed = complete_replacement_bytes(&target, "replace", b"new bytes");
+    let published = completed.publish_replace().expect("replace target");
+    drop(published);
+    assert_eq!(fs::read(&target).expect("new target"), b"new bytes");
+    assert_eq!(
+        fs::read_dir(&directory).expect("directory entries").count(),
+        1
+    );
+    fs::remove_file(target).expect("target cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
 }
 
 #[test]

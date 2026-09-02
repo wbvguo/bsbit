@@ -834,6 +834,33 @@ pub(crate) fn validate_header(
     Ok((name, description))
 }
 
+const IUPAC_BASE_CODE: u8 = 5;
+const INVALID_BASE_CODE: u8 = 6;
+
+const fn build_ascii_base_codes() -> [u8; 256] {
+    let mut codes = [INVALID_BASE_CODE; 256];
+    codes[b'A' as usize] = Base::A.storage_code();
+    codes[b'a' as usize] = Base::A.storage_code();
+    codes[b'C' as usize] = Base::C.storage_code();
+    codes[b'c' as usize] = Base::C.storage_code();
+    codes[b'G' as usize] = Base::G.storage_code();
+    codes[b'g' as usize] = Base::G.storage_code();
+    codes[b'T' as usize] = Base::T.storage_code();
+    codes[b't' as usize] = Base::T.storage_code();
+    codes[b'N' as usize] = Base::N.storage_code();
+    codes[b'n' as usize] = Base::N.storage_code();
+
+    let iupac = *b"RrYySsWwKkMmBbDdHhVv";
+    let mut offset = 0;
+    while offset < iupac.len() {
+        codes[iupac[offset] as usize] = IUPAC_BASE_CODE;
+        offset += 1;
+    }
+    codes
+}
+
+const ASCII_BASE_CODES: [u8; 256] = build_ascii_base_codes();
+
 pub(crate) fn normalize_sequence_line(
     line: &PhysicalLine,
     record_offset: u64,
@@ -849,29 +876,17 @@ pub(crate) fn normalize_sequence_line(
     })?;
     for (storage_offset, &byte) in line.bytes.iter().enumerate() {
         let offset = storage_len(storage_offset);
-        let base = match byte {
-            b'A' | b'a' => Base::A,
-            b'C' | b'c' => Base::C,
-            b'G' | b'g' => Base::G,
-            b'T' | b't' => Base::T,
-            b'N' | b'n' => Base::N,
-            b'R' | b'r' | b'Y' | b'y' | b'S' | b's' | b'W' | b'w' | b'K' | b'k' | b'M' | b'm'
-            | b'B' | b'b' | b'D' | b'd' | b'H' | b'h' | b'V' | b'v' => {
-                return Err(sequence_normalization_error(
-                    context,
-                    record_offset,
-                    NormalizationError::UnsupportedIupac { byte, offset },
-                ));
-            }
-            _ => {
-                return Err(sequence_normalization_error(
-                    context,
-                    record_offset,
-                    NormalizationError::InvalidBaseByte { byte, offset },
-                ));
-            }
+        let code = ASCII_BASE_CODES[usize::from(byte)];
+        if let Some(base) = Base::from_storage_code(code) {
+            bases.push(base);
+            continue;
+        }
+        let error = if code == IUPAC_BASE_CODE {
+            NormalizationError::UnsupportedIupac { byte, offset }
+        } else {
+            NormalizationError::InvalidBaseByte { byte, offset }
         };
-        bases.push(base);
+        return Err(sequence_normalization_error(context, record_offset, error));
     }
     Ok(bases.into())
 }

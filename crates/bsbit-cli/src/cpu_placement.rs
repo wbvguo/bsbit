@@ -34,10 +34,25 @@ impl CpuPlacement {
     #[must_use]
     pub(crate) fn detect(mapping_workers: usize) -> Self {
         let available = platform::available_cpus();
-        Self::from_available(&available, mapping_workers)
+        Self::from_available(&available, mapping_workers, None)
     }
 
-    fn from_available(available: &[AvailableCpu], mapping_workers: usize) -> Self {
+    /// Detects a mapping pool plus an exact best-effort physical-core budget
+    /// for decoding, record writing, and BGZF compression.
+    #[must_use]
+    pub(crate) fn detect_with_auxiliary_cores(
+        mapping_workers: usize,
+        auxiliary_cores: usize,
+    ) -> Self {
+        let available = platform::available_cpus();
+        Self::from_available(&available, mapping_workers, Some(auxiliary_cores))
+    }
+
+    fn from_available(
+        available: &[AvailableCpu],
+        mapping_workers: usize,
+        auxiliary_core_limit: Option<usize>,
+    ) -> Self {
         if available.is_empty() || mapping_workers == 0 {
             return Self::default();
         }
@@ -82,8 +97,30 @@ impl CpuPlacement {
             .filter(|cpu| !mapping_cores.contains(&cpu.physical))
             .map(|cpu| cpu.logical)
             .collect::<Vec<_>>();
+        if let Some(limit) = auxiliary_core_limit {
+            let selected = available
+                .iter()
+                .filter(|cpu| !mapping_cores.contains(&cpu.physical))
+                .map(|cpu| cpu.physical)
+                .fold(Vec::new(), |mut cores, core| {
+                    if cores.len() < limit && !cores.contains(&core) {
+                        cores.push(core);
+                    }
+                    cores
+                });
+            auxiliary.retain(|logical| {
+                available
+                    .iter()
+                    .find(|cpu| cpu.logical == *logical)
+                    .is_some_and(|cpu| selected.contains(&cpu.physical))
+            });
+        }
         if auxiliary.is_empty() {
-            auxiliary.extend(available.iter().map(|cpu| cpu.logical));
+            if matches!(auxiliary_core_limit, Some(0)) {
+                auxiliary.extend(mapping.iter().copied());
+            } else {
+                auxiliary.extend(available.iter().map(|cpu| cpu.logical));
+            }
         }
 
         Self { mapping, auxiliary }
@@ -227,7 +264,7 @@ mod tests {
             cpu(2, 2),
             cpu(6, 2),
         ];
-        let placement = CpuPlacement::from_available(&available, 2);
+        let placement = CpuPlacement::from_available(&available, 2, None);
         assert_eq!(placement.mapping, vec![0, 1]);
         assert_eq!(placement.auxiliary, vec![2, 6]);
     }
@@ -235,9 +272,26 @@ mod tests {
     #[test]
     fn insufficient_cores_use_smt_lanes_before_sharing() {
         let available = [cpu(2, 0), cpu(3, 0), cpu(6, 1), cpu(7, 1)];
-        let placement = CpuPlacement::from_available(&available, 4);
+        let placement = CpuPlacement::from_available(&available, 4, None);
         assert_eq!(placement.mapping, vec![2, 6, 3, 7]);
         assert_eq!(placement.auxiliary, vec![2, 3, 6, 7]);
+    }
+
+    #[test]
+    fn explicit_auxiliary_budget_retains_complete_next_physical_cores() {
+        let available = [
+            cpu(0, 0),
+            cpu(4, 0),
+            cpu(1, 1),
+            cpu(5, 1),
+            cpu(2, 2),
+            cpu(6, 2),
+            cpu(3, 3),
+            cpu(7, 3),
+        ];
+        let placement = CpuPlacement::from_available(&available, 2, Some(1));
+        assert_eq!(placement.mapping, vec![0, 1]);
+        assert_eq!(placement.auxiliary, vec![2, 6]);
     }
 
     fn cpu(logical: usize, core: i64) -> AvailableCpu {

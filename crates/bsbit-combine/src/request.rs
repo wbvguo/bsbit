@@ -10,7 +10,7 @@ pub(crate) const MAX_THREADS: u64 = 64;
 pub struct Input {
     /// Unique matrix-column label.
     pub sample: String,
-    /// Plain, gzip, or BGZF extended bedMethyl path.
+    /// Plain, gzip, or BGZF `CGmap` or extended bedMethyl path.
     pub path: PathBuf,
 }
 
@@ -32,6 +32,8 @@ pub struct Parameters {
     pub minimum_count: u64,
     /// Minimum valid-sample proportion, in parts per billion.
     pub minimum_sample_proportion_parts_per_billion: u32,
+    /// Retain only `CpG` sites when true.
+    pub cg_only: bool,
 }
 
 impl Default for Parameters {
@@ -39,6 +41,7 @@ impl Default for Parameters {
         Self {
             minimum_count: 1,
             minimum_sample_proportion_parts_per_billion: 0,
+            cg_only: false,
         }
     }
 }
@@ -48,11 +51,8 @@ impl Default for Parameters {
 pub struct Options {
     /// Ordered sample inputs. This order defines matrix column order.
     pub inputs: Vec<Input>,
-    /// Create-only destination, or filename template for `Both`.
-    ///
-    /// `Both` inserts `.level` and `.count` before the recognized BED/gzip
-    /// suffix and does not create this path itself.
-    pub output: PathBuf,
+    /// Prefix used to derive the level and/or count matrix path.
+    pub output_prefix: PathBuf,
     /// Per-sample values to emit.
     pub matrix_format: MatrixFormat,
     /// Encode the output as deterministic BGZF when true.

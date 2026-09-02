@@ -77,6 +77,7 @@ pub(super) const GENOTYPES: [Genotype; 10] = [
 pub(crate) struct SnpConfig {
     pub(crate) minimum_base_quality: u8,
     pub(crate) minimum_mapping_quality: u8,
+    pub(crate) ignore_orphans: bool,
     pub(crate) minimum_depth: u32,
     pub(crate) minimum_alternate_count: u32,
     pub(crate) minimum_alternate_fraction_parts_per_billion: u32,
@@ -101,6 +102,7 @@ impl From<Parameters> for SnpConfig {
         Self {
             minimum_base_quality: parameters.minimum_base_quality,
             minimum_mapping_quality: parameters.minimum_mapping_quality,
+            ignore_orphans: parameters.ignore_orphans,
             minimum_depth: parameters.minimum_depth,
             minimum_alternate_count: parameters.minimum_alternate_count,
             minimum_alternate_fraction_parts_per_billion: parameters

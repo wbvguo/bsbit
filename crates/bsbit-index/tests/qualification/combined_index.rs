@@ -299,7 +299,7 @@ fn combined_index_lookup_rank_and_sa16_match_tiny_directional_text() {
         expected.sort_unstable();
         assert_eq!(observed, expected, "pattern start {start}");
         assert_eq!(metrics.located_rows, interval.len());
-        assert!(metrics.lf_steps < interval.len() * SA_STRIDE);
+        assert!(metrics.lf_steps < interval.len() * u64::from(index.sa_stride().value()));
     }
 }
 

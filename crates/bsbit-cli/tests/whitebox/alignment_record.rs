@@ -6,8 +6,8 @@ use std::thread;
 
 use super::record_fixture::{SingleFixture, single_fixture};
 use super::{
-    PairedRecordComposer, RecordBuildError as AlignmentRecordError, append_u64,
-    bismark_methylation_call, build_sam_header, build_single_alignment_record,
+    PairedRecordComposer, RecordBuildError as AlignmentRecordError, SingleRecordComposer,
+    append_u64, bismark_methylation_call, build_sam_header, build_single_alignment_record,
     build_single_alignment_record_with_auxiliary_mode, checked_add_resource, decimal_digits,
     storage_len,
 };
@@ -474,6 +474,82 @@ fn direct_pair_preserves_full_reads_and_orients_3prime_soft_clips() {
 }
 
 #[test]
+fn direct_single_preserves_full_reads_and_orients_three_prime_soft_clips() {
+    let reference = reference(&[(b"chr", b"AACCGTGATCTAGGCTTACGGAAT")]);
+    let forward_retained = normalized(b"CCGTGA");
+    let reverse_retained = normalized(b"TCCGTA");
+    let forward_alignment = exact_alignment(&reference, b"CCGTGA", 2, BisulfiteStrand::OT);
+    let reverse_alignment = exact_alignment(&reference, b"TCCGTA", 16, BisulfiteStrand::CTOT);
+    let forward_full = normalized(b"CCGTGAAAAA");
+    let reverse_full = normalized(b"TCCGTACCCC");
+    let mut batch = AlignmentRecordBatch::new();
+    let mut composer = SingleRecordComposer::new();
+    composer
+        .push_retained_single_with_mapping_quality(
+            &reference,
+            b"forward",
+            BorrowedAlignmentRead::new(forward_full.bases(), b"ABCDEFGHIJ"),
+            0..forward_retained.bases().len(),
+            &forward_retained,
+            &forward_alignment,
+            AlignmentRecordLimits::default(),
+            AlignmentAuxiliaryMode::Minimal,
+            20,
+        )
+        .expect("forward clipped single builds");
+    composer
+        .push_retained_single_with_mapping_quality(
+            &reference,
+            b"reverse",
+            BorrowedAlignmentRead::new(reverse_full.bases(), b"123456789:"),
+            0..reverse_retained.bases().len(),
+            &reverse_retained,
+            &reverse_alignment,
+            AlignmentRecordLimits::default(),
+            AlignmentAuxiliaryMode::Minimal,
+            15,
+        )
+        .expect("reverse clipped single builds");
+    composer
+        .flush_into(&mut batch, AlignmentRecordLimits::default())
+        .expect("clipped singles flush");
+
+    let records = batch.records().collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].flag() & 0x1, 0);
+    assert_eq!(records[0].flag() & 0x10, 0);
+    assert_eq!(records[1].flag() & 0x1, 0);
+    assert_eq!(records[1].flag() & 0x10, 0x10);
+    assert_eq!(records[0].mapping_quality(), 20);
+    assert_eq!(records[1].mapping_quality(), 15);
+    assert_eq!(records[0].sequence(), b"CCGTGAAAAA");
+    assert_eq!(records[1].sequence(), b"GGGGTACGGA");
+    assert_eq!(records[1].quality(), Some(b":987654321".as_slice()));
+    assert_eq!(
+        records[0]
+            .cigar()
+            .iter()
+            .map(|run| (run.operation(), run.length()))
+            .collect::<Vec<_>>(),
+        vec![
+            (AlignmentCigarOp::Match, 6),
+            (AlignmentCigarOp::SoftClip, 4),
+        ]
+    );
+    assert_eq!(
+        records[1]
+            .cigar()
+            .iter()
+            .map(|run| (run.operation(), run.length()))
+            .collect::<Vec<_>>(),
+        vec![
+            (AlignmentCigarOp::SoftClip, 4),
+            (AlignmentCigarOp::Match, 6),
+        ]
+    );
+}
+
+#[test]
 fn unmapped_pair_preserves_primary_records_and_input_orientation() {
     let first = normalized(b"ACGTN");
     let second = normalized(b"TGCAN");
@@ -635,6 +711,141 @@ fn direct_fast_path_orients_bidirectional_soft_clips() {
             (AlignmentCigarOp::Match, 6),
             (AlignmentCigarOp::SoftClip, 2),
         ]
+    );
+}
+
+#[test]
+fn direct_single_fast_path_is_exact_and_rejects_distance_mismatch() {
+    let reference = reference(&[(b"chr", b"AACCGTGATCTAGGCTTACGGAAT")]);
+    let forward_alignment = exact_alignment(&reference, b"CCGTGA", 2, BisulfiteStrand::OT);
+    let reverse_alignment = exact_alignment(&reference, b"TCCGTA", 16, BisulfiteStrand::CTOT);
+    let forward = normalized(b"CCGTGA");
+    let reverse_full = normalized(b"TCCGTACCCC");
+    let mut batch = AlignmentRecordBatch::new();
+    let mut composer = SingleRecordComposer::new();
+
+    assert!(
+        composer
+            .try_push_ungapped_single(
+                &reference,
+                b"forward-fast",
+                BorrowedAlignmentRead::new(forward.bases(), b"ABCDEF"),
+                AlignmentPlacement::new(
+                    0,
+                    forward_alignment.interval(),
+                    forward_alignment.strand(),
+                    0,
+                ),
+                AlignmentRecordLimits::default(),
+                30,
+            )
+            .expect("exact single fast path succeeds")
+    );
+    assert!(
+        composer
+            .try_push_soft_clipped_ungapped_single(
+                &reference,
+                b"reverse-fast",
+                BorrowedAlignmentRead::new(reverse_full.bases(), b"123456789:"),
+                0..6,
+                AlignmentPlacement::new(
+                    0,
+                    reverse_alignment.interval(),
+                    reverse_alignment.strand(),
+                    0,
+                ),
+                AlignmentRecordLimits::default(),
+                20,
+            )
+            .expect("reverse clipped single fast path succeeds")
+    );
+    assert!(
+        !composer
+            .try_push_ungapped_single(
+                &reference,
+                b"distance-two",
+                BorrowedAlignmentRead::new(forward.bases(), b"ABCDEF"),
+                AlignmentPlacement::new(
+                    0,
+                    forward_alignment.interval(),
+                    forward_alignment.strand(),
+                    2,
+                ),
+                AlignmentRecordLimits::default(),
+                10,
+            )
+            .expect("distance mismatch defers to traceback")
+    );
+    composer
+        .flush_into(&mut batch, AlignmentRecordLimits::default())
+        .expect("single fast paths flush");
+    let records = batch.records().collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].query_name(), b"forward-fast");
+    assert_eq!(records[0].flag(), 0);
+    assert_eq!(records[0].mapping_quality(), 30);
+    assert_eq!(records[0].cigar()[0].length(), 6);
+    assert_eq!(records[1].query_name(), b"reverse-fast");
+    assert_eq!(records[1].flag(), 0x10);
+    assert_eq!(records[1].sequence(), b"GGGGTACGGA");
+    assert_eq!(records[1].quality(), Some(b":987654321".as_slice()));
+    assert_eq!(
+        records[1]
+            .cigar()
+            .iter()
+            .map(|run| (run.operation(), run.length()))
+            .collect::<Vec<_>>(),
+        vec![
+            (AlignmentCigarOp::SoftClip, 4),
+            (AlignmentCigarOp::Match, 6),
+        ]
+    );
+}
+
+#[test]
+fn direct_single_fast_path_accepts_certified_distance_two_and_rejects_shifted_gap_ties() {
+    let reference_index = reference(&[(b"chr", b"ACGT")]);
+    let read = normalized(b"AGGA");
+    let interval = ReferenceInterval::new(0, 4, ReferenceLength::new(4)).expect("interval");
+    let mut composer = SingleRecordComposer::new();
+    assert!(
+        composer
+            .try_push_ungapped_single(
+                &reference_index,
+                b"certified-d2",
+                BorrowedAlignmentRead::new(read.bases(), b"IIII"),
+                AlignmentPlacement::new(0, interval, BisulfiteStrand::OT, 2),
+                AlignmentRecordLimits::default(),
+                30,
+            )
+            .expect("certified distance-two placement is evaluated")
+    );
+    let mut batch = AlignmentRecordBatch::new();
+    composer
+        .flush_into(&mut batch, AlignmentRecordLimits::default())
+        .expect("certified record flushes");
+    let records = batch.records().collect::<Vec<_>>();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].query_name(), b"certified-d2");
+    assert_eq!(records[0].literal_nm(), 2);
+    assert_eq!(records[0].cigar()[0].operation(), AlignmentCigarOp::Match);
+    assert_eq!(records[0].cigar()[0].length(), 4);
+
+    let tie_reference = reference(&[(b"chr", b"AC")]);
+    let tie_read = normalized(b"CA");
+    let tie_interval = ReferenceInterval::new(0, 2, ReferenceLength::new(2)).expect("interval");
+    let mut tie_composer = SingleRecordComposer::new();
+    assert!(
+        !tie_composer
+            .try_push_ungapped_single(
+                &tie_reference,
+                b"shifted-gap-tie",
+                BorrowedAlignmentRead::new(tie_read.bases(), b"II"),
+                AlignmentPlacement::new(0, tie_interval, BisulfiteStrand::OT, 2),
+                AlignmentRecordLimits::default(),
+                30,
+            )
+            .expect("shifted-gap tie is evaluated")
     );
 }
 

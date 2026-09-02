@@ -4,6 +4,7 @@
 //! scoring and verification algorithms remain in `crate::verification`.
 
 pub mod candidate;
+pub mod fixed_seed;
 pub mod seed;
 
 pub(crate) mod combined_adaptive;

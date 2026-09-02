@@ -1,128 +1,122 @@
-# Prepare input data
+# Input data
 
-bsbit reads local FASTA and FASTQ files using strict validation. Malformed
-records and unsupported encodings are reported as errors.
+This page summarizes the inputs required at each stage. See [File
+formats](file-formats.md) for field definitions and examples.
 
-`bsbit align` accepts one FASTQ for standard directional single-end alignment,
-or synchronized paired FASTQ for caller-compatible directional or explicitly
-non-directional alignment. Neither layout requires genome-wide coverage:
-preprocessed WGBS, RRBS, and targeted bisulfite read sets share these input
-contracts. That compatibility does not add RRBS-specific trimming,
-restriction-site handling, target-panel interpretation, or assay-specific QC
-to bsbit.
+## Inputs by command
 
-## Compression and paths
+| Command | Required inputs | Optional input |
+|---|---|---|
+| [`bsbit index`](../guides/indexing.md) | Reference FASTA | — |
+| [`bsbit align`](../guides/alignment.md) | bsbit reference index and read 1 FASTQ | Read 2 FASTQ for paired-end data |
+| [`bsbit call meth`](../guides/methylation.md) | Prepared BAM and matching reference FASTA | Regions or target BED |
+| [`bsbit call snp`](../guides/variant-calling.md) | Prepared BAM and matching reference FASTA | Regions or target BED |
+| [`bsbit call joint`](../guides/variant-calling.md#run-joint-calling) | Prepared BAM and matching reference FASTA | Regions or target BED |
+| [`bsbit combine`](../guides/methylation-matrices.md) | Sorted CGmap and/or extended bedMethyl files | — |
 
-FASTA and FASTQ may be plain, gzip, or BGZF. Compression is decoded directly;
-do not pre-decompress FASTQ as a performance workaround.
+Malformed records, unsupported encodings, and incompatible inputs stop the
+command with an error.
 
-Reference-index construction and alignment stream sequentially through FASTA
-and FASTQ files. Calling requires random access: FASTA needs an adjacent `.fai`
-(and `.gzi` for BGZF), while BAM needs BAI or CSI. Ordinary gzip-compressed
-FASTA is not supported for calling.
+## Paths and compression
 
-Inputs must be regular local paths. stdin (`-`), URLs, object-store paths, and
-remote streaming are unsupported.
+| Input | Accepted form | Sidecars |
+|---|---|---|
+| FASTA for `index` | Plain or BGZF | None |
+| FASTA for `call` | Plain or BGZF | Plain: `.fai` optional; BGZF: `.fai` and `.gzi` required |
+| FASTQ | Plain, gzip, or BGZF | None |
+| BAM for `call` | BAM | Adjacent `.bai` required |
+| Target BED | Plain, gzip, or BGZF | None |
+| Methylation calls for `combine` | Plain, gzip, or BGZF | None |
 
-## Calling BAM and indexed reference
-
-Every `bsbit call meth`, `bsbit call snp`, and `bsbit call joint` run requires:
-
-- a coordinate-sorted BAM with an adjacent BAI or CSI;
-- mapped primary observations with an available MAPQ value; MAPQ 255 records
-  are excluded rather than interpreted as high confidence;
-- one unique structured bsbit `@PG` header line (program/run metadata, not a
-  per-read tag) declaring a caller-compatible alignment mode and exact reference
-  semantic digest, plus a string `XG:Z:CT|GA` tag on every mapped primary
-  record;
-- an authoritative FASTA with an adjacent `.fai`, plus `.gzi` when that FASTA
-  is BGZF-compressed; and
-- one biological sample per BAM. Multiple read groups are accepted only when
-  all nonempty `SM` fields agree.
-
-The FASTA must be the same assembly used for alignment. The caller fetches it
-in BAM dictionary order, normalizes case, recomputes the semantic digest, and
-compares it with BAM provenance. A same-name, same-length FASTA with different
-bases is rejected. The caller projects `SEQ` through `CIGAR` and ignores `MD`.
-
-Current single- and paired-end `bsbit align` outputs declare caller-compatible
-provenance and satisfy their documented MAPQ contracts. MAPQ 255 remains an
-unavailable score if encountered in external or older BAMs and is never
-interpreted as high confidence.
-
-Follow [BAM preparation](../guides/prepare-bam.md#prepare-bam-for-calling) before
-running a caller. Choose `meth`, `snp`, or `joint` in the [command-line
-reference](cli.md#choose-a-command).
+Inputs must be regular local files. stdin (`-`), URLs, object-store paths, and
+remote streams are not supported.
 
 ## FASTA reference
 
-- A record begins with `>` and a nonempty name.
-- The name is the first whitespace-delimited token in the header.
-- Names are case-sensitive and must be unique in the reference.
-- Sequence is normalized to uppercase.
-- The accepted alphabet is `A`, `C`, `G`, `T`, and `N` (case-insensitive).
-- Other IUPAC ambiguity codes are rejected rather than silently collapsed.
+- Each record starts with `>` and a nonempty, unique contig name.
+- The first whitespace-delimited header token is used as the contig name;
+  names are case-sensitive.
+- Sequence is case-insensitive and may contain only `A`, `C`, `G`, `T`, and
+  `N`.
 
-Use exactly the same FASTA assembly and contig naming convention for every
-artifact in one alignment workflow.
+!!! important "Use the same reference FASTA"
+
+    Use the same reference-genome FASTA for `bsbit index` and every downstream
+    `bsbit call` command. If the reference changes, rebuild the bsbit index and
+    realign the reads.
 
 ## FASTQ reads
 
-FASTQ is strict four-line input:
+bsbit accepts strict, unwrapped four-line FASTQ. The sequence must be nonempty,
+contain only `A`, `C`, `G`, `T`, or `N`, and have the same length as the
+printable Phred+33 quality string. If the `+` line repeats the header, the two
+must agree.
 
-```text
-@read-name
-ACGTT...
-+
-IIIII...
-```
-
-- The record name is the first whitespace-delimited header token.
-- Sequence must be nonempty and use `A`, `C`, `G`, `T`, or `N`.
-- Sequence and quality must each occupy one line and have equal lengths.
-- Quality bytes must be printable Phred+33 characters.
-- If the `+` line repeats a header suffix, it must agree with the record header.
+Preprocessed WGBS, RRBS, and targeted bisulfite reads follow the same rules.
+bsbit does not perform assay-specific trimming or read QC.
 
 ## Paired-read synchronization
 
-The paired command takes mates through `bsbit align --read1 R1 --read2 R2`.
-R1 and R2 must end together and remain synchronized by ordinal and name.
-Accepted name forms are:
+Supply mates with `bsbit align -1 R1 -2 R2`. The files must contain the same
+number of records in the same order. Accepted name forms are:
 
-- identical source names, such as `instrument:run:read`; or
-- the matching pair `instrument:run:read/1` and
-  `instrument:run:read/2`.
+- identical names; or
+- matching `/1` and `/2` suffixes.
 
-The shared stem becomes the BAM query name. Reordered files, missing records,
-or inconsistent names stop the run.
+The shared name becomes the BAM query name. Reordered reads, missing mates, or
+inconsistent names stop the run.
 
-When provenance is uncertain, use the [paired-FASTQ troubleshooting
+When synchronization is uncertain, use the [paired-FASTQ troubleshooting
 checks](../help/troubleshooting.md#paired-fastq-names-or-counts-are-inconsistent)
-before a long run. Counts alone do not prove name synchronization; alignment
-validates every name and pair.
+before a long run.
 
 ## Library orientation
 
-`bsbit align` supports directional single-end reads when read 1 is supplied
-alone, directional paired-end reads by default when both mates are provided, and
-non-directional paired-end reads with `--non-directional`. It does not silently
-approximate PBAT. The exact conversion/orientation relations are defined in the
-[scientific contract](../scientific-contract.md).
+Directional alignment is used by default. Add `--non-directional` for a
+non-directional single-end or paired-end library; bsbit then makes one
+placement decision across all four supported bisulfite directions.
 
-Do not infer library orientation from coverage design. WGBS, RRBS, and targeted
-bisulfite experiments may each produce libraries with different orientation or
-preprocessing requirements; compatibility is determined by the actual library
-protocol, not by how much of the reference was assayed.
+Choose the setting from the library protocol, not from whether the experiment
+is WGBS, RRBS, or targeted. See the [alignment guide](../guides/alignment.md)
+for usage and the [scientific contract](../development/scientific-contract.md) for the
+conversion model.
 
-## Template span
+## Calling BAM and reference
 
-Standard paired `bsbit align` uses inclusive `--min-template-span` and
-`--max-template-span` bounds, defaulting to 0 and 1000. These paired-only flags
-are rejected for standard single-end input. Pairs may overlap or one mate may
-contain the other when the selected bounds permit it.
+Every `bsbit call` command requires:
+
+- a coordinate-sorted BAM with an adjacent `.bai`;
+- one caller-compatible bsbit `@PG` header and an `XG:Z:CT|GA` tag on every
+  mapped primary record;
+- numeric MAPQ values; records with MAPQ 255 are excluded; and
+- one biological sample per BAM. If multiple read groups define `SM`, their
+  nonempty values must agree.
+
+The reference must be the same FASTA used for alignment. The caller verifies
+its normalized sequence digest against the BAM provenance, so matching contig
+names and lengths alone is not sufficient.
+
+Follow [Prepare BAM file](../guides/prepare-bam.md#prepare-bam-for-calling)
+before calling.
+
+## Regions and target BED
+
+Calling can be limited with either `--region CONTIG:START-END` or
+`--regions-file targets.bed`, but not both. Inline regions use 1-based inclusive
+coordinates; BED uses 0-based half-open coordinates. See [BED target
+intervals](file-formats.md#bed-target-intervals) for the accepted file format.
+
+## Methylation calls for combine
+
+`bsbit combine` accepts one coordinate-sorted CGmap or extended bedMethyl file
+per sample. All inputs must use the same reference and compatible coordinates;
+the two formats may be mixed. See [Build methylation
+matrix](../guides/methylation-matrices.md) for sample naming and merge options.
 
 ## Next
 
 - [Build index](../guides/indexing.md)
 - [Align reads](../guides/alignment.md)
+- [Prepare BAM file](../guides/prepare-bam.md)
+- [File formats](file-formats.md)
 - [Troubleshoot rejected input](../help/troubleshooting.md)

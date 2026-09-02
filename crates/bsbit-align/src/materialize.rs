@@ -5,6 +5,9 @@ use core::fmt;
 use crate::extension::{ExtensionError, VerifiedAlignment, traceback_retained_placement_banded};
 use crate::score::EditDistance;
 use crate::verification::cigar::{CigarEvaluationError, evaluate_cigar};
+use crate::verification::distance::DistanceError;
+use crate::verification::prefix_filter::ungapped_traceback_at_most_two_certified_cached_nm;
+use crate::verification::ungapped::MAX_UNGAPPED_QUERY_BASES;
 use bsbit_core::alphabet::Base;
 use bsbit_core::bisulfite::{AlignmentOrientation, BisulfiteStrand, strand_semantics};
 use bsbit_core::cigar::CoreCigar;
@@ -51,6 +54,8 @@ pub enum AlignmentEvaluationError {
     },
     /// Ungapped evaluation requires equal nonzero sequence lengths.
     InvalidUngappedLengths,
+    /// Certified ungapped traceback construction failed.
+    Distance(DistanceError),
 }
 
 impl fmt::Display for AlignmentEvaluationError {
@@ -72,6 +77,9 @@ impl fmt::Display for AlignmentEvaluationError {
             Self::InvalidUngappedLengths => {
                 formatter.write_str("ungapped alignment sequences must have equal nonzero lengths")
             }
+            Self::Distance(error) => {
+                write!(formatter, "certified ungapped alignment failed: {error}")
+            }
         }
     }
 }
@@ -81,6 +89,7 @@ impl std::error::Error for AlignmentEvaluationError {
         match self {
             Self::Reference(error) => Some(error),
             Self::Cigar(error) => Some(error),
+            Self::Distance(error) => Some(error),
             Self::IntervalNotRepresentable
             | Self::DistanceMismatch { .. }
             | Self::InvalidUngappedLengths => None,
@@ -215,4 +224,129 @@ pub fn evaluate_ungapped_alignment(
         distance: evaluation.distance(),
         literal_nm: evaluation.literal_nm(),
     })
+}
+
+/// Evaluates a canonical all-match alignment when the exact ungapped path can
+/// be certified without an equally scoring shifted-gap path.
+///
+/// `Ok(None)` asks the caller to use the full canonical traceback. This occurs
+/// above distance two, for an equal-distance shifted-gap tie, or above the
+/// fixed read length supported by the aligner hot path.
+///
+/// # Errors
+///
+/// Returns [`AlignmentEvaluationError`] for unequal or empty spans and for a
+/// failed certified traceback result.
+pub fn evaluate_certified_ungapped_alignment(
+    reference_bases: &[Base],
+    raw_query: &[Base],
+    strand: BisulfiteStrand,
+) -> Result<Option<AlignmentEvaluation>, AlignmentEvaluationError> {
+    if reference_bases.is_empty() || reference_bases.len() != raw_query.len() {
+        return Err(AlignmentEvaluationError::InvalidUngappedLengths);
+    }
+    if raw_query.len() > MAX_UNGAPPED_QUERY_BASES {
+        return Ok(None);
+    }
+    let semantics = strand_semantics(strand);
+    let mut reverse_storage = [Base::N; MAX_UNGAPPED_QUERY_BASES];
+    let oriented_query = match semantics.orientation() {
+        AlignmentOrientation::Forward => raw_query,
+        AlignmentOrientation::Reverse => {
+            for (output, base) in reverse_storage.iter_mut().zip(raw_query.iter().rev()) {
+                *output = base.complement();
+            }
+            &reverse_storage[..raw_query.len()]
+        }
+    };
+    ungapped_traceback_at_most_two_certified_cached_nm(
+        reference_bases,
+        oriented_query,
+        semantics.cytosine_strand(),
+    )
+    .map_err(AlignmentEvaluationError::Distance)
+    .map(|certified| {
+        certified.map(|(traceback, literal_nm)| AlignmentEvaluation {
+            distance: traceback.distance(),
+            literal_nm,
+        })
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_query_certification_matches_the_oriented_certificate_exhaustively() {
+        for strand in [
+            BisulfiteStrand::OT,
+            BisulfiteStrand::OB,
+            BisulfiteStrand::CTOT,
+            BisulfiteStrand::CTOB,
+        ] {
+            let semantics = strand_semantics(strand);
+            for reference_first in Base::ALL {
+                for reference_second in Base::ALL {
+                    let reference = [reference_first, reference_second];
+                    for query_first in Base::ALL {
+                        for query_second in Base::ALL {
+                            let raw_query = [query_first, query_second];
+                            let oriented = match semantics.orientation() {
+                                AlignmentOrientation::Forward => raw_query.to_vec(),
+                                AlignmentOrientation::Reverse => raw_query
+                                    .iter()
+                                    .rev()
+                                    .map(|base| base.complement())
+                                    .collect(),
+                            };
+                            let expected = ungapped_traceback_at_most_two_certified_cached_nm(
+                                &reference,
+                                &oriented,
+                                semantics.cytosine_strand(),
+                            )
+                            .expect("short certificate is representable")
+                            .map(|(traceback, literal_nm)| AlignmentEvaluation {
+                                distance: traceback.distance(),
+                                literal_nm,
+                            });
+                            assert_eq!(
+                                evaluate_certified_ungapped_alignment(
+                                    &reference, &raw_query, strand,
+                                )
+                                .expect("valid short span"),
+                                expected,
+                                "strand={strand:?}, reference={reference:?}, query={raw_query:?}",
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn raw_query_certification_declines_unsupported_lengths() {
+        assert!(matches!(
+            evaluate_certified_ungapped_alignment(&[], &[], BisulfiteStrand::OT),
+            Err(AlignmentEvaluationError::InvalidUngappedLengths)
+        ));
+        assert!(matches!(
+            evaluate_certified_ungapped_alignment(
+                &[Base::A],
+                &[Base::A, Base::A],
+                BisulfiteStrand::OT,
+            ),
+            Err(AlignmentEvaluationError::InvalidUngappedLengths)
+        ));
+        assert_eq!(
+            evaluate_certified_ungapped_alignment(
+                &[Base::A; MAX_UNGAPPED_QUERY_BASES + 1],
+                &[Base::A; MAX_UNGAPPED_QUERY_BASES + 1],
+                BisulfiteStrand::OT,
+            )
+            .expect("long equal span is a fallback"),
+            None
+        );
+    }
 }

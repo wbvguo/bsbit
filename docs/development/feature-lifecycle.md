@@ -8,9 +8,9 @@ useful library capabilities.
 | Status | Meaning | Naming and placement |
 |---|---|---|
 | Supported capability | A product entry point or independently useful library build selected by users or release automation | Stable umbrella name; documented and covered by the release gate |
-| Development candidate | A new algorithm, comparison, profile, or ablation with an owner and a current runner | Not a tracked Cargo feature; source, runner, and evidence live in a dated ignored `agent/worktree/` attempt |
+| Development candidate | A new algorithm, comparison, profile, or ablation with an owner and a current runner | Not a tracked Cargo feature; source, runner, and evidence live in a dated ignored `workspace/worktree/` attempt |
 | Historical | A completed, rejected, or superseded experiment | Remove it from live Cargo features and product source; use Git history or an ignored detached worktree when recovery remains useful |
-| Unknown | Inherited development code whose runner or status cannot be established | Keep it outside the tracked crate tree; resolve it in `agent/worktree/` before promotion or retirement |
+| Unknown | Inherited development code whose runner or status cannot be established | Keep it outside the tracked crate tree; resolve it in `workspace/worktree/` before promotion or retirement |
 
 ## Current release inventory
 
@@ -37,24 +37,11 @@ gate, the observed result, and the production tests that preserve the result.
 Rejected implementations are absent from the tracked crate tree. Git history
 remains their durable recovery source.
 
-## Removed historical surface
-
-The cleanup that established this policy removed development, profiling, and
-rejected entries, then made the selected implementations ordinary code in
-their owning crates. Removing a stage switch does not reject its behavior: it
-makes the selected behavior an internal invariant covered by crate tests.
-
-Experiment-only analysis runners and candidate-specific dependencies stay with
-the dated attempts that own their evidence. Full pre-retirement snapshots
-remain only in ignored development attempts and Git history. Do not restore an
-old name as a compatibility alias: this workspace is not published as a
-feature-level API.
-
 ## Change checklist
 
 Before adding or retaining a feature:
 
-1. Create a dated `agent/worktree/` attempt and record its owner, question, and
+1. Create a dated `workspace/worktree/` attempt and record its owner, question, and
    predeclared promotion gate before changing a crate manifest.
 2. Keep the candidate source, feature switches, runners, profiles, and outputs
    in that attempt while the result is unresolved.
@@ -68,5 +55,5 @@ Before adding or retaining a feature:
    the winner into the owning product capability rather than retaining an
    experiment or stage switch.
 6. Put full source snapshots, runners, and measurements only in an ignored
-   dated `agent/worktree/` attempt when they have continuing local value; Git
+   dated `workspace/worktree/` attempt when they have continuing local value; Git
    history remains the durable archive.

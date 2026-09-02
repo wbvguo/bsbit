@@ -1,10 +1,21 @@
-//! Public region-selection contract.
+//! Public region-selection contract and crate-internal execution facade.
 
 mod planner;
+mod workers;
 
 pub(crate) use planner::{CallRegion, plan_call_regions};
+pub(crate) use workers::{IndexedCallMode, region_bases_for, stream_indexed_region_workers_mode};
 
 use std::path::PathBuf;
+
+use crate::meth::aggregation::DenseMethRegion;
+use crate::snp::result::VariantCall;
+
+#[derive(Debug, Default)]
+pub(crate) struct RegionAggregation {
+    pub(crate) meth: Option<DenseMethRegion>,
+    pub(crate) variants: Vec<(u32, VariantCall)>,
+}
 
 /// One zero-based, half-open genomic interval.
 #[derive(Clone, Debug, Eq, PartialEq)]

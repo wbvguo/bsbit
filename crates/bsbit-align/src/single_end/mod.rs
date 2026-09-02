@@ -7,4 +7,9 @@
 mod mapper;
 mod mapq;
 
-pub use mapper::{SingleAlignmentResult, SingleBatchAligner, SingleMappingStatus};
+/// Largest edit-distance budget supported by the single-end mapper.
+pub const SINGLE_MAX_EDIT_DISTANCE: u8 = crate::read_mapping_limits::MAX_EDIT_DISTANCE;
+
+pub use mapper::{
+    SingleAlignmentResult, SingleBatchAligner, SingleMappingStatus, SingleSearchMode,
+};

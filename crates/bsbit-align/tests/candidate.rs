@@ -16,7 +16,10 @@ use std::thread;
 
 use bsbit_align::search::candidate::{
     CandidateAnchor, CandidateDiagonal, CandidateError, CandidateLimits, CandidateSet,
-    FixedSeedPlan, FixedSeedRequest, SeedPlanError, SeedPlanLimits, candidates_for_fixed_seeds,
+    candidates_for_fixed_seeds,
+};
+use bsbit_align::search::fixed_seed::{
+    FixedSeedPlan, FixedSeedRequest, SeedPlanError, SeedPlanLimits,
 };
 use bsbit_core::bisulfite::BisulfiteStrand;
 use bsbit_core::coordinate::{

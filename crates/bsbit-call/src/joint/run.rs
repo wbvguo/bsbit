@@ -4,9 +4,10 @@ use bsbit_io::validate_distinct_paths;
 
 use super::Options;
 use crate::call_input::{prepare_call_input, resolve_sample_name, validate_explicit_sample_name};
+use crate::meth::Parameters as MethParameters;
 use crate::meth::output::{UnresolvedContextSummary, render_region as render_meth_region};
 use crate::publication::{create_text_staging, output_write_error, publication_warning};
-use crate::region_workers::{IndexedCallMode, stream_indexed_region_workers_mode};
+use crate::region::{IndexedCallMode, stream_indexed_region_workers_mode};
 use crate::snp::output::{render_header as render_vcf_header, render_region as render_vcf_region};
 use crate::snp::result::SnpConfig;
 use crate::{CallError, CallErrorKind, CallReport};
@@ -21,6 +22,13 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
         )
     })?;
     let config = SnpConfig::from(options.parameters);
+    let meth_parameters = MethParameters {
+        minimum_base_quality: options.parameters.minimum_base_quality,
+        minimum_mapping_quality: options.parameters.minimum_mapping_quality,
+        minimum_depth: options.parameters.minimum_depth,
+        cg_only: options.cg_only,
+        ignore_orphans: options.parameters.ignore_orphans,
+    };
     let mode = IndexedCallMode::Joint(config);
     validate_explicit_sample_name("call joint", options.sample_name.as_deref())?;
     let input = prepare_call_input(
@@ -66,6 +74,7 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
             render_meth_region(
                 &mut meth_output,
                 options.meth_format,
+                meth_parameters,
                 &input.references,
                 meth,
                 &mut summary,
@@ -89,14 +98,14 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
             error,
         )
     })?;
-    let meth_publication = meth_completed.publish_create_new().map_err(|error| {
+    let meth_publication = meth_completed.publish_replace().map_err(|error| {
         CallError::with_source(
             CallErrorKind::Publication,
             "call joint: publish methylation output",
             error,
         )
     })?;
-    let vcf_publication = match vcf_completed.publish_create_new() {
+    let vcf_publication = match vcf_completed.publish_replace() {
         Ok(publication) => publication,
         Err(error) => {
             meth_publication.rollback().map_err(|rollback| {

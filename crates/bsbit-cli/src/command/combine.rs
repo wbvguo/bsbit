@@ -20,11 +20,20 @@ pub(super) fn parse_combine(arguments: &[String]) -> Result<Action, CliError> {
     let mut input_specs = Vec::new();
     let mut sample_name_specs = Vec::new();
     let mut scalar_options = Vec::new();
+    let mut cg_only = false;
     let mut cursor = 0;
     while cursor < normalized.len() {
         let option = &normalized[cursor];
         if !option.starts_with("--") {
             return Err(CliError::usage(format!("unknown option `{option}`")));
+        }
+        if option == "--cg-only" {
+            if cg_only {
+                return Err(CliError::usage("duplicate option `--cg-only`"));
+            }
+            cg_only = true;
+            cursor += 1;
+            continue;
         }
         let Some(value) = normalized.get(cursor + 1) else {
             return Err(CliError::usage(format!("missing value for `{option}`")));
@@ -50,7 +59,7 @@ pub(super) fn parse_combine(arguments: &[String]) -> Result<Action, CliError> {
     let (mut values, _) = option_map(
         &scalar_options,
         &[
-            "--output",
+            "--prefix",
             "--matrix",
             "--compress",
             "--threads",
@@ -59,7 +68,7 @@ pub(super) fn parse_combine(arguments: &[String]) -> Result<Action, CliError> {
         ],
         &[],
     )?;
-    let output = required_path(&mut values, "--output")?;
+    let output_prefix = required_path(&mut values, "--prefix")?;
     let matrix_format = match values.remove("--matrix").as_deref().unwrap_or("level") {
         "level" => CombineMatrixFormat::Level,
         "count" => CombineMatrixFormat::Count,
@@ -74,7 +83,7 @@ pub(super) fn parse_combine(arguments: &[String]) -> Result<Action, CliError> {
         .remove("--compress")
         .map(|value| parse_bool("--compress", &value))
         .transpose()?
-        .unwrap_or(false);
+        .unwrap_or(true);
     let threads = parse_threads(&mut values)?;
     let minimum_count = optional_u64(&mut values, "--min-count")?.unwrap_or(1);
     let minimum_sample_proportion_parts_per_billion =
@@ -84,13 +93,14 @@ pub(super) fn parse_combine(arguments: &[String]) -> Result<Action, CliError> {
 
     Ok(Action::Combine(CombineOptions {
         inputs,
-        output,
+        output_prefix,
         matrix_format,
         compress,
         threads,
         parameters: CombineParameters {
             minimum_count,
             minimum_sample_proportion_parts_per_billion,
+            cg_only,
         },
     }))
 }
@@ -168,7 +178,7 @@ fn normalize_combine_options(arguments: &[String]) -> Result<Vec<String>, CliErr
         .map(|argument| {
             Ok(match argument.as_str() {
                 "-i" => String::from("--input"),
-                "-o" => String::from("--output"),
+                "-p" => String::from("--prefix"),
                 "-m" => String::from("--matrix"),
                 "-c" => String::from("--compress"),
                 "-t" => String::from("--threads"),

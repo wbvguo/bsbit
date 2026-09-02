@@ -1,4 +1,4 @@
-//! White-box tests for the combined-SA16-builder implementation.
+//! White-box tests for the combined sparse-SA builder implementation.
 //!
 //! Kept outside production `src/` while remaining a child module so private
 //! invariants can be tested without widening the crate API.
@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::reference::ContigInput;
+use crate::storage::combined_format::{META_EXTENSION_MINOR, META_EXTENSION_MINOR_SA8};
 use bsbit_core::sequence::normalize_dna;
 
 use super::*;
@@ -66,7 +67,7 @@ fn metadata_binds_the_combined_image_to_the_reference_digest() {
             bwt_words: 3,
             high_occ_entries: 2,
         },
-        16,
+        CombinedIndexSaStride::Sixteen,
         digest,
     )
     .expect("write bound metadata");
@@ -85,6 +86,48 @@ fn metadata_binds_the_combined_image_to_the_reference_digest() {
         digest.as_bytes()
     );
     assert_eq!(&bytes[116..120], &[0; 4]);
+    assert_eq!(read_u32_at(&bytes, 56), 16);
+    assert_eq!(
+        u16::from_le_bytes(bytes[78..80].try_into().expect("minor bytes")),
+        META_EXTENSION_MINOR
+    );
+}
+
+#[test]
+fn metadata_distinguishes_balanced_and_fast_sparse_sa_layouts() {
+    let directory = TestDirectory::new("stride-metadata");
+    let dimensions = BwtDimensions {
+        suffix_count: 17,
+        sentinel_row: 3,
+        first_occurrence: [1, 5, 9, 17],
+        bwt_words: 3,
+        high_occ_entries: 2,
+    };
+    let digest = ReferenceSemanticDigest::from_bytes([0x5a; 32]);
+    for (name, stride, expected_value, expected_minor) in [
+        (
+            "balanced",
+            CombinedIndexSaStride::Sixteen,
+            16,
+            META_EXTENSION_MINOR,
+        ),
+        (
+            "fast",
+            CombinedIndexSaStride::Eight,
+            8,
+            META_EXTENSION_MINOR_SA8,
+        ),
+    ] {
+        let path = directory.path(name);
+        let file = create_new_file(&path).expect("create metadata file");
+        write_metadata(&file, dimensions, stride, digest).expect("write stride metadata");
+        let bytes = fs::read(path).expect("read stride metadata");
+        assert_eq!(read_u32_at(&bytes, 56), expected_value);
+        assert_eq!(
+            u16::from_le_bytes(bytes[78..80].try_into().expect("minor bytes")),
+            expected_minor
+        );
+    }
 }
 
 #[test]

@@ -133,12 +133,16 @@ fn indexed_bsbit_fixture_with_contract(
     input
 }
 
-fn indexed_fasta_fixture(directory: &std::path::Path) -> PathBuf {
+fn plain_fasta_fixture(directory: &std::path::Path) -> PathBuf {
     let fasta = directory.join("reference.fa");
     let mut contents = b">chr1\n".to_vec();
     contents.extend_from_slice(FIXTURE_REFERENCE);
     contents.push(b'\n');
     fs::write(&fasta, contents).expect("fixture FASTA writes");
+    fasta
+}
+
+fn write_fixture_fai(fasta: &std::path::Path) {
     fs::write(
         fasta.with_extension("fa.fai"),
         format!(
@@ -149,6 +153,11 @@ fn indexed_fasta_fixture(directory: &std::path::Path) -> PathBuf {
         ),
     )
     .expect("fixture FAI writes");
+}
+
+fn indexed_fasta_fixture(directory: &std::path::Path) -> PathBuf {
+    let fasta = plain_fasta_fixture(directory);
+    write_fixture_fai(&fasta);
     fasta
 }
 
@@ -229,6 +238,7 @@ fn module_entry_points_validate_before_opening_inputs() {
         vcf_output: PathBuf::from("missing.vcf"),
         compress: false,
         threads: bsbit_call::MAX_THREADS + 1,
+        cg_only: false,
         parameters: snp::Parameters::default(),
     })
     .expect_err("excess joint threads must fail before input is opened");
@@ -246,6 +256,7 @@ fn module_entry_points_validate_before_opening_inputs() {
         vcf_output: same_output,
         compress: true,
         threads: 1,
+        cg_only: false,
         parameters: snp::Parameters::default(),
     })
     .expect_err("joint output aliases must fail before input is opened");
@@ -297,30 +308,83 @@ fn reference_backed_call_rejects_same_length_wrong_fasta_even_with_md() {
 }
 
 #[test]
-fn caller_accepts_calibrated_single_alignment_contracts() {
-    let directory = unique_directory("calibrated-single-alignment-contract");
+fn caller_scans_plain_fasta_without_creating_a_missing_fai() {
+    let directory = unique_directory("plain-reference-without-fai");
     fs::create_dir(&directory).expect("fixture directory");
-    let input = indexed_bsbit_fixture_with_contract(
-        &directory,
-        AlignmentAuxiliaryMode::Minimal,
-        BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
-    );
-    let reference = indexed_fasta_fixture(&directory);
-    let output = directory.join("single.cgmap");
+    let input = indexed_bsbit_fixture(&directory);
+    let reference = plain_fasta_fixture(&directory);
+    let direct_output = directory.join("direct.cgmap");
 
+    meth::call(&meth::Options {
+        input: input.clone(),
+        reference: reference.clone(),
+        regions: RegionSelection::default(),
+        output: direct_output.clone(),
+        format: meth::OutputFormat::Cgmap,
+        compress: false,
+        threads: 2,
+        parameters: meth::Parameters::default(),
+    })
+    .expect("plain FASTA without FAI is scanned directly");
+
+    let fai = reference.with_extension("fa.fai");
+    assert!(!fai.exists());
+    write_fixture_fai(&reference);
+    let indexed_output = directory.join("indexed.cgmap");
     meth::call(&meth::Options {
         input,
         reference,
         regions: RegionSelection::default(),
-        output: output.clone(),
+        output: indexed_output.clone(),
         format: meth::OutputFormat::Cgmap,
         compress: false,
-        threads: 1,
+        threads: 2,
         parameters: meth::Parameters::default(),
     })
-    .expect("calibrated single-end alignment is caller-compatible");
+    .expect("existing FAI path remains supported");
 
-    assert!(output.exists());
+    assert_eq!(
+        fs::read(&direct_output).expect("direct output reads"),
+        fs::read(&indexed_output).expect("indexed output reads")
+    );
+    fs::remove_dir_all(directory).expect("fixture cleanup");
+}
+
+#[test]
+fn caller_accepts_calibrated_single_alignment_contracts() {
+    let directory = unique_directory("calibrated-single-alignment-contract");
+    fs::create_dir(&directory).expect("fixture directory");
+    for (name, mode) in [
+        (
+            "directional",
+            BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
+        ),
+        (
+            "non-directional",
+            BsbitAlignmentMode::CallerCompatibleNondirectionalSingle,
+        ),
+    ] {
+        let fixture = directory.join(name);
+        fs::create_dir(&fixture).expect("mode fixture directory");
+        let input =
+            indexed_bsbit_fixture_with_contract(&fixture, AlignmentAuxiliaryMode::Minimal, mode);
+        let reference = indexed_fasta_fixture(&fixture);
+        let output = fixture.join("single.cgmap");
+
+        meth::call(&meth::Options {
+            input,
+            reference,
+            regions: RegionSelection::default(),
+            output: output.clone(),
+            format: meth::OutputFormat::Cgmap,
+            compress: false,
+            threads: 1,
+            parameters: meth::Parameters::default(),
+        })
+        .expect("calibrated single-end alignment is caller-compatible");
+
+        assert!(output.exists());
+    }
     fs::remove_dir_all(directory).expect("fixture cleanup");
 }
 
@@ -407,6 +471,7 @@ fn real_meth_snp_and_joint_calls_share_outputs() {
         vcf_output: joint_vcf_output.clone(),
         compress: true,
         threads: 2,
+        cg_only: false,
         parameters,
     })
     .expect("real joint call succeeds");

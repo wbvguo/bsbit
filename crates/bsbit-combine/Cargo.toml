@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
-description = "Bounded-memory methylation matrix assembly for bsbit bedMethyl outputs"
+description = "Bounded-memory methylation matrix assembly for bsbit methylation outputs"
 autobins = false
 autobenches = false
 

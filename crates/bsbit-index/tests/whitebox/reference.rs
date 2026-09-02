@@ -4,6 +4,9 @@
 //! invariants can be tested without widening the crate API.
 
 use super::*;
+use crate::reference::validate_reference_catalog;
+#[cfg(feature = "combined-index")]
+use crate::storage::fm::ProjectedBase;
 use bsbit_core::sequence::normalize_dna;
 
 #[cfg(feature = "combined-index")]
@@ -47,6 +50,81 @@ impl PrivateCombinedIndex for LengthOnlyCombined {
     }
 }
 
+#[cfg(feature = "combined-index")]
+struct DiagnosticCombined;
+
+#[cfg(feature = "combined-index")]
+impl PrivateCombinedIndex for DiagnosticCombined {
+    fn reference_len(&self) -> u64 {
+        64
+    }
+
+    fn exact_interval(
+        &self,
+        _reversed_projected_pattern: &[SearchBase],
+    ) -> Result<Option<FmInterval>, CombinedIndexBackendError> {
+        Ok(None)
+    }
+
+    fn resolve_projected_suffix_intervals(
+        &self,
+        patterns: &[&[ProjectedBase]],
+        _minimum_suffix_bases: usize,
+        _stop_interval_length: u64,
+        output: &mut [Option<(FmInterval, u64)>],
+    ) -> Result<(), CombinedIndexBackendError> {
+        if patterns.len() != 2 || output.len() != 2 {
+            return Err(CombinedIndexBackendError::Structure);
+        }
+        output[0] = Some((
+            FmInterval::private_checked(10, 14, 129)
+                .map_err(|_| CombinedIndexBackendError::Structure)?,
+            18,
+        ));
+        output[1] = Some((
+            FmInterval::private_checked(20, 21, 129)
+                .map_err(|_| CombinedIndexBackendError::Structure)?,
+            20,
+        ));
+        Ok(())
+    }
+
+    fn backward_extend_interval(
+        &self,
+        _interval: FmInterval,
+        _symbol: SearchBase,
+    ) -> Result<FmInterval, CombinedIndexBackendError> {
+        Err(CombinedIndexBackendError::Structure)
+    }
+
+    fn backward_extend_projected_interval(
+        &self,
+        _interval: FmInterval,
+        _symbol: ProjectedBase,
+    ) -> Result<FmInterval, CombinedIndexBackendError> {
+        Err(CombinedIndexBackendError::Structure)
+    }
+
+    fn visit_interval(
+        &self,
+        interval: FmInterval,
+        _visitor: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<PrivateCombinedLocateMetrics, CombinedIndexBackendError> {
+        Ok(PrivateCombinedLocateMetrics::new(interval.len(), 0, 0, 0))
+    }
+
+    fn visit_intervals_two_lanes_complete(
+        &self,
+        intervals: [FmInterval; 2],
+        _visitor: &mut dyn FnMut(usize, u64),
+    ) -> Result<[PrivateCombinedLocateMetrics; 2], CombinedIndexBackendError> {
+        Ok([
+            PrivateCombinedLocateMetrics::new(intervals[0].len(), 7, 9, 2),
+            PrivateCombinedLocateMetrics::new(intervals[1].len(), 11, 13, 3),
+        ])
+    }
+}
+
 fn catalog_fixture() -> Vec<ContigInput> {
     vec![
         ContigInput::new(
@@ -86,6 +164,48 @@ fn combined_owner_validates_length_and_retains_reference_metrics() {
             expected_reference_len: 4,
             observed_reference_len: 3,
         }
+    );
+}
+
+#[cfg(feature = "combined-index")]
+#[test]
+fn optional_query_diagnostics_count_suffix_rank_and_complete_locate_work() {
+    let reference = ReferenceIndex::from_private_combined(
+        vec![ContigInput::new(
+            b"chr".to_vec(),
+            normalize_dna(&[b'A'; 64]).unwrap(),
+        )],
+        PrivateCombinedReference::new(Box::new(DiagnosticCombined)),
+    )
+    .unwrap();
+    reference.enable_query_diagnostics();
+    let query = reference.combined_index_query().unwrap();
+    let first = [ProjectedBase::A; 20];
+    let second = [ProjectedBase::G; 20];
+    let mut intervals = [None; 2];
+    query
+        .resolve_projected_suffix_intervals(&[&first, &second], 16, 1, &mut intervals)
+        .unwrap();
+    let intervals = intervals.map(|interval| interval.unwrap().0);
+    query
+        .visit_raw_intervals_two_lanes_complete(intervals, &mut |_, _| {})
+        .unwrap();
+
+    let diagnostics = reference.disable_and_take_query_diagnostics();
+    assert_eq!(diagnostics.suffix_search_lanes(), 2);
+    assert_eq!(diagnostics.suffix_search_rank_operations(), 14);
+    assert_eq!(diagnostics.locate_calls(), 2);
+    assert_eq!(diagnostics.singleton_locate_calls(), 1);
+    assert_eq!(diagnostics.multi_hit_locate_calls(), 1);
+    assert_eq!(diagnostics.located_rows(), 5);
+    assert_eq!(diagnostics.locate_lf_steps(), 18);
+    assert_eq!(diagnostics.locate_rank_operations(), 22);
+    assert_eq!(diagnostics.locate_interval_nodes(), 5);
+
+    reference.enable_query_diagnostics();
+    assert_eq!(
+        reference.disable_and_take_query_diagnostics(),
+        ReferenceQueryDiagnostics::default()
     );
 }
 

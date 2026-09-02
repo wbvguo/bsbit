@@ -4,9 +4,9 @@
 //! invariants can be tested without widening the crate API.
 
 use super::{
-    AlignmentAuxiliaryMode, HELP, MetricsTimer, PairedLibraryProfile, PairedSearchMode, ReadLayout,
-    ReadOutputMode, parse_options_from, sensitive_mapq_zero_strategy_id,
-    sensitive_read_complete_strategy_id, strategy_id,
+    AlignmentAuxiliaryMode, HELP, LibraryProfile, MetricsTimer, ReadLayout, ReadOutputMode,
+    SearchMode, parse_options_from, sensitive_mapq_zero_strategy_id,
+    sensitive_read_complete_strategy_id, strategy_id, throughput_thread_split,
 };
 use std::ffi::OsString;
 
@@ -24,9 +24,15 @@ fn help_exposes_only_default_and_sensitive_modes() {
     assert!(HELP.contains("--mapped-only"));
     assert!(HELP.contains("minimal|bismark"));
     assert!(HELP.contains("--non-directional"));
+    assert!(HELP.contains("four-strand SE"));
     assert!(HELP.contains("--read1 only"));
     assert!(HELP.contains("-1, --read1 PATH"));
     assert!(HELP.contains("-2, --read2 PATH"));
+    assert!(HELP.contains("-x, --index PATH"));
+    assert!(!HELP.contains("-i, --index PATH"));
+    assert!(HELP.contains("-o, --output PATH"));
+    assert!(HELP.contains("--compression-threads"));
+    assert!(HELP.contains("--compression-level"));
     assert!(HELP.contains("same persisted combined index and bounded d3/d5"));
     for hidden in [
         "align-general",
@@ -54,13 +60,13 @@ fn help_exposes_only_default_and_sensitive_modes() {
 }
 
 #[test]
-fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
+fn standard_single_input_supports_shared_output_policy_and_pair_only_options_fail_closed() {
     let single = [
         "--index",
         "reference.bsbit",
         "--read1",
         "reads.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from)
@@ -70,7 +76,24 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     assert!(parsed.read2.is_none());
     assert_eq!(parsed.threads, 1);
     assert_eq!(parsed.bam_threads, 1);
+    assert_eq!(parsed.auxiliary_core_budget, None);
+    assert_eq!(parsed.total_thread_budget, None);
     assert_eq!(parsed.bam_compression_level, Some(1));
+    assert_eq!(parsed.output_contract, AlignmentAuxiliaryMode::Minimal);
+    assert_eq!(parsed.read_output, ReadOutputMode::Complete);
+
+    let mut sensitive = single.clone();
+    sensitive.push(OsString::from("--sensitive"));
+    let parsed = parse_options_from(sensitive).expect("single-end sensitive input parses");
+    assert_eq!(parsed.layout, ReadLayout::SingleEnd);
+    assert_eq!(parsed.search_mode, SearchMode::Sensitive);
+
+    let mut non_directional = single.clone();
+    non_directional.push(OsString::from("--non-directional"));
+    let parsed =
+        parse_options_from(non_directional).expect("non-directional single-end input parses");
+    assert_eq!(parsed.layout, ReadLayout::SingleEnd);
+    assert_eq!(parsed.library_profile, LibraryProfile::NonDirectional);
 
     let mut threaded = single.clone();
     threaded.extend(["--threads", "4"].map(OsString::from));
@@ -82,29 +105,95 @@ fn standard_single_input_is_first_class_and_pair_only_options_fail_closed() {
     );
 
     let mut explicit_bam = single.clone();
-    explicit_bam
-        .extend(["--bam-threads", "2", "--bam-compression-level", "default"].map(OsString::from));
+    explicit_bam.extend(
+        [
+            "--compression-threads",
+            "2",
+            "--compression-level",
+            "default",
+        ]
+        .map(OsString::from),
+    );
     let parsed = parse_options_from(explicit_bam).expect("single-end BAM controls parse");
     assert_eq!(parsed.bam_threads, 2);
     assert_eq!(parsed.bam_compression_level, None);
 
-    for arguments in [
-        [single.clone(), vec![OsString::from("--sensitive")]].concat(),
+    let mut metrics = single.clone();
+    metrics.push(OsString::from("--metrics"));
+    assert!(
+        parse_options_from(metrics)
+            .expect("single-end metrics parse")
+            .emit_metrics
+    );
+
+    let mut bismark = single.clone();
+    bismark.extend(["--output-contract", "bismark"].map(OsString::from));
+    assert_eq!(
+        parse_options_from(bismark)
+            .expect("single-end Bismark output parses")
+            .output_contract,
+        AlignmentAuxiliaryMode::Bismark
+    );
+
+    let mut mapped_only = single.clone();
+    mapped_only.push(OsString::from("--mapped-only"));
+    assert_eq!(
+        parse_options_from(mapped_only)
+            .expect("single-end mapped-only output parses")
+            .read_output,
+        ReadOutputMode::MappedOnly
+    );
+
+    let mut pair_only = single;
+    pair_only.extend(["--batch-pairs", "32"].map(OsString::from));
+    assert!(
+        parse_options_from(pair_only)
+            .expect_err("paired-only option must reject single input")
+            .to_string()
+            .contains("requires paired input via --read2")
+    );
+}
+
+#[test]
+fn paired_total_thread_budget_selects_qualified_mapping_output_splits() {
+    assert_eq!(throughput_thread_split(1, false), (1, 0));
+    assert_eq!(throughput_thread_split(2, false), (1, 1));
+    assert_eq!(throughput_thread_split(10, false), (8, 2));
+    assert_eq!(throughput_thread_split(14, false), (11, 3));
+    assert_eq!(throughput_thread_split(14, true), (10, 4));
+    assert_eq!(throughput_thread_split(64, false), (60, 4));
+    assert_eq!(throughput_thread_split(64, true), (60, 4));
+
+    let paired = || {
         [
-            single.clone(),
-            vec![
-                OsString::from("--output-contract"),
-                OsString::from("bismark"),
-            ],
+            "--index",
+            "reference.bsbit",
+            "--read1",
+            "r1.fastq.gz",
+            "--read2",
+            "r2.fastq.gz",
+            "--output",
+            "output.bam",
         ]
-        .concat(),
-        [single, vec![OsString::from("--metrics")]].concat(),
-    ] {
-        assert!(
-            parse_options_from(arguments)
-                .expect_err("paired-only option must reject single input")
-                .to_string()
-                .contains("requires paired input via --read2")
+        .map(OsString::from)
+        .to_vec()
+    };
+    let mut automatic = paired();
+    automatic.extend(["--total-threads", "14"].map(OsString::from));
+    let automatic = parse_options_from(automatic).expect("total budget parses");
+    assert_eq!(automatic.threads, 11);
+    assert_eq!(automatic.bam_threads, 3);
+    assert_eq!(automatic.auxiliary_core_budget, Some(3));
+    assert_eq!(automatic.total_thread_budget, Some(14));
+
+    for explicit in ["--threads", "--compression-threads"] {
+        let mut conflicting = paired();
+        conflicting.extend(["--total-threads", "14", explicit, "2"].map(OsString::from));
+        assert_eq!(
+            parse_options_from(conflicting)
+                .expect_err("automatic and explicit thread controls conflict")
+                .to_string(),
+            "--total-threads conflicts with --threads and --compression-threads"
         );
     }
 }
@@ -116,7 +205,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "reference.bsbit",
         "-1",
         "single.fastq.gz",
-        "--output-bam",
+        "--output",
         "single.bam",
     ]
     .map(OsString::from);
@@ -132,7 +221,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "r1.fastq.gz",
         "-2",
         "r2.fastq.gz",
-        "--output-bam",
+        "--output",
         "paired.bam",
     ]
     .map(OsString::from);
@@ -150,7 +239,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
             "reference.bsbit",
             retired,
             "reads.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from);
@@ -169,7 +258,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "first.fastq.gz",
         "-1",
         "second.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from);
@@ -185,7 +274,7 @@ fn read_layout_accepts_canonical_short_forms_and_rejects_retired_spellings() {
         "reference.bsbit",
         "-2",
         "r2.fastq.gz",
-        "--output-bam",
+        "--output",
         "output.bam",
     ]
     .map(OsString::from);
@@ -207,7 +296,7 @@ fn minimal_is_default_and_bismark_output_is_explicit() {
             "reads.R1.fastq.gz",
             "--read2",
             "reads.R2.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from)
@@ -216,7 +305,7 @@ fn minimal_is_default_and_bismark_output_is_explicit() {
 
     let defaults = parse_options_from(required()).expect("default output contract");
     assert_eq!(defaults.output_contract, AlignmentAuxiliaryMode::Minimal);
-    assert_eq!(defaults.library_profile, PairedLibraryProfile::Directional);
+    assert_eq!(defaults.library_profile, LibraryProfile::Directional);
     let mut compatible = required();
     compatible.extend(["--output-contract", "bismark"].map(OsString::from));
     assert_eq!(
@@ -231,7 +320,7 @@ fn minimal_is_default_and_bismark_output_is_explicit() {
     let non_directional = parse_options_from(non_directional).expect("non-directional defaults");
     assert_eq!(
         non_directional.library_profile,
-        PairedLibraryProfile::NonDirectional
+        LibraryProfile::NonDirectional
     );
     assert_eq!(
         non_directional.output_contract,
@@ -276,7 +365,7 @@ fn parser_accepts_only_the_opaque_index_handle_and_rejects_duplicate_value_flags
         "r1.fq",
         "--read2",
         "r2.fq",
-        "--output-bam",
+        "--output",
         "out.bam",
     ]
     .map(OsString::from)
@@ -347,7 +436,7 @@ fn public_modes_select_fixed_default_and_sensitive_strategies() {
             "reads.R1.fastq.gz",
             "--read2",
             "reads.R2.fastq.gz",
-            "--output-bam",
+            "--output",
             "output.bam",
         ]
         .map(OsString::from)
@@ -359,7 +448,7 @@ fn public_modes_select_fixed_default_and_sensitive_strategies() {
         strategy_id(&default),
         "balanced-d5-adapter-recovery-read-complete-v2"
     );
-    assert_eq!(default.search_mode, PairedSearchMode::Default);
+    assert_eq!(default.search_mode, SearchMode::Default);
     assert_eq!(default.read_output, ReadOutputMode::Complete);
 
     let mut default_mapped_only = required();
@@ -379,7 +468,7 @@ fn public_modes_select_fixed_default_and_sensitive_strategies() {
         strategy_id(&sensitive),
         sensitive_read_complete_strategy_id()
     );
-    assert_eq!(sensitive.search_mode, PairedSearchMode::Sensitive);
+    assert_eq!(sensitive.search_mode, SearchMode::Sensitive);
     assert_eq!(sensitive.read_output, ReadOutputMode::Complete);
 
     let mut mapped_only = required();

@@ -9,6 +9,7 @@
 use core::ffi::{c_char, c_int};
 use core::fmt;
 use core::marker::PhantomData;
+use core::mem::MaybeUninit;
 use core::ptr::NonNull;
 use std::ffi::{CStr, c_void};
 use std::rc::Rc;
@@ -846,7 +847,7 @@ pub struct NativeIndexedBamReader {
 }
 
 impl NativeIndexedBamReader {
-    /// Opens a BAM together with its adjacent BAI or CSI index.
+    /// Opens a BAM together with its adjacent index.
     pub fn open(path: &CStr) -> Result<Self, NativeError> {
         let mut handle = core::ptr::null_mut();
         let mut call = NativeCall::new();
@@ -1539,14 +1540,37 @@ impl Drop for NativeBamWriter {
 
 struct NativeCall {
     system_errno: c_int,
-    error: [c_char; ERROR_CAPACITY],
+    error: NativeErrorBuffer,
+}
+
+struct NativeErrorBuffer(MaybeUninit<[c_char; ERROR_CAPACITY]>);
+
+impl NativeErrorBuffer {
+    const fn new() -> Self {
+        Self(MaybeUninit::uninit())
+    }
+
+    fn as_mut_ptr(&mut self) -> *mut c_char {
+        self.0.as_mut_ptr().cast()
+    }
+
+    const fn len(&self) -> usize {
+        core::mem::size_of_val(&self.0)
+    }
+
+    fn message_bytes(&self) -> &[u8] {
+        // SAFETY: every shim entry point calls `set_result`, which initializes
+        // at least the first byte and always terminates copied error text. This
+        // method is reached only after one such call returned an error status.
+        unsafe { CStr::from_ptr(self.0.as_ptr().cast()).to_bytes() }
+    }
 }
 
 impl NativeCall {
     const fn new() -> Self {
         Self {
             system_errno: 0,
-            error: [0; ERROR_CAPACITY],
+            error: NativeErrorBuffer::new(),
         }
     }
 
@@ -1554,19 +1578,11 @@ impl NativeCall {
         let Some(status) = NativeStatus::from_raw(raw_status) else {
             return Ok(());
         };
-        let end = self
-            .error
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap_or(self.error.len());
-        let bytes: Vec<u8> = self.error[..end]
-            .iter()
-            .map(|byte| (*byte).cast_unsigned())
-            .collect();
+        let bytes = self.error.message_bytes();
         Err(NativeError {
             status,
             system_errno: self.system_errno,
-            message: String::from_utf8_lossy(&bytes).into_owned(),
+            message: String::from_utf8_lossy(bytes).into_owned(),
         })
     }
 }

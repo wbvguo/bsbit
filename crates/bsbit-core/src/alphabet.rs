@@ -80,6 +80,17 @@ impl Base {
             Self::N.0
         }
     }
+
+    /// Reconstructs a base from its stable normalized storage code.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn from_storage_code(code: u8) -> Option<Self> {
+        if code <= Self::N.0 {
+            Some(Self(code))
+        } else {
+            None
+        }
+    }
 }
 
 impl fmt::Debug for Base {

@@ -599,14 +599,14 @@ fn likelihood_mode(factors: &[AffineLogFactor]) -> f64 {
     let mut lower = 0.0_f64;
     let mut upper = 1.0_f64;
     for _ in 0..METHYLATION_MODE_ITERATIONS {
-        let middle = (lower + upper) * 0.5;
+        let middle = f64::midpoint(lower, upper);
         if affine_log_likelihood_derivative(factors, middle) > 0.0 {
             lower = middle;
         } else {
             upper = middle;
         }
     }
-    (lower + upper) * 0.5
+    f64::midpoint(lower, upper)
 }
 
 fn affine_log_likelihood(factors: &[AffineLogFactor], methylation: f64) -> f64 {
@@ -649,7 +649,7 @@ fn adaptive_simpson_interval(
     tolerance: f64,
     evaluate: &mut impl FnMut(f64) -> Result<f64, CallError>,
 ) -> Result<f64, CallError> {
-    let middle = (start + end) * 0.5;
+    let middle = f64::midpoint(start, end);
     let at_start = evaluate(start)?;
     let at_middle = evaluate(middle)?;
     let at_end = evaluate(end)?;
@@ -679,9 +679,9 @@ fn adaptive_simpson_refine(
     depth: u8,
     evaluate: &mut impl FnMut(f64) -> Result<f64, CallError>,
 ) -> Result<f64, CallError> {
-    let middle = (start + end) * 0.5;
-    let left_middle = (start + middle) * 0.5;
-    let right_middle = (middle + end) * 0.5;
+    let middle = f64::midpoint(start, end);
+    let left_middle = f64::midpoint(start, middle);
+    let right_middle = f64::midpoint(middle, end);
     let at_left_middle = evaluate(left_middle)?;
     let at_right_middle = evaluate(right_middle)?;
     let left = simpson_estimate(start, middle, at_start, at_left_middle, at_middle);
@@ -828,7 +828,7 @@ fn genotype_observation_probability(
 ) -> f64 {
     let left = allele_observation_probability(genotype.left, observed, strand, error, retention);
     let right = allele_observation_probability(genotype.right, observed, strand, error, retention);
-    ((left + right) * 0.5).max(f64::MIN_POSITIVE)
+    f64::midpoint(left, right).max(f64::MIN_POSITIVE)
 }
 
 fn allele_observation_probability(
