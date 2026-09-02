@@ -59,7 +59,7 @@ jobs:
       - name: Install native and quick-start dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libbz2-dev samtools
+          sudo apt-get install --yes libbz2-dev liblzma-dev samtools
 
       - name: Verify pinned native sources
         run: scripts/check-native-sources.sh
@@ -132,7 +132,7 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libbz2-dev
+          sudo apt-get install --yes libbz2-dev liblzma-dev
 
       - name: Link the combined-index reader and current aligner without builder tools at the declared lower bound
         env:
@@ -172,7 +172,7 @@ jobs:
       - name: Install audited native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libbz2-dev ripgrep
+          sudo apt-get install --yes libbz2-dev liblzma-dev ripgrep
 
       - name: Self-test the release notice checker
         run: >-
