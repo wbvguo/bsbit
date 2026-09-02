@@ -25,7 +25,7 @@ use bsbit_index::reference::{
     ContigInput, ReferenceBuildLimits, ReferenceIndex, ReferenceQueryLimits,
 };
 
-const ALPHABET: [u8; 3] = [b'A', b'C', b'T'];
+const ALPHABET: [u8; 3] = *b"ACT";
 
 fn normalized(raw: &[u8]) -> NormalizedSequence {
     normalize_dna(raw).expect("test input uses only A/C/G/T/N")
