@@ -354,7 +354,7 @@ CPU binding, sampler, warm inputs, index, and output contract:
 The observed mean reductions are 4.77% wall, 5.28% user CPU, and 5.48% total
 CPU. Complete formal and replicate process-tree sidecars, BAMs, MAPQ transition
 matrix, evaluator output, and the frozen binary are retained in
-`workspace/benchmark/2026-09-01--sim-wgbs-10m-current-head/single/experiments/7808aa1/`.
+`workspace/benchmarks/runs/2026-09-01--sim-wgbs-10m-current-head/single/experiments/7808aa1/`.
 
 ### Single-end sensitive narrow-SIMD store elimination
 
@@ -393,7 +393,7 @@ d5 kernel increased 1M user CPU by 11.0% because of register pressure, and
 unchecked pattern loads increased it by 33.4% after adverse LLVM code
 generation. Raw profiles, process-tree sidecars, pilot timings, frozen binary,
 and reproduction scripts are retained under
-`workspace/benchmark/2026-09-01--sim-wgbs-10m-current-head/single/experiments/431970c/`.
+`workspace/benchmarks/runs/2026-09-01--sim-wgbs-10m-current-head/single/experiments/431970c/`.
 
 A second address-level follow-up aggregated 22,797 samples inside flexible
 candidate orchestration. Its largest instruction address held 7,239 samples

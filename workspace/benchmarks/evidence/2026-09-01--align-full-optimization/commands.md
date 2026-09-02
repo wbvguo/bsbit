@@ -35,10 +35,10 @@ The immutable-run harness from the exploratory evidence was reused:
 export BSBIT_PERF_RUN_ROOT=/tmp/bsbit-align-full-optimization-20260901/runs
 export BSBIT_PERF_INDEX=/tmp/bsbit-align-full-optimization-20260901/sa8-index/grch38-sa8.bsbit
 
-workspace/benchmark/2026-09-01--align-performance-experiments/run-case.sh \
+workspace/benchmarks/evidence/2026-09-01--align-performance-experiments/run-case.sh \
   label /path/to/bsbit single 8 2 0,2,4,6,8,10,12,14,16,18
 
-workspace/benchmark/2026-09-01--align-performance-experiments/run-case.sh \
+workspace/benchmarks/evidence/2026-09-01--align-performance-experiments/run-case.sh \
   label /path/to/bsbit paired 10 4 \
   0,2,4,6,8,10,12,14,16,18,20,22,24,26
 ```
