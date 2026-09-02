@@ -68,7 +68,10 @@ fn parse_call_snp(arguments: &[String]) -> Result<Action, CliError> {
     let reference = required_path(&mut values, "--reference")?;
     let output = required_path(&mut values, "--output")?;
     let sample_name = values.remove("--sample-name");
-    let regions = parse_call_regions(region_spec, optional_path(&mut values, "--regions-file")?)?;
+    let regions = parse_call_regions(
+        region_spec.as_deref(),
+        optional_path(&mut values, "--regions-file")?,
+    )?;
     let compress = values
         .remove("--compress")
         .map(|value| parse_bool("--compress", &value))
@@ -123,7 +126,10 @@ fn parse_call_joint(arguments: &[String]) -> Result<Action, CliError> {
     let input = required_path(&mut values, "--input")?;
     let reference = required_path(&mut values, "--reference")?;
     let sample_name = values.remove("--sample-name");
-    let regions = parse_call_regions(region_spec, optional_path(&mut values, "--regions-file")?)?;
+    let regions = parse_call_regions(
+        region_spec.as_deref(),
+        optional_path(&mut values, "--regions-file")?,
+    )?;
     let meth_output = required_path(&mut values, "--meth")?;
     let vcf_output = required_path(&mut values, "--vcf")?;
     if meth_output == vcf_output {
@@ -187,7 +193,10 @@ fn parse_call_meth(arguments: &[String]) -> Result<Action, CliError> {
     )?;
     let input = required_path(&mut values, "--input")?;
     let reference = required_path(&mut values, "--reference")?;
-    let regions = parse_call_regions(region_spec, optional_path(&mut values, "--regions-file")?)?;
+    let regions = parse_call_regions(
+        region_spec.as_deref(),
+        optional_path(&mut values, "--regions-file")?,
+    )?;
     let output = required_path(&mut values, "--output")?;
     let format = match required(&mut values, "--format")?.as_str() {
         "cgmap" => MethylationOutputFormat::Cgmap,
@@ -310,7 +319,7 @@ fn extract_region_option(
 }
 
 fn parse_call_regions(
-    specification: Option<String>,
+    specification: Option<&str>,
     regions_file: Option<PathBuf>,
 ) -> Result<RegionSelection, CliError> {
     if specification.is_some() && regions_file.is_some() {
@@ -319,7 +328,7 @@ fn parse_call_regions(
         ));
     }
     let intervals = specification
-        .iter()
+        .into_iter()
         .flat_map(|specification| specification.split(','))
         .map(parse_call_region)
         .collect::<Result<Vec<_>, _>>()?;

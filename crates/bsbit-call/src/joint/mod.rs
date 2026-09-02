@@ -30,7 +30,7 @@ pub struct Options {
     pub compress: bool,
     /// Regional calling workers in `1..=64`.
     pub threads: u64,
-    /// Emit only CpG sites in the methylation output when true.
+    /// Emit only `CpG` sites in the methylation output when true.
     pub cg_only: bool,
     /// Shared quality/depth filters and SNP-specific chemistry parameters.
     pub parameters: Parameters,

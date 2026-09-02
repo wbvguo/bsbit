@@ -27,7 +27,7 @@ pub struct Parameters {
     pub minimum_mapping_quality: u8,
     /// Minimum valid methylated-plus-unmethylated depth; must be nonzero.
     pub minimum_depth: u32,
-    /// Emit only CpG sites when true.
+    /// Emit only `CpG` sites when true.
     pub cg_only: bool,
     /// Ignore paired records that do not carry the SAM proper-pair flag.
     pub ignore_orphans: bool,

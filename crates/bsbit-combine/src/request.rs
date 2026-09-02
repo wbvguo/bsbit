@@ -32,7 +32,7 @@ pub struct Parameters {
     pub minimum_count: u64,
     /// Minimum valid-sample proportion, in parts per billion.
     pub minimum_sample_proportion_parts_per_billion: u32,
-    /// Retain only CpG sites when true.
+    /// Retain only `CpG` sites when true.
     pub cg_only: bool,
 }
 
