@@ -1,3 +1,0 @@
-library_profile	pairs	unique	ambiguous	unmapped	bam_records	mapping_threads	bam_threads	alignment_pair_passes	suffix_search_lanes	suffix_search_rank_operations	locate_calls	located_rows	verified_placements	compatible_pairs	best_pair_placements	cross_binary_relation
-directional	5000000	4732194	209984	57822	10000000	10	4	5000000	11455350	412886382	16231549	122124538	25125969	12190085	7969678	baseline-candidate-cleanup-identical
-non-directional	5000000	4732008	210174	57818	10000000	10	4	10000000	71360766	1468008406	76161542	250444284	25134898	12198012	7970599	baseline-candidate-cleanup-identical

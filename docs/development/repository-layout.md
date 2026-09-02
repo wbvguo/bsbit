@@ -88,10 +88,9 @@ product module. All unqualified implementation variants and their switches
 belong in a dated ignored `workspace/worktree/` attempt, not under a crate. Once
 qualified, promote only the selected implementation into `src/` under a stable
 name and add the smallest durable test at the appropriate boundary. Once
-rejected or superseded, keep it out of the live feature graph, record its
-verdict and recovery commit in the tracked retired-feature registry, and keep
-any full local snapshot or measurement only in `workspace/worktree/`. Git history is
-the durable source archive.
+rejected or superseded, keep it out of the live feature graph and retain any
+full local snapshot or measurement only in `workspace/worktree/`. Git history
+is the durable source archive for committed implementations.
 
 A fixture moves into `tests/fixtures/` only when it is small, stable,
 redistributable, auditable, and required by an automated test. Human-maintained

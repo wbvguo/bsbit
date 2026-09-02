@@ -37,19 +37,6 @@ gate, the observed result, and the production tests that preserve the result.
 Rejected implementations are absent from the tracked crate tree. Git history
 remains their durable recovery source.
 
-## Removed historical surface
-
-The cleanup that established this policy removed development, profiling, and
-rejected entries, then made the selected implementations ordinary code in
-their owning crates. Removing a stage switch does not reject its behavior: it
-makes the selected behavior an internal invariant covered by crate tests.
-
-Experiment-only analysis runners and candidate-specific dependencies stay with
-the dated attempts that own their evidence. Full pre-retirement snapshots
-remain only in ignored development attempts and Git history. Do not restore an
-old name as a compatibility alias: this workspace is not published as a
-feature-level API.
-
 ## Change checklist
 
 Before adding or retaining a feature:

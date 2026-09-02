@@ -15,7 +15,6 @@ kept out of the main user navigation.
 
 - [Testing](testing.md)
 - [Cargo feature lifecycle](feature-lifecycle.md)
-- [Alignment optimization branch ledger](alignment-optimization-branch-ledger.md)
 
 ## Evidence
 
