@@ -241,7 +241,6 @@
 }
 
 .docs-logo {
-  clip-path: polygon(50% 0, 94% 23%, 94% 76%, 50% 100%, 6% 76%, 6% 23%);
   float: right;
   height: auto;
   margin: 0 0 1rem 1.5rem;

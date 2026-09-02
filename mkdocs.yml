@@ -85,4 +85,4 @@ nav:
 not_in_nav: |
   /development/**
 
-copyright: !ENV [DOCS_COPYRIGHT, "Copyright &copy; bsbit contributors · local documentation build"]
+copyright: !ENV [DOCS_COPYRIGHT, ""]
