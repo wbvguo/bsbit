@@ -4,6 +4,7 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 use std::thread;
 
+use bsbit_align::AlignmentError;
 use bsbit_align::score::EditDistance;
 use bsbit_align::verification::cigar::{
     CigarEvaluationError, CigarEvaluationField, evaluate_cigar,
@@ -731,6 +732,15 @@ fn len_u64(length: usize) -> u64 {
 
 #[test]
 fn invariant_and_counter_error_variants_preserve_fields_and_diagnostics() {
+    let batch_error = AlignmentError::SearchBatchSize {
+        observed: 65,
+        maximum: 64,
+    };
+    assert_eq!(
+        batch_error.to_string(),
+        "alignment search batch size 65 exceeds mapper maximum 64"
+    );
+
     for field in [
         CigarEvaluationField::LiteralMatches,
         CigarEvaluationField::BisulfiteCompatible,

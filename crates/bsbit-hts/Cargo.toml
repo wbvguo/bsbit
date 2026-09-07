@@ -15,7 +15,7 @@ bsbit-core = { path = "../bsbit-core" }
 bsbit-io = { path = "../bsbit-io" }
 
 [lints.rust]
-unsafe_code = "allow"
+unsafe_code = "deny"
 missing_docs = "warn"
 unsafe_op_in_unsafe_fn = "deny"
 

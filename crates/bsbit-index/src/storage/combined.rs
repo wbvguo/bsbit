@@ -7,12 +7,10 @@
 
 use core::fmt;
 use core::mem::size_of;
-use core::ptr::NonNull;
 use std::cell::RefCell;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, Read};
-use std::os::fd::AsRawFd;
 #[cfg(target_os = "linux")]
 use std::path::{Path, PathBuf};
 
@@ -20,92 +18,89 @@ use crate::reference::{
     CombinedIndexBackendError, PrivateCombinedIndex, PrivateCombinedLocateMetrics,
     PrivateCombinedReference, PrivateCombinedReferenceError, ReferenceIndex,
 };
+use crate::simd::PopcountDispatch;
+#[cfg(all(test, feature = "index-construction"))]
+use crate::storage::combined_layout::SA_STRIDE;
+use crate::storage::combined_layout::{
+    BWT_WORDS_PER_128_ROWS, HIGH_OCC_STRIDE, LOOKUP_BASES, LOOKUP_ENTRIES, META_BYTES,
+    META_BYTES_U32, META_DIGEST_OFFSET, META_EXTENSION_MAGIC, META_EXTENSION_MAJOR,
+    META_EXTENSION_MINOR, META_EXTENSION_MINOR_SA8, META_EXTENSION_OFFSET, OCC_STRIDE,
+    SA_FLAG_WORDS_PER_256_ROWS, SA_VALUE_MASK,
+};
 use crate::storage::fm::{FmInterval, ProjectedBase, SearchBase};
 use crate::storage::reference_catalog::{
     ReferenceCatalogError, ReferenceCatalogSummary, load_reference_catalog,
 };
 use bsbit_core::reference::ReferenceSemanticDigest;
-
-pub(crate) const BWT_WORDS_PER_128_ROWS: u64 = 5;
-pub(crate) const SA_FLAG_WORDS_PER_256_ROWS: u64 = 5;
-
-/// Returns all three LF boundaries from one validated packed-rank boundary.
-///
-/// Storage validation remains with the combined image reader; the builder
-/// shares this arithmetic so encoding and decoding cannot silently diverge.
-#[inline]
-#[cfg(feature = "index-construction")]
-pub(crate) fn lf_all_boundaries(
-    boundary: u64,
-    suffix_count: u64,
-    sentinel_row: u64,
-    first_occurrence: [u64; 4],
-    mut bwt_word: impl FnMut(u64) -> u64,
-    mut high_occ: impl FnMut(u64) -> u64,
-) -> Option<[u64; 3]> {
-    if boundary > suffix_count {
-        return None;
-    }
-    let line = boundary - u64::from(boundary > sentinel_row);
-    let high_word = (line >> 7).checked_mul(BWT_WORDS_PER_128_ROWS)?;
-    let low_block = (line & 127) >> 6;
-    let plane_start = high_word.checked_add(1 + (low_block << 1))?;
-    let high_occ_block = (line >> 16).checked_mul(2)?;
-    let counter_word = bwt_word(high_word);
-    let first_plane = bwt_word(plane_start);
-    let second_plane = bwt_word(plane_start + 1);
-    let first_absolute = high_occ(high_occ_block);
-    let second_absolute = high_occ(high_occ_block + 1);
-    let counter_shift = low_block << 5;
-    let packed = counter_word >> (32 - counter_shift);
-    let nonzero = ((packed >> 16) & 0xffff) + (packed & 0xffff);
-    let at_block = [
-        ((line >> 6) << 6).checked_sub(
-            first_absolute
-                .checked_add(second_absolute)?
-                .checked_add(nonzero)?,
-        )?,
-        first_absolute + ((counter_word >> (48 - counter_shift)) & 0xffff),
-        second_absolute + ((counter_word >> (32 - counter_shift)) & 0xffff),
-    ];
-    let need = u32::try_from(line & 63).expect("six bits fit u32");
-    let within = if need == 0 {
-        [0_u64; 3]
-    } else {
-        let shift = 64 - need;
-        [
-            u64::from(((!(first_plane | second_plane)) >> shift).count_ones()),
-            u64::from((first_plane >> shift).count_ones()),
-            u64::from((second_plane >> shift).count_ones()),
-        ]
-    };
-    Some([
-        first_occurrence[0]
-            .checked_add(at_block[0])?
-            .checked_add(within[0])?,
-        first_occurrence[1]
-            .checked_add(at_block[1])?
-            .checked_add(within[1])?,
-        first_occurrence[2]
-            .checked_add(at_block[2])?
-            .checked_add(within[2])?,
-    ])
-}
-
-pub(crate) const META_BYTES: usize = 120;
-pub(crate) const META_BYTES_U32: u32 = 120;
-pub(crate) const META_EXTENSION_MAGIC: &[u8; 8] = b"BSBICMB1";
-pub(crate) const META_EXTENSION_MAJOR: u16 = 1;
-pub(crate) const META_EXTENSION_MINOR: u16 = 0;
-pub(crate) const META_EXTENSION_OFFSET: usize = 68;
-pub(crate) const META_DIGEST_OFFSET: usize = 84;
-const LOOKUP_BASES: usize = 16;
-const LOOKUP_ENTRIES: u64 = 43_046_722;
-const SA_STRIDE: u64 = 16;
-const SA_STRIDE_U32: u32 = 16;
-const SA_VALUE_MASK: u32 = 0x3fff_ffff;
+use bsbit_cpu::{Configuration, configuration};
+use bsbit_io::ReadOnlyMapping as FileMapping;
 const MAX_WAVEFRONT_LANES: usize = 64;
 const MAX_WAVEFRONT_BOUNDARIES: usize = MAX_WAVEFRONT_LANES * 2;
+
+/// Supported sparse suffix-array sampling distances.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum CombinedIndexSaStride {
+    /// Default fast location with a larger sparse suffix array.
+    #[default]
+    Eight,
+    /// Smaller sparse suffix array for memory-constrained systems.
+    Sixteen,
+}
+
+impl CombinedIndexSaStride {
+    /// Returns the physical row-sampling distance stored in metadata.
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        match self {
+            Self::Eight => 8,
+            Self::Sixteen => 16,
+        }
+    }
+
+    const fn value_u64(self) -> u64 {
+        self.value() as u64
+    }
+
+    #[cfg(feature = "index-construction")]
+    pub(crate) const fn metadata_minor(self) -> u16 {
+        match self {
+            Self::Eight => META_EXTENSION_MINOR_SA8,
+            Self::Sixteen => META_EXTENSION_MINOR,
+        }
+    }
+
+    const fn from_metadata(value: u32, minor: u16) -> Option<Self> {
+        match (value, minor) {
+            (8, META_EXTENSION_MINOR_SA8) => Some(Self::Eight),
+            (16, META_EXTENSION_MINOR) => Some(Self::Sixteen),
+            _ => None,
+        }
+    }
+}
+
+/// Reads only the bounded metadata file to guide non-semantic runtime tuning.
+///
+/// The complete image is still reopened and validated before use. Malformed,
+/// changing, or unsupported metadata therefore yields no hint.
+#[doc(hidden)]
+#[must_use]
+pub fn combined_index_sa_stride_hint(prefix: &Path) -> Option<CombinedIndexSaStride> {
+    let mut file = File::open(prefix).ok()?;
+    if file.metadata().ok()?.len() != u64::from(META_BYTES_U32) {
+        return None;
+    }
+    let mut metadata = [0_u8; META_BYTES];
+    file.read_exact(&mut metadata).ok()?;
+    if &metadata[META_EXTENSION_OFFSET..META_EXTENSION_OFFSET + META_EXTENSION_MAGIC.len()]
+        != META_EXTENSION_MAGIC
+        || slice_u16(&metadata, 76) != META_EXTENSION_MAJOR
+        || slice_u32(&metadata, 80) != META_BYTES_U32
+        || metadata[116..120] != [0; 4]
+    {
+        return None;
+    }
+    CombinedIndexSaStride::from_metadata(slice_u32(&metadata, 56), slice_u16(&metadata, 78))
+}
 
 #[derive(Clone, Copy, Debug)]
 struct SameLowBlockRankPlan {
@@ -376,16 +371,33 @@ pub fn load_combined_reference_catalog(
     combined_index_prefix: &Path,
     threads: usize,
 ) -> Result<LoadedCombinedReference, CombinedReferenceLoadError> {
+    load_combined_reference_catalog_validated(
+        catalog_path,
+        expected_reference_digest,
+        combined_index_prefix,
+        threads,
+        configuration(),
+    )
+}
+
+fn load_combined_reference_catalog_validated(
+    catalog_path: &Path,
+    expected_reference_digest: Option<ReferenceSemanticDigest>,
+    combined_index_prefix: &Path,
+    threads: usize,
+    configuration: Configuration,
+) -> Result<LoadedCombinedReference, CombinedReferenceLoadError> {
     let catalog = load_reference_catalog(catalog_path, expected_reference_digest, threads)
         .map_err(|source| CombinedReferenceLoadError {
             inner: CombinedReferenceLoadFailure::Catalog(source),
         })?;
     let summary = catalog.summary();
-    let combined = CombinedIndex::open(combined_index_prefix).map_err(|source| {
-        CombinedReferenceLoadError {
-            inner: CombinedReferenceLoadFailure::Index(source),
-        }
-    })?;
+    let combined =
+        CombinedIndex::open_validated(combined_index_prefix, configuration).map_err(|source| {
+            CombinedReferenceLoadError {
+                inner: CombinedReferenceLoadFailure::Index(source),
+            }
+        })?;
     combined
         .verify_reference_semantic_digest(summary.semantic_digest())
         .map_err(|source| CombinedReferenceLoadError {
@@ -394,7 +406,7 @@ pub fn load_combined_reference_catalog(
     let mapped_index_bytes = combined.mapped_bytes();
     let index = ReferenceIndex::from_private_combined(
         catalog.into_contigs(),
-        PrivateCombinedReference::new(Box::new(combined)),
+        PrivateCombinedReference::new(combined),
     )
     .map_err(|source| CombinedReferenceLoadError {
         inner: CombinedReferenceLoadFailure::Reference(source),
@@ -414,15 +426,9 @@ impl From<io::Error> for CombinedIndexError {
 
 #[derive(Debug)]
 pub(crate) struct ReadOnlyMapping {
-    pointer: NonNull<u8>,
+    mapping: FileMapping,
     length: usize,
 }
-
-// SAFETY: the mapping is immutable for its complete lifetime and owns no Rust
-// references. `munmap` runs only after the last shared owner is dropped.
-unsafe impl Send for ReadOnlyMapping {}
-// SAFETY: the mapping is immutable; all reads are bounded before dereference.
-unsafe impl Sync for ReadOnlyMapping {}
 
 impl ReadOnlyMapping {
     pub(crate) fn map(file: &File) -> Result<Self, CombinedIndexError> {
@@ -431,49 +437,26 @@ impl ReadOnlyMapping {
         if length == 0 {
             return Err(CombinedIndexError::Structure("mapped file is empty"));
         }
-        // SAFETY: the descriptor is live, `length` came from that descriptor,
-        // and no writable mapping is requested. MAP_FAILED is checked below.
-        let mapped = unsafe {
-            libc::mmap(
-                core::ptr::null_mut(),
-                length,
-                libc::PROT_READ,
-                libc::MAP_PRIVATE,
-                file.as_raw_fd(),
-                0,
-            )
-        };
-        if mapped == libc::MAP_FAILED {
-            return Err(io::Error::last_os_error().into());
-        }
-        #[cfg(target_os = "linux")]
-        // Advisory only.  Modern kernels may back aligned portions of a
-        // read-only file mapping with larger folios; unsupported filesystems
-        // retain ordinary demand paging without changing index semantics.
-        unsafe {
-            let _ = libc::madvise(mapped, length, libc::MADV_HUGEPAGE);
-        }
-        let pointer = NonNull::new(mapped.cast::<u8>()).ok_or(CombinedIndexError::Structure(
-            "mmap returned a null pointer",
-        ))?;
-        Ok(Self { pointer, length })
+        let mapping = FileMapping::map(file)?;
+        Ok(Self { mapping, length })
     }
 
     #[inline]
     fn read_u8(&self, offset: usize) -> u8 {
         debug_assert!(offset < self.length);
-        // SAFETY: every caller uses a validated component range and this
-        // one-byte read is therefore inside the live read-only mapping.
-        unsafe { self.pointer.as_ptr().add(offset).read() }
+        // SAFETY: this private accessor is used only after the complete file
+        // layout and every component extent have been validated at open time.
+        unsafe { *self.mapping.as_slice().get_unchecked(offset) }
     }
 
     #[inline]
     fn read_u32(&self, offset: usize) -> u32 {
         debug_assert!(offset + size_of::<u32>() <= self.length);
-        // SAFETY: the four-byte range was validated at open time. Index files
-        // are little-endian; read_unaligned avoids imposing pointer alignment.
+        // SAFETY: validated component extents prove that these four bytes are
+        // inside the immutable mapping; unaligned reads impose no alignment.
         u32::from_le(unsafe {
-            self.pointer
+            self.mapping
+                .as_slice()
                 .as_ptr()
                 .add(offset)
                 .cast::<u32>()
@@ -484,41 +467,50 @@ impl ReadOnlyMapping {
     #[inline]
     pub(crate) fn read_u64(&self, offset: usize) -> u64 {
         debug_assert!(offset + size_of::<u64>() <= self.length);
-        // SAFETY: the eight-byte range was validated at open time.
+        // SAFETY: validated component extents prove that these eight bytes are
+        // inside the immutable mapping; unaligned reads impose no alignment.
         u64::from_le(unsafe {
-            self.pointer
+            self.mapping
+                .as_slice()
                 .as_ptr()
                 .add(offset)
                 .cast::<u64>()
                 .read_unaligned()
         })
     }
-}
 
-impl Drop for ReadOnlyMapping {
-    fn drop(&mut self) {
-        // SAFETY: this is the exact pointer and nonzero length returned by the
-        // successful mmap call, released exactly once by Drop.
-        let _ = unsafe { libc::munmap(self.pointer.as_ptr().cast(), self.length) };
+    fn read_u64_checked(&self, offset: usize) -> Result<u64, CombinedIndexError> {
+        let bytes = self
+            .mapping
+            .as_slice()
+            .get(offset..offset.saturating_add(size_of::<u64>()))
+            .ok_or(CombinedIndexError::Structure(
+                "component header is shorter than eight bytes",
+            ))?;
+        Ok(u64::from_le_bytes(
+            bytes
+                .try_into()
+                .expect("checked eight-byte component header"),
+        ))
     }
 }
 
 /// Physical work used by sparse-SA location in the combined-index layout.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct CombinedLocateMetrics {
+pub(crate) struct CombinedLocateMetrics {
     /// Number of emitted suffix rows.
-    pub located_rows: u64,
+    pub(crate) located_rows: u64,
     /// Canonical row-wise LF depth represented by the located rows.
-    pub lf_steps: u64,
+    pub(crate) lf_steps: u64,
     /// Logical rank boundaries evaluated by direct or shared traversal.
-    pub rank_operations: u64,
+    pub(crate) rank_operations: u64,
     /// Number of direct rows or shared interval-tree nodes processed.
-    pub interval_nodes: u64,
+    pub(crate) interval_nodes: u64,
 }
 
-/// Read-only current combined-directional FM index.
+/// Read-only current combined-directional FM index implementation.
 #[derive(Debug)]
-pub struct CombinedIndex {
+pub(crate) struct CombinedIndex {
     bwt: ReadOnlyMapping,
     sa: ReadOnlyMapping,
     occ: ReadOnlyMapping,
@@ -535,7 +527,9 @@ pub struct CombinedIndex {
     sa_flags_offset: usize,
     high_occ_entries: u64,
     high_occ_offset: usize,
+    sa_stride: CombinedIndexSaStride,
     reference_semantic_digest: ReferenceSemanticDigest,
+    popcount: PopcountDispatch,
 }
 
 impl CombinedIndex {
@@ -546,7 +540,16 @@ impl CombinedIndex {
     /// Rejects missing files and every unsupported or inconsistent combined-index
     /// dimension before publishing a mapped index.
     #[allow(clippy::too_many_lines)]
-    pub fn open(prefix: &Path) -> Result<Self, CombinedIndexError> {
+    #[cfg(any(test, feature = "index-construction"))]
+    pub(crate) fn open(prefix: &Path) -> Result<Self, CombinedIndexError> {
+        Self::open_validated(prefix, configuration())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn open_validated(
+        prefix: &Path,
+        configuration: Configuration,
+    ) -> Result<Self, CombinedIndexError> {
         let mut meta_file = File::open(prefix)?;
         let meta_length = usize::try_from(meta_file.metadata()?.len())
             .map_err(|_| CombinedIndexError::Structure("metadata file length exceeds usize"))?;
@@ -564,9 +567,9 @@ impl CombinedIndex {
         let sa_stride = slice_u32(&meta, 56);
         let occ_stride = slice_u32(&meta, 60);
         let high_occ_stride = slice_u32(&meta, 64);
+        let metadata_minor = slice_u16(&meta, 78);
         if &meta[META_EXTENSION_OFFSET..META_EXTENSION_OFFSET + 8] != META_EXTENSION_MAGIC
             || slice_u16(&meta, 76) != META_EXTENSION_MAJOR
-            || slice_u16(&meta, 78) != META_EXTENSION_MINOR
             || slice_u32(&meta, 80) != META_BYTES_U32
             || meta[116..120] != [0; 4]
         {
@@ -586,16 +589,21 @@ impl CombinedIndex {
                 "metadata suffix or cumulative-count domain is invalid",
             ));
         }
-        if sa_stride != SA_STRIDE_U32 || occ_stride != 64 || high_occ_stride != 128 {
+        let sa_stride = CombinedIndexSaStride::from_metadata(sa_stride, metadata_minor).ok_or(
+            CombinedIndexError::Structure(
+                "metadata sparse-SA stride and format minor are unsupported",
+            ),
+        )?;
+        if occ_stride != OCC_STRIDE || high_occ_stride != HIGH_OCC_STRIDE {
             return Err(CombinedIndexError::Structure(
-                "only the current SA16/Occ64/Occ128 layout is supported",
+                "only the current Occ64/Occ128 layout is supported",
             ));
         }
 
         let bwt = map_suffix(prefix, ".bwt")?;
-        let bwt_words = bwt.read_u64(0);
+        let bwt_words = bwt.read_u64_checked(0)?;
         let lookup_header_offset = checked_component_end(8, bwt_words, 8, bwt.length)?;
-        let lookup_entries = bwt.read_u64(lookup_header_offset);
+        let lookup_entries = bwt.read_u64_checked(lookup_header_offset)?;
         if lookup_entries != LOOKUP_ENTRIES {
             return Err(CombinedIndexError::Structure(
                 "combined lookup is not the dense three-letter 16-mer table",
@@ -613,11 +621,11 @@ impl CombinedIndex {
             ));
         }
         let sa = map_suffix(prefix, ".sa")?;
-        let sparse_sa_entries = sa.read_u64(0);
+        let sparse_sa_entries = sa.read_u64_checked(0)?;
         let sa_values_offset = 8;
         let sa_flag_header_offset =
             checked_component_end(sa_values_offset, sparse_sa_entries, 4, sa.length)?;
-        let sa_flag_entries = sa.read_u64(sa_flag_header_offset);
+        let sa_flag_entries = sa.read_u64_checked(sa_flag_header_offset)?;
         let sa_flags_offset = sa_flag_header_offset
             .checked_add(8)
             .ok_or(CombinedIndexError::Structure("SA offset overflow"))?;
@@ -628,7 +636,7 @@ impl CombinedIndex {
             ));
         }
         let occ = map_suffix(prefix, ".occ")?;
-        let high_occ_entries = occ.read_u64(0);
+        let high_occ_entries = occ.read_u64_checked(0)?;
         let high_occ_offset = 8;
         let occ_end = checked_component_end(high_occ_offset, high_occ_entries, 8, occ.length)?;
         if occ_end != occ.length || high_occ_entries < 2 || high_occ_entries % 2 != 0 {
@@ -664,7 +672,9 @@ impl CombinedIndex {
             sa_flags_offset,
             high_occ_entries,
             high_occ_offset,
+            sa_stride,
             reference_semantic_digest,
+            popcount: PopcountDispatch::from_configuration(configuration),
         };
         index.validate_runtime_dimensions()?;
         Ok(index)
@@ -672,20 +682,15 @@ impl CombinedIndex {
 
     /// Returns the combined suffix-row count, including the terminal suffix.
     #[must_use]
-    pub const fn suffix_count(&self) -> u64 {
+    #[cfg(feature = "index-construction")]
+    pub(crate) const fn suffix_count(&self) -> u64 {
         self.suffix_count
     }
 
     /// Returns the forward reference length represented by each physical half.
     #[must_use]
-    pub const fn reference_length(&self) -> u64 {
+    pub(crate) const fn reference_length(&self) -> u64 {
         (self.suffix_count - 1) / 2
-    }
-
-    /// Returns the semantic reference digest embedded by the index builder.
-    #[must_use]
-    pub const fn reference_semantic_digest(&self) -> ReferenceSemanticDigest {
-        self.reference_semantic_digest
     }
 
     /// Requires this image to be bound to the supplied reference catalog.
@@ -693,7 +698,7 @@ impl CombinedIndex {
     /// # Errors
     ///
     /// Rejects every digest mismatch.
-    pub fn verify_reference_semantic_digest(
+    pub(crate) fn verify_reference_semantic_digest(
         &self,
         expected: ReferenceSemanticDigest,
     ) -> Result<(), CombinedIndexError> {
@@ -707,7 +712,7 @@ impl CombinedIndex {
     /// Returns bytes mapped from the combined-index BWT, SA, Occ, and optional packed
     /// reference files.
     #[must_use]
-    pub fn mapped_bytes(&self) -> u64 {
+    pub(crate) fn mapped_bytes(&self) -> u64 {
         u64::try_from(self.bwt.length)
             .unwrap_or(u64::MAX)
             .saturating_add(u64::try_from(self.sa.length).unwrap_or(u64::MAX))
@@ -716,7 +721,7 @@ impl CombinedIndex {
 
     /// Looks up exactly 16 projected bases in the current dense table.
     #[must_use]
-    pub fn lookup16(&self, pattern: &[SearchBase]) -> Option<FmInterval> {
+    pub(crate) fn lookup16(&self, pattern: &[SearchBase]) -> Option<FmInterval> {
         self.lookup16_symbols(pattern)
     }
 
@@ -753,7 +758,11 @@ impl CombinedIndex {
 
     /// Prepends one projected symbol to an interval in this combined domain.
     #[must_use]
-    pub fn backward_extend(&self, interval: FmInterval, base: SearchBase) -> Option<FmInterval> {
+    pub(crate) fn backward_extend(
+        &self,
+        interval: FmInterval,
+        base: SearchBase,
+    ) -> Option<FmInterval> {
         if interval.private_suffix_count() != self.suffix_count
             || interval.upper() > self.suffix_count
         {
@@ -955,7 +964,7 @@ impl CombinedIndex {
 
     /// Returns the exact interval for a projected pattern of at least 16 bases.
     #[must_use]
-    pub fn exact_search(&self, pattern: &[SearchBase]) -> Option<FmInterval> {
+    pub(crate) fn exact_search(&self, pattern: &[SearchBase]) -> Option<FmInterval> {
         if pattern.len() < LOOKUP_BASES {
             return None;
         }
@@ -976,7 +985,7 @@ impl CombinedIndex {
     ///
     /// Rejects a foreign interval, invalid sampled-row rank, or an LF path
     /// longer than the declared sampling distance.
-    pub fn visit_interval(
+    pub(crate) fn visit_interval(
         &self,
         interval: FmInterval,
         visitor: &mut dyn FnMut(u64) -> bool,
@@ -1098,6 +1107,17 @@ impl CombinedIndex {
                 "rank or sampled-SA arrays are shorter than their row domain",
             ));
         }
+        let expected_sparse_entries = (self.suffix_count - 1)
+            .checked_div(self.sa_stride.value_u64())
+            .and_then(|samples| samples.checked_add(1))
+            .ok_or(CombinedIndexError::Structure(
+                "sampled-SA entry dimensions overflow",
+            ))?;
+        if self.sparse_sa_entries != expected_sparse_entries {
+            return Err(CombinedIndexError::Structure(
+                "sampled-SA entry count disagrees with the declared stride",
+            ));
+        }
         if self.sample_rank(self.suffix_count)? != self.sparse_sa_entries {
             return Err(CombinedIndexError::Structure(
                 "sampled-SA flags and sparse values disagree",
@@ -1173,10 +1193,11 @@ impl CombinedIndex {
             0
         } else if digit == 0 {
             let non_a = self.bwt_word(plane_start) | self.bwt_word(plane_start + 1);
-            ((!non_a) >> (64 - need)).count_ones()
+            self.popcount.count((!non_a) >> (64 - need))
         } else {
             let plane = u64::from(digit >> 1);
-            (self.bwt_word(plane_start + plane) >> (64 - need)).count_ones()
+            self.popcount
+                .count(self.bwt_word(plane_start + plane) >> (64 - need))
         };
         self.first_occurrence[usize::from(digit)]
             .checked_add(at_block)?
@@ -1222,9 +1243,15 @@ impl CombinedIndex {
         let within = if need == 0 {
             0
         } else if plan.digit == 0 {
-            u64::from(((!(planes[0] | planes[1])) >> (64 - need)).count_ones())
+            u64::from(
+                self.popcount
+                    .count((!(planes[0] | planes[1])) >> (64 - need)),
+            )
         } else {
-            u64::from((planes[usize::from(plan.digit >> 1)] >> (64 - need)).count_ones())
+            u64::from(
+                self.popcount
+                    .count(planes[usize::from(plan.digit >> 1)] >> (64 - need)),
+            )
         };
         self.first_occurrence[usize::from(plan.digit)]
             .checked_add(at_block)?
@@ -1286,7 +1313,7 @@ impl CombinedIndex {
             let within = if need == 0 {
                 0
             } else {
-                u64::from((plane_bits >> (64 - need)).count_ones())
+                u64::from(self.popcount.count(plane_bits >> (64 - need)))
             };
             first.checked_add(within)
         };
@@ -1518,7 +1545,7 @@ impl CombinedIndex {
                     let within = if need == 0 {
                         0
                     } else {
-                        u64::from((plane_bits >> (64 - need)).count_ones())
+                        u64::from(self.popcount.count(plane_bits >> (64 - need)))
                     };
                     self.first_occurrence[usize::from(digit)]
                         .checked_add(at_block)?
@@ -1559,7 +1586,7 @@ impl CombinedIndex {
             let within = if need == 0 {
                 0
             } else {
-                u64::from((plane_bits >> (64 - need)).count_ones())
+                u64::from(self.popcount.count(plane_bits >> (64 - need)))
             };
             self.first_occurrence[usize::from(digit)]
                 .checked_add(at_block)?
@@ -1609,11 +1636,11 @@ impl CombinedIndex {
         let within = if need == 0 {
             0
         } else if digit == 0 {
-            ((!(plane0 | plane1)) >> (64 - need)).count_ones()
+            self.popcount.count((!(plane0 | plane1)) >> (64 - need))
         } else if digit == 1 {
-            (plane0 >> (64 - need)).count_ones()
+            self.popcount.count(plane0 >> (64 - need))
         } else {
-            (plane1 >> (64 - need)).count_ones()
+            self.popcount.count(plane1 >> (64 - need))
         };
         self.first_occurrence[usize::from(digit)]
             .checked_add(at_block)?
@@ -1663,7 +1690,8 @@ impl CombinedIndex {
         for word in 0..full_words {
             ordinal = ordinal
                 .checked_add(u64::from(
-                    self.sa_flag_word(plan.block_word + 1 + word).count_ones(),
+                    self.popcount
+                        .count(self.sa_flag_word(plan.block_word + 1 + word)),
                 ))
                 .ok_or(CombinedIndexError::Structure("sampled-SA ordinal overflow"))?;
         }
@@ -1671,7 +1699,7 @@ impl CombinedIndex {
         if prefix != 0 {
             ordinal = ordinal
                 .checked_add(u64::from(
-                    (flags & (u64::MAX << (64 - prefix))).count_ones(),
+                    self.popcount.count(flags & (u64::MAX << (64 - prefix))),
                 ))
                 .ok_or(CombinedIndexError::Structure("sampled-SA ordinal overflow"))?;
         }
@@ -1703,7 +1731,8 @@ impl CombinedIndex {
         for word in 0..full_words {
             ordinal = ordinal
                 .checked_add(u64::from(
-                    self.sa_flag_word(block_word + 1 + word).count_ones(),
+                    self.popcount
+                        .count(self.sa_flag_word(block_word + 1 + word)),
                 ))
                 .ok_or(CombinedIndexError::Structure("sampled-SA rank overflow"))?;
         }
@@ -1712,7 +1741,7 @@ impl CombinedIndex {
             let flags = self.sa_flag_word(block_word + 1 + full_words);
             ordinal = ordinal
                 .checked_add(u64::from(
-                    (flags & (u64::MAX << (64 - prefix))).count_ones(),
+                    self.popcount.count(flags & (u64::MAX << (64 - prefix))),
                 ))
                 .ok_or(CombinedIndexError::Structure("sampled-SA rank overflow"))?;
         }
@@ -1720,6 +1749,18 @@ impl CombinedIndex {
     }
 
     fn locate_row(&self, row: u64) -> Result<(u64, u64), CombinedIndexError> {
+        match self.sa_stride {
+            CombinedIndexSaStride::Eight => self.locate_row_at_stride::<8>(row),
+            CombinedIndexSaStride::Sixteen => self.locate_row_at_stride::<16>(row),
+        }
+    }
+
+    #[inline]
+    fn locate_row_at_stride<const SA_STRIDE: u64>(
+        &self,
+        row: u64,
+    ) -> Result<(u64, u64), CombinedIndexError> {
+        debug_assert!(matches!(SA_STRIDE, 8 | 16));
         let mut row = row;
         let mut steps = 0_u64;
         loop {
@@ -1732,11 +1773,9 @@ impl CombinedIndex {
                     .ok_or(CombinedIndexError::Structure(
                         "sampled-SA ordinal exceeds sparse array",
                     ))?;
-                let sampled = (packed & u64::from(SA_VALUE_MASK))
-                    .checked_mul(SA_STRIDE)
-                    .ok_or(CombinedIndexError::Structure(
-                        "sampled suffix coordinate overflow",
-                    ))?;
+                let sampled = (packed & SA_VALUE_MASK).checked_mul(SA_STRIDE).ok_or(
+                    CombinedIndexError::Structure("sampled suffix coordinate overflow"),
+                )?;
                 let position = sampled
                     .checked_add(steps)
                     .ok_or(CombinedIndexError::Structure("located coordinate overflow"))?;
@@ -1756,6 +1795,18 @@ impl CombinedIndex {
 
     #[inline]
     fn locate_rows_two_lanes(&self, rows: [u64; 2]) -> Result<[(u64, u64); 2], CombinedIndexError> {
+        match self.sa_stride {
+            CombinedIndexSaStride::Eight => self.locate_rows_two_lanes_at_stride::<8>(rows),
+            CombinedIndexSaStride::Sixteen => self.locate_rows_two_lanes_at_stride::<16>(rows),
+        }
+    }
+
+    #[inline]
+    fn locate_rows_two_lanes_at_stride<const SA_STRIDE: u64>(
+        &self,
+        rows: [u64; 2],
+    ) -> Result<[(u64, u64); 2], CombinedIndexError> {
+        debug_assert!(matches!(SA_STRIDE, 8 | 16));
         let mut rows = rows;
         let mut steps = [0_u64; 2];
         let mut located = [None, None];
@@ -1776,11 +1827,9 @@ impl CombinedIndex {
                     .ok_or(CombinedIndexError::Structure(
                         "sampled-SA ordinal exceeds sparse array",
                     ))?;
-                let sampled = (packed & u64::from(SA_VALUE_MASK))
-                    .checked_mul(SA_STRIDE)
-                    .ok_or(CombinedIndexError::Structure(
-                        "sampled suffix coordinate overflow",
-                    ))?;
+                let sampled = (packed & SA_VALUE_MASK).checked_mul(SA_STRIDE).ok_or(
+                    CombinedIndexError::Structure("sampled suffix coordinate overflow"),
+                )?;
                 let position = sampled
                     .checked_add(steps[lane])
                     .ok_or(CombinedIndexError::Structure("located coordinate overflow"))?;
@@ -2077,6 +2126,6 @@ fn slice_u64(bytes: &[u8], offset: usize) -> u64 {
 #[path = "../../tests/whitebox/storage_combined.rs"]
 mod whitebox_tests;
 
-#[cfg(test)]
-#[path = "../../tests/qualification/combined_index.rs"]
-mod qualification_tests;
+#[cfg(all(test, feature = "index-construction"))]
+#[path = "../../tests/whitebox/combined_index.rs"]
+mod combined_index_contract_tests;

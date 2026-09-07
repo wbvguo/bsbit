@@ -4,49 +4,48 @@
 //! geometry and result classification deliberately remain outside this module.
 
 use bsbit_core::alphabet::Base;
-use bsbit_core::bisulfite::BisulfiteStrand;
 use bsbit_index::reference::ReferenceIndex;
 use bsbit_index::storage::fm::{ProjectedBase, SearchBase};
 
 use crate::AlignmentError;
+use crate::alignment_policy::{
+    CombinedSearchLimits, DEFAULT_MAXIMUM_SEED_ROUNDS, DEFAULT_SEARCH_LIMITS, EMPTY_SEED_STEP,
+    INITIAL_MAXIMUM_SEED_ROUNDS, SEED_PROOF_ROUNDS,
+};
+use crate::library::ConversionPass;
 use crate::read_mapping::{ReadCandidate, ungapped_distance};
-use crate::read_mapping_limits::{MAX_READ_BASES, MIN_SUFFIX_BASES};
+use crate::read_mapping_limits::{MAX_READ_BASES, MIN_READ_BASES, MIN_SUFFIX_BASES};
 use crate::search::combined_query::{CombinedSearchReferenceExt, CombinedSeedMatches};
 
-const MINIMUM_READ_BASES: usize = 3;
-const INITIAL_MINIMUM_MULTI_HIT_SEED_BASES: usize = 17;
-const INITIAL_MAXIMUM_SEED_HITS: u64 = 1_000;
-const INITIAL_MAXIMUM_COMBINED_RESCUE_HITS: u64 = 4_096;
-const INITIAL_MAXIMUM_SEED_ROUNDS: usize = 5;
-pub(crate) const DEFAULT_MINIMUM_MULTI_HIT_SEED_BASES: usize = 16;
-pub(crate) const DEFAULT_MAXIMUM_SEED_HITS: u64 = 1_000;
-pub(crate) const DEFAULT_MAXIMUM_COMBINED_RESCUE_HITS: u64 = 4_096;
-pub(crate) const DEFAULT_MAXIMUM_SEED_ROUNDS: usize = 6;
-pub(crate) const EMPTY_SEED_STEP: usize = 8;
-pub(crate) const DIRECT_SINGLETON_PROOF: u8 = 1 << 7;
-pub(crate) const FLEXIBLE_NOMINAL_PROOF: u8 = 1 << 6;
+/// Exact offset-seed rounds occupy bits zero through nine. Proof-kind flags
+/// and the direct candidate's cached edit distance live in disjoint fields so
+/// candidate deduplication can safely union independently observed evidence.
+pub(crate) const SEED_ROUND_PROOF_MASK: u16 = (1 << SEED_PROOF_ROUNDS) - 1;
+pub(crate) const FLEXIBLE_NOMINAL_PROOF: u16 = 1 << SEED_PROOF_ROUNDS;
+pub(crate) const DIRECT_SINGLETON_PROOF: u16 = 1 << (SEED_PROOF_ROUNDS + 1);
+const DIRECT_SINGLETON_DISTANCE_SHIFT: usize = SEED_PROOF_ROUNDS + 2;
+const DIRECT_SINGLETON_DISTANCE_MASK: u16 = 0b111 << DIRECT_SINGLETON_DISTANCE_SHIFT;
 
-#[derive(Clone, Copy)]
-pub(crate) struct CombinedSearchLimits {
-    pub(crate) minimum_multi_hit_seed_bases: usize,
-    pub(crate) maximum_seed_hits: u64,
-    pub(crate) maximum_combined_rescue_hits: u64,
-    pub(crate) maximum_seed_rounds: usize,
+const fn seed_round_proof(round: usize) -> u16 {
+    debug_assert!(round < SEED_PROOF_ROUNDS);
+    1_u16 << round
 }
 
-pub(crate) const INITIAL_SEARCH_LIMITS: CombinedSearchLimits = CombinedSearchLimits {
-    minimum_multi_hit_seed_bases: INITIAL_MINIMUM_MULTI_HIT_SEED_BASES,
-    maximum_seed_hits: INITIAL_MAXIMUM_SEED_HITS,
-    maximum_combined_rescue_hits: INITIAL_MAXIMUM_COMBINED_RESCUE_HITS,
-    maximum_seed_rounds: INITIAL_MAXIMUM_SEED_ROUNDS,
-};
+pub(crate) const fn direct_singleton_proof(distance: u8) -> u16 {
+    DIRECT_SINGLETON_PROOF | ((distance as u16) << DIRECT_SINGLETON_DISTANCE_SHIFT)
+}
 
-pub(crate) const DEFAULT_SEARCH_LIMITS: CombinedSearchLimits = CombinedSearchLimits {
-    minimum_multi_hit_seed_bases: DEFAULT_MINIMUM_MULTI_HIT_SEED_BASES,
-    maximum_seed_hits: DEFAULT_MAXIMUM_SEED_HITS,
-    maximum_combined_rescue_hits: DEFAULT_MAXIMUM_COMBINED_RESCUE_HITS,
-    maximum_seed_rounds: DEFAULT_MAXIMUM_SEED_ROUNDS,
-};
+pub(crate) const fn direct_singleton_distance(proof: u16) -> u8 {
+    ((proof & DIRECT_SINGLETON_DISTANCE_MASK) >> DIRECT_SINGLETON_DISTANCE_SHIFT) as u8
+}
+
+#[allow(clippy::cast_possible_truncation)]
+pub(crate) const fn seed_round_support(proof: u16) -> u8 {
+    let rounds = (proof & SEED_ROUND_PROOF_MASK).count_ones();
+    // The mask contains exactly ten bits, so this conversion is bounded.
+    debug_assert!(rounds <= 10);
+    rounds as u8
+}
 
 #[derive(Clone, Copy)]
 pub(crate) struct DeferredCombinedSeed {
@@ -97,7 +96,7 @@ impl CombinedTwoLaneSearchState {
 fn visit_combined_seed_round(
     reference: &ReferenceIndex,
     read: &[Base],
-    relabel_mate2: bool,
+    conversion_pass: ConversionPass,
     round: usize,
     offset: usize,
     seed_matches: CombinedSeedMatches,
@@ -120,26 +119,20 @@ fn visit_combined_seed_round(
             u64::try_from(offset).unwrap_or(u64::MAX),
             u64::try_from(read.len()).unwrap_or(u64::MAX),
             &mut |hit| {
-                let strand = if relabel_mate2 {
-                    match hit.strand() {
-                        BisulfiteStrand::OT => BisulfiteStrand::CTOT,
-                        BisulfiteStrand::OB => BisulfiteStrand::CTOB,
-                        BisulfiteStrand::CTOT | BisulfiteStrand::CTOB => return true,
-                    }
-                } else {
-                    hit.strand()
+                let Some(strand) = conversion_pass.relabel_combined_hit(hit.strand()) else {
+                    return true;
                 };
                 let mut candidate = ReadCandidate {
                     contig_ordinal: hit.contig_ordinal(),
                     start: hit.start(),
                     strand,
-                    proof_mask: FLEXIBLE_NOMINAL_PROOF | (1_u8 << round),
+                    proof_mask: FLEXIBLE_NOMINAL_PROOF | seed_round_proof(round),
                 };
                 if round == 0
                     && hits == 1
                     && let Some(distance) = ungapped_distance(reference, read, candidate)
                 {
-                    candidate.proof_mask = DIRECT_SINGLETON_PROOF | distance;
+                    candidate.proof_mask = direct_singleton_proof(distance);
                     direct = true;
                 }
                 candidates.push(candidate);
@@ -171,7 +164,7 @@ pub(crate) fn combined_seed_round_is_locatable(
 fn visit_combined_seed_round_two_lanes(
     reference: &ReferenceIndex,
     reads: [&[Base]; 2],
-    reverse_second_lane_hits: bool,
+    conversion_passes: [ConversionPass; 2],
     round: usize,
     offsets: [usize; 2],
     seed_matches: [CombinedSeedMatches; 2],
@@ -196,26 +189,21 @@ fn visit_combined_seed_round_two_lanes(
             offsets.map(|offset| u64::try_from(offset).unwrap_or(u64::MAX)),
             reads.map(|read| u64::try_from(read.len()).unwrap_or(u64::MAX)),
             &mut |lane, hit| {
-                let strand = if lane == 1 && reverse_second_lane_hits {
-                    match hit.strand() {
-                        BisulfiteStrand::OT => BisulfiteStrand::CTOT,
-                        BisulfiteStrand::OB => BisulfiteStrand::CTOB,
-                        BisulfiteStrand::CTOT | BisulfiteStrand::CTOB => return,
-                    }
-                } else {
-                    hit.strand()
+                let Some(strand) = conversion_passes[lane].relabel_combined_hit(hit.strand())
+                else {
+                    return;
                 };
                 let mut candidate = ReadCandidate {
                     contig_ordinal: hit.contig_ordinal(),
                     start: hit.start(),
                     strand,
-                    proof_mask: FLEXIBLE_NOMINAL_PROOF | (1_u8 << round),
+                    proof_mask: FLEXIBLE_NOMINAL_PROOF | seed_round_proof(round),
                 };
                 if round == 0
                     && hits[lane] == 1
                     && let Some(distance) = ungapped_distance(reference, reads[lane], candidate)
                 {
-                    candidate.proof_mask = DIRECT_SINGLETON_PROOF | distance;
+                    candidate.proof_mask = direct_singleton_proof(distance);
                     direct[lane] = true;
                 }
                 if lane == 0 {
@@ -247,7 +235,7 @@ pub(crate) fn start_combined_two_lane_search(
     reads: [&[Base]; 2],
     reversed_projected: [&[ProjectedBase]; 2],
     first_seeds: [Option<CombinedSeedMatches>; 2],
-    reverse_second_lane_hits: bool,
+    conversion_passes: [ConversionPass; 2],
     limits: CombinedSearchLimits,
     mate1_candidates: &mut Vec<ReadCandidate>,
     mate2_candidates: &mut Vec<ReadCandidate>,
@@ -259,7 +247,7 @@ pub(crate) fn start_combined_two_lane_search(
         reads,
         reversed_projected,
         first_seeds,
-        reverse_second_lane_hits,
+        conversion_passes,
         limits,
         &mut state,
         mate1_candidates,
@@ -280,7 +268,7 @@ fn visit_combined_two_lane_search_rounds(
     reads: [&[Base]; 2],
     reversed_projected: [&[ProjectedBase]; 2],
     first_seeds: [Option<CombinedSeedMatches>; 2],
-    reverse_second_lane_hits: bool,
+    conversion_passes: [ConversionPass; 2],
     limits: CombinedSearchLimits,
     state: &mut CombinedTwoLaneSearchState,
     mate1_candidates: &mut Vec<ReadCandidate>,
@@ -353,7 +341,7 @@ fn visit_combined_two_lane_search_rounds(
             let (rows, matched_bases, direct) = visit_combined_seed_round_two_lanes(
                 reference,
                 reads,
-                reverse_second_lane_hits,
+                conversion_passes,
                 round,
                 state.offsets,
                 [first, second],
@@ -399,8 +387,8 @@ fn visit_combined_two_lane_search_rounds(
                 }
             };
         }
-        consume_lane!(0, mate1_candidates, false);
-        consume_lane!(1, mate2_candidates, reverse_second_lane_hits);
+        consume_lane!(0, mate1_candidates, conversion_passes[0]);
+        consume_lane!(1, mate2_candidates, conversion_passes[1]);
     }
     Ok(())
 }
@@ -409,15 +397,44 @@ pub(crate) fn continue_combined_two_lane_search(
     reference: &ReferenceIndex,
     reads: [&[Base]; 2],
     reversed_projected: [&[ProjectedBase]; 2],
-    reverse_second_lane_hits: bool,
+    conversion_passes: [ConversionPass; 2],
+    state: &mut CombinedTwoLaneSearchState,
+    mate1_candidates: &mut Vec<ReadCandidate>,
+    mate2_candidates: &mut Vec<ReadCandidate>,
+) -> Result<[u64; 2], AlignmentError> {
+    continue_combined_two_lane_search_with_limits(
+        reference,
+        reads,
+        reversed_projected,
+        conversion_passes,
+        DEFAULT_SEARCH_LIMITS,
+        false,
+        state,
+        mate1_candidates,
+        mate2_candidates,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn continue_combined_two_lane_search_with_limits(
+    reference: &ReferenceIndex,
+    reads: [&[Base]; 2],
+    reversed_projected: [&[ProjectedBase]; 2],
+    conversion_passes: [ConversionPass; 2],
+    limits: CombinedSearchLimits,
+    complete_direct_frontier: bool,
     state: &mut CombinedTwoLaneSearchState,
     mate1_candidates: &mut Vec<ReadCandidate>,
     mate2_candidates: &mut Vec<ReadCandidate>,
 ) -> Result<[u64; 2], AlignmentError> {
     let before = state.located;
-    let limits = DEFAULT_SEARCH_LIMITS;
+    if complete_direct_frontier {
+        for lane in 0..2 {
+            state.active[lane] |= state.direct[lane];
+        }
+    }
     for (lane, read) in reads.into_iter().enumerate() {
-        if state.direct[lane] {
+        if state.direct[lane] && !complete_direct_frontier {
             continue;
         }
         let candidates = if lane == 0 {
@@ -432,7 +449,7 @@ pub(crate) fn continue_combined_two_lane_search(
             let (rows, _, direct) = visit_combined_seed_round(
                 reference,
                 read,
-                lane == 1 && reverse_second_lane_hits,
+                conversion_passes[lane],
                 deferred.round,
                 deferred.offset,
                 deferred.matches,
@@ -456,7 +473,7 @@ pub(crate) fn continue_combined_two_lane_search(
         reads,
         reversed_projected,
         [None, None],
-        reverse_second_lane_hits,
+        conversion_passes,
         limits,
         state,
         mate1_candidates,
@@ -470,13 +487,13 @@ pub(crate) fn continue_combined_two_lane_search(
 
 pub(crate) fn prepare_combined_projection(
     read: &[Base],
-    reverse_complement_query: bool,
+    conversion_pass: ConversionPass,
     output: &mut [ProjectedBase; MAX_READ_BASES],
 ) -> Result<(), AlignmentError> {
-    if !(MINIMUM_READ_BASES..=MAX_READ_BASES).contains(&read.len()) {
+    if !(MIN_READ_BASES..=MAX_READ_BASES).contains(&read.len()) {
         return Err(AlignmentError::UnsupportedReadLength { length: read.len() });
     }
-    if reverse_complement_query {
+    if conversion_pass.reverse_complement_query() {
         for (destination, &base) in output.iter_mut().zip(read) {
             *destination = combined_projected_base(base.complement());
         }
@@ -490,13 +507,13 @@ pub(crate) fn prepare_combined_projection(
 
 pub(crate) fn prepare_combined_search_projection(
     read: &[Base],
-    reverse_complement_query: bool,
+    conversion_pass: ConversionPass,
     output: &mut [SearchBase; MAX_READ_BASES],
 ) -> Result<(), AlignmentError> {
-    if !(MINIMUM_READ_BASES..=MAX_READ_BASES).contains(&read.len()) {
+    if !(MIN_READ_BASES..=MAX_READ_BASES).contains(&read.len()) {
         return Err(AlignmentError::UnsupportedReadLength { length: read.len() });
     }
-    if reverse_complement_query {
+    if conversion_pass.reverse_complement_query() {
         for (destination, &base) in output.iter_mut().zip(read) {
             *destination = combined_search_base(base.complement());
         }
@@ -521,5 +538,22 @@ const fn combined_search_base(base: Base) -> SearchBase {
         ProjectedBase::A => SearchBase::A,
         ProjectedBase::G => SearchBase::G,
         ProjectedBase::T => SearchBase::T,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn direct_distance_and_seed_rounds_survive_candidate_evidence_union() {
+        let direct = direct_singleton_proof(2);
+        let rediscovered = FLEXIBLE_NOMINAL_PROOF | seed_round_proof(0) | seed_round_proof(7);
+        let combined = direct | rediscovered;
+
+        assert_ne!(combined & DIRECT_SINGLETON_PROOF, 0);
+        assert_ne!(combined & FLEXIBLE_NOMINAL_PROOF, 0);
+        assert_eq!(direct_singleton_distance(combined), 2);
+        assert_eq!(seed_round_support(combined), 2);
     }
 }

@@ -9,7 +9,7 @@ use std::fs::{self, File, Metadata, OpenOptions};
 use std::io;
 use std::os::fd::{AsRawFd, BorrowedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 #[cfg(not(target_os = "linux"))]
@@ -17,6 +17,8 @@ compile_error!("bsbit-io currently supports only the audited Linux profile");
 
 const AT_CURRENT_WORKING_DIRECTORY: c_int = -100;
 const AT_SYMLINK_FOLLOW: c_int = 0x400;
+const O_NOFOLLOW: c_int = 0x20_000;
+const O_NONBLOCK: c_int = 0x800;
 const V9FS_SUPER_MAGIC: c_long = 0x0102_1997;
 const STATFS_STORAGE_WORDS: usize = 32;
 
@@ -158,21 +160,77 @@ pub fn validate_create_target(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Verifies that two paths are lexically distinct after absolutization.
+/// Verifies that a future replaceable file target has an existing directory
+/// as its parent.
+///
+/// A missing target and an existing regular file or symbolic link are valid.
+/// Directories and other special filesystem objects are never replaced.
 ///
 /// # Errors
 ///
-/// Returns `InvalidInput` for the same absolute path or an absolutization
-/// error.
+/// Returns `Unsupported` for an existing non-file target, `NotADirectory` when
+/// the parent exists but is not a directory, and propagates absolutization or
+/// metadata errors otherwise.
+pub fn validate_replace_target(path: &Path) -> io::Result<()> {
+    let target = absolute_path(path)?;
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.is_file() || metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "existing output target is not a regular file or symbolic link",
+            ));
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(source),
+    }
+    let parent = target.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "replacement target has no parent directory",
+        )
+    })?;
+    let metadata = fs::metadata(parent)?;
+    if metadata.is_dir() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "replacement target parent is not a directory",
+        ))
+    }
+}
+
+/// Verifies that two paths are lexically distinct and, when both exist, do not
+/// identify the same filesystem object.
+///
+/// # Errors
+///
+/// Returns `InvalidInput` for the same absolute path or filesystem object, or
+/// an absolutization/metadata error.
 pub fn validate_distinct_paths(first: &Path, second: &Path) -> io::Result<()> {
-    if absolute_path(first)? == absolute_path(second)? {
+    if absolute_path(first)? == absolute_path(second)? || paths_share_identity(first, second)? {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "output paths resolve to the same lexical absolute path",
+            "paths resolve to the same filesystem object",
         ))
     } else {
         Ok(())
     }
+}
+
+fn paths_share_identity(first: &Path, second: &Path) -> io::Result<bool> {
+    let first = match fs::metadata(first) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(source) => return Err(source),
+    };
+    let second = match fs::metadata(second) {
+        Ok(metadata) => metadata,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(source) => return Err(source),
+    };
+    Ok(FileIdentity::from_metadata(&first) == FileIdentity::from_metadata(&second))
 }
 
 /// Creates one absent local file without following or replacing an entry.
@@ -188,6 +246,109 @@ pub fn create_new(path: &Path) -> io::Result<(File, FileIdentity)> {
         .open(path)?;
     let identity = FileIdentity::from_file(&file)?;
     Ok((file, identity))
+}
+
+/// Opens a regular output file for direct writing, creating it when absent or
+/// truncating it when present.
+///
+/// Symbolic links, directories, and special files are rejected. The Linux
+/// `O_NOFOLLOW` flag closes the race in which the final path becomes a symbolic
+/// link between validation and open; `O_NONBLOCK` prevents a raced FIFO from
+/// blocking the process before its file type is checked.
+///
+/// # Errors
+///
+/// Returns path, parent-directory, permission, open, or file-type errors.
+pub fn open_direct_output(path: &Path) -> io::Result<File> {
+    open_direct_output_distinct_from(path, &[])
+}
+
+/// Opens a regular output for direct writing after proving that it is not any
+/// protected input path or existing filesystem object.
+///
+/// The target is opened without `O_TRUNC`, compared with every protected path
+/// by lexical path and file identity, and truncated only after those checks.
+///
+/// # Errors
+///
+/// Returns path, parent-directory, permission, file-type, identity, or input
+/// collision errors.
+pub fn open_direct_output_distinct_from(
+    path: &Path,
+    protected_paths: &[&Path],
+) -> io::Result<File> {
+    let target = absolute_path(path)?;
+    for protected in protected_paths {
+        if target == absolute_path(protected)? {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "output target is also a protected input: {}",
+                    protected.display()
+                ),
+            ));
+        }
+    }
+    let parent = target.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "output target has no parent directory",
+        )
+    })?;
+    if !fs::metadata(parent)?.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            "output target parent is not a directory",
+        ));
+    }
+    match fs::symlink_metadata(&target) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "existing output target is not a regular file",
+            ));
+        }
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {}
+        Err(source) => return Err(source),
+    }
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .mode(0o666)
+        .custom_flags(O_NOFOLLOW | O_NONBLOCK)
+        .open(&target)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "opened output target is not a regular file",
+        ));
+    }
+    let identity = FileIdentity::from_metadata(&metadata);
+    if !identity.matches_path(&target)? {
+        return Err(io::Error::other(
+            "output target changed while it was opened",
+        ));
+    }
+    for protected in protected_paths {
+        let protected_metadata = match fs::metadata(protected) {
+            Ok(metadata) => metadata,
+            Err(source) if source.kind() == io::ErrorKind::NotFound => continue,
+            Err(source) => return Err(source),
+        };
+        if identity == FileIdentity::from_metadata(&protected_metadata) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "output target is also a protected input: {}",
+                    protected.display()
+                ),
+            ));
+        }
+    }
+    file.set_len(0)?;
+    Ok(file)
 }
 
 /// Reopens a live descriptor as an independent read-write file description.
@@ -234,7 +395,10 @@ pub fn remove_if_identity_matches(path: &Path, identity: FileIdentity) -> io::Re
 ///
 /// Returns `InvalidInput` for an embedded NUL, `Unsupported` for Linux 9p or
 /// an unverified procfs view, and the direct `linkat(2)` error otherwise.
-pub fn hard_link_descriptor_create_new(source: BorrowedFd<'_>, target: &Path) -> io::Result<()> {
+pub(crate) fn hard_link_descriptor_create_new(
+    source: BorrowedFd<'_>,
+    target: &Path,
+) -> io::Result<()> {
     let source_path = CString::new(format!("/proc/self/fd/{}", source.as_raw_fd()))
         .map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
     let target = CString::new(target.as_os_str().as_bytes())

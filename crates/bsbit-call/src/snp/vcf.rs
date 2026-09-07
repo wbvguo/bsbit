@@ -122,7 +122,7 @@ pub(crate) fn render_vcf_header(
 }
 
 fn render_vcf_model_header(writer: &mut (impl Write + ?Sized)) -> io::Result<()> {
-    writer.write_all(b"##bsbit_model=bisulfite-diploid-bayesian-v5\n")?;
+    writer.write_all(b"##bsbit_model=bisulfite-diploid-bayesian-v1\n")?;
     writer.write_all(
         b"##bsbit_genotype_decision=site-posterior-alt-plus-maximum-likelihood-dosage\n",
     )?;
@@ -240,7 +240,8 @@ fn write_filters(writer: &mut (impl Write + ?Sized), filters: u8) -> io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::snp::result::{Base, Genotype};
+    use crate::evidence::BaseCode;
+    use crate::snp::result::Genotype;
 
     #[test]
     fn vcf_header_declares_posterior_and_evidence_contract() {
@@ -253,7 +254,7 @@ mod tests {
         )
         .unwrap();
         let header = String::from_utf8(output).unwrap();
-        assert!(header.contains("##bsbit_model=bisulfite-diploid-bayesian-v5\n"));
+        assert!(header.contains("##bsbit_model=bisulfite-diploid-bayesian-v1\n"));
         assert!(header.contains(
             "##bsbit_genotype_decision=site-posterior-alt-plus-maximum-likelihood-dosage\n"
         ));
@@ -280,10 +281,10 @@ mod tests {
     fn vcf_renderer_exposes_eight_strand_specific_counts() {
         let call = VariantCall {
             position: 9,
-            reference: Base::A,
+            reference: BaseCode::A,
             genotype: Genotype {
-                left: Base::A,
-                right: Base::G,
+                left: BaseCode::A,
+                right: BaseCode::G,
             },
             depth: 8,
             genotype_quality: 42,

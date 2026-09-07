@@ -4,6 +4,8 @@
 //! invariants can be tested without widening the crate API.
 
 use super::*;
+#[cfg(feature = "combined-index")]
+use crate::storage::fm::ProjectedBase;
 use bsbit_core::sequence::normalize_dna;
 
 #[cfg(feature = "combined-index")]
@@ -66,7 +68,7 @@ fn combined_owner_validates_length_and_retains_reference_metrics() {
     let sequence = normalize_dna(b"NCGTNNGTACGTACN").unwrap();
     let reference = ReferenceIndex::from_private_combined(
         vec![ContigInput::new(b"chr".to_vec(), sequence)],
-        PrivateCombinedReference::new(Box::new(LengthOnlyCombined(15))),
+        PrivateCombinedReference::from_test(Box::new(LengthOnlyCombined(15))),
     )
     .unwrap();
     assert_eq!(reference.metrics().total_reference_bases(), 15);
@@ -77,7 +79,7 @@ fn combined_owner_validates_length_and_retains_reference_metrics() {
             b"chr".to_vec(),
             normalize_dna(b"ACGT").unwrap(),
         )],
-        PrivateCombinedReference::new(Box::new(LengthOnlyCombined(3))),
+        PrivateCombinedReference::from_test(Box::new(LengthOnlyCombined(3))),
     )
     .expect_err("combined index length must match the reference");
     assert_eq!(

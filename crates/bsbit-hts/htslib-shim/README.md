@@ -39,7 +39,8 @@ license from the submodule according to
 
 ## Verification
 
-`scripts/check-htslib-shim.sh NORMAL_PREFIX SANITIZED_SOURCE` performs:
+`tests/qualification/check-htslib-shim.sh NORMAL_PREFIX SANITIZED_SOURCE`
+performs:
 
 1. a strict C11 CMake build with project warnings promoted to errors;
 2. an 84-assertion smoke covering ABI health, misleading suffixes, plain/gzip/

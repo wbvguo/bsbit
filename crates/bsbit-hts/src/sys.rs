@@ -685,8 +685,8 @@ pub struct NativeBgzfWriter {
 impl NativeBgzfWriter {
     /// Opens one BGZF output path with optional private compression workers.
     ///
-    /// `compression_threads == 0` selects synchronous compression. Values
-    /// above 64 are rejected by the audited shim.
+    /// `compression_threads == 0` selects synchronous compression. Positive
+    /// values must fit the native signed `int` worker domain.
     ///
     /// # Errors
     ///
@@ -846,7 +846,7 @@ pub struct NativeIndexedBamReader {
 }
 
 impl NativeIndexedBamReader {
-    /// Opens a BAM together with its adjacent BAI or CSI index.
+    /// Opens a BAM together with its adjacent index.
     pub fn open(path: &CStr) -> Result<Self, NativeError> {
         let mut handle = core::ptr::null_mut();
         let mut call = NativeCall::new();
@@ -1331,8 +1331,8 @@ impl NativeBamWriter {
 
     /// Opens a BAM path with private `HTSlib` BGZF compression workers.
     ///
-    /// `compression_threads == 0` preserves the synchronous writer. Values
-    /// above 64 are rejected by the audited shim.
+    /// `compression_threads == 0` preserves the synchronous writer. Positive
+    /// values must fit the native signed `int` worker domain.
     ///
     /// # Errors
     ///
@@ -1561,7 +1561,9 @@ impl NativeCall {
             .unwrap_or(self.error.len());
         let bytes: Vec<u8> = self.error[..end]
             .iter()
-            .map(|byte| (*byte).cast_unsigned())
+            // `c_char` is signed on some targets and unsigned on others; its
+            // one-byte representation is the portable error-buffer payload.
+            .map(|byte| byte.to_ne_bytes()[0])
             .collect();
         Err(NativeError {
             status,

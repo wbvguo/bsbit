@@ -10,6 +10,7 @@ autobins = false
 autobenches = false
 
 [dependencies]
+md-5 = { version = "=0.11.0", default-features = false }
 sha2 = { version = "=0.11.0", default-features = false }
 
 [lints]

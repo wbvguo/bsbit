@@ -1,4 +1,4 @@
-//! Bounded-memory construction of the combined three-letter combined-index BWT.
+//! Bounded-memory construction of the combined three-letter index BWT.
 //!
 //! The complete projected text is retained at two bits per symbol.  A
 //! libsais32 suffix sort initializes the rightmost block; preceding blocks are
@@ -22,7 +22,7 @@ use crate::build::libsais::libsais_omp;
 const SYMBOL_MASK: u8 = 3;
 const SAMPLE_FLAG: u8 = 4;
 const SENTINEL_CODE: u8 = 3;
-const DEFAULT_SAMPLE_STRIDE: usize = 16;
+const DEFAULT_SAMPLE_STRIDE: usize = 8;
 const LOCAL_RANK_STRIDE: usize = 64;
 const SUPER_RANK_STRIDE: usize = 65_536;
 const SAMPLE_RANK_STRIDE: usize = 256;

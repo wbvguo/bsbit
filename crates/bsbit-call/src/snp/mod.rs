@@ -10,7 +10,7 @@ pub(crate) mod vcf;
 use std::path::PathBuf;
 
 use crate::region::RegionSelection;
-use crate::{CallError, CallReport, validate_threads};
+use crate::{CallError, CallReport, validate_compression_threads, validate_threads};
 
 /// SNP filtering and bisulfite-chemistry parameters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,6 +19,8 @@ pub struct Parameters {
     pub minimum_base_quality: u8,
     /// Minimum mapping quality in `0..=254`.
     pub minimum_mapping_quality: u8,
+    /// Ignore paired records that do not carry the SAM proper-pair flag.
+    pub ignore_orphans: bool,
     /// Minimum candidate and likelihood depth; must be nonzero.
     pub minimum_depth: u32,
     /// Minimum candidate and selected-ALT informative observations; must be nonzero.
@@ -40,9 +42,10 @@ pub struct Parameters {
 impl Default for Parameters {
     fn default() -> Self {
         Self {
-            minimum_base_quality: 15,
+            minimum_base_quality: 20,
             minimum_mapping_quality: 20,
-            minimum_depth: 4,
+            ignore_orphans: false,
+            minimum_depth: 10,
             minimum_alternate_count: 2,
             minimum_alternate_fraction_parts_per_billion: 100_000_000,
             minimum_genotype_quality: 0,
@@ -110,24 +113,27 @@ pub struct Options {
     pub sample_name: Option<String>,
     /// Optional interval restriction; empty means the whole BAM dictionary.
     pub regions: RegionSelection,
-    /// Create-only VCF destination.
+    /// VCF destination, replacing an existing file after completion.
     pub output: PathBuf,
     /// Encode output as BGZF when true, otherwise plain VCF.
     pub compress: bool,
-    /// Regional calling workers in `1..=64`.
+    /// Positive regional calling worker count.
     pub threads: u64,
+    /// Private BGZF workers; zero performs compression synchronously.
+    pub compression_threads: u32,
     /// Quality, depth, and conversion parameters.
     pub parameters: Parameters,
 }
 
-/// Calls bisulfite-aware diploid SNVs and publishes one VCF.
+/// Calls bisulfite-aware diploid SNVs and writes one VCF directly.
 ///
 /// # Errors
 ///
 /// Returns an operational error for an invalid configuration, input contract,
-/// likelihood failure, or output publication failure.
+/// likelihood or output failure.
 pub fn call(options: &Options) -> Result<CallReport, CallError> {
     validate_threads("call snp", options.threads)?;
+    validate_compression_threads("call snp", options.compress, options.compression_threads)?;
     options.parameters.validate("call snp")?;
     run::run(options)
 }

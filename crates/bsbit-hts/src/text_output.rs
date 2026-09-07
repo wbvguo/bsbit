@@ -1,12 +1,13 @@
-//! Streaming text/BGZF encoding over the generic file-publication lifecycle.
+//! Streaming text/BGZF encoding for staged or direct file outputs.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use bsbit_io::{CompletedFile, PublicationError, PublicationPhase, PublishedFile, StagedFile};
 
-use super::{BgzfWriter, HtsError, HtsErrorKind, HtsOperation, io_error, simple_error};
+use super::{BgzfWriter, HtsError, HtsErrorKind, HtsOperation};
+use crate::htslib::{io_error, simple_error};
 
 const OUTPUT_BUFFER_BYTES: usize = 1 << 20;
 
@@ -51,8 +52,9 @@ impl TextBackend {
     }
 }
 
-/// Streaming format encoder backed by one generic create-only staging file.
+/// Streaming format encoder backed by a staged or direct output file.
 pub struct TextStagingWriter {
+    path: PathBuf,
     staged: Option<StagedFile>,
     backend: Option<TextBackend>,
     terminal: bool,
@@ -71,8 +73,35 @@ impl TextStagingWriter {
         compression: TextOutputCompression,
         compression_threads: u32,
     ) -> Result<Self, HtsError> {
-        let mut staged =
-            StagedFile::create_sibling(target.as_ref(), "text").map_err(map_publication_error)?;
+        Self::create_sibling_with_policy(target.as_ref(), compression, compression_threads, false)
+    }
+
+    /// Creates a private sibling staging file beside a missing or replaceable
+    /// final target.
+    ///
+    /// # Errors
+    ///
+    /// Returns target/staging publication errors or a BGZF-open error.
+    pub fn create_sibling_replace(
+        target: impl AsRef<Path>,
+        compression: TextOutputCompression,
+        compression_threads: u32,
+    ) -> Result<Self, HtsError> {
+        Self::create_sibling_with_policy(target.as_ref(), compression, compression_threads, true)
+    }
+
+    fn create_sibling_with_policy(
+        target: &Path,
+        compression: TextOutputCompression,
+        compression_threads: u32,
+        replace: bool,
+    ) -> Result<Self, HtsError> {
+        let mut staged = if replace {
+            StagedFile::create_sibling_replace(target, "text")
+        } else {
+            StagedFile::create_sibling(target, "text")
+        }
+        .map_err(map_publication_error)?;
         let path = staged.path().to_path_buf();
         let file = staged.take_file().map_err(map_publication_error)?;
         let backend = match compression {
@@ -88,13 +117,66 @@ impl TextStagingWriter {
             }
         };
         Ok(Self {
+            path,
             staged: Some(staged),
             backend: Some(backend),
             terminal: false,
         })
     }
 
-    /// Returns the private staging path currently owned by this writer.
+    /// Opens and truncates the final text-output path and writes to it directly.
+    ///
+    /// `compression_threads == 0` performs synchronous BGZF compression.
+    ///
+    /// # Errors
+    ///
+    /// Returns path, file-type, permission, or BGZF-open errors. Once opened,
+    /// later failures leave the current partial output at the final path.
+    pub fn create_direct(
+        target: impl AsRef<Path>,
+        compression: TextOutputCompression,
+        compression_threads: u32,
+    ) -> Result<Self, HtsError> {
+        Self::create_direct_distinct_from(target, &[], compression, compression_threads)
+    }
+
+    /// Opens a direct text output after checking it against protected inputs.
+    ///
+    /// # Errors
+    ///
+    /// Returns path, collision, file-type, permission, or BGZF-open errors.
+    pub fn create_direct_distinct_from(
+        target: impl AsRef<Path>,
+        protected_paths: &[&Path],
+        compression: TextOutputCompression,
+        compression_threads: u32,
+    ) -> Result<Self, HtsError> {
+        let path = bsbit_io::absolute_path(target.as_ref()).map_err(|source| {
+            io_error(HtsOperation::ValidatePath, target.as_ref(), None, source)
+        })?;
+        let file = bsbit_io::open_direct_output_distinct_from(&path, protected_paths)
+            .map_err(|source| io_error(HtsOperation::OpenTextOutput, &path, None, source))?;
+        let backend = match compression {
+            TextOutputCompression::Plain => {
+                TextBackend::Plain(BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, file))
+            }
+            TextOutputCompression::Bgzf => {
+                let writer =
+                    BgzfWriter::from_file(file, compression_threads).map_err(|source| {
+                        io_error(HtsOperation::OpenTextOutput, &path, None, source)
+                    })?;
+                TextBackend::Bgzf(BufWriter::with_capacity(OUTPUT_BUFFER_BYTES, writer))
+            }
+        };
+        Ok(Self {
+            path,
+            staged: None,
+            backend: Some(backend),
+            terminal: false,
+        })
+    }
+
+    /// Returns the active output path.
     ///
     /// # Panics
     ///
@@ -102,10 +184,7 @@ impl TextStagingWriter {
     /// A caller cannot produce that state through the public API.
     #[must_use]
     pub fn staging_path(&self) -> &Path {
-        self.staged
-            .as_ref()
-            .expect("live text writer retains staging state")
-            .path()
+        &self.path
     }
 
     /// Finalizes the encoding and transfers the file into the completed state.
@@ -144,6 +223,37 @@ impl TextStagingWriter {
         })?;
         let completed = staged.complete(file).map_err(map_publication_error)?;
         Ok(CompletedTextOutput { completed })
+    }
+
+    /// Finalizes and synchronizes an output opened by [`Self::create_direct`].
+    ///
+    /// # Errors
+    ///
+    /// Returns terminal, compression-finalization, or synchronization errors.
+    /// The final path retains the bytes written before an error.
+    pub fn finish_direct(mut self) -> Result<(), HtsError> {
+        let path = self.path.clone();
+        if self.terminal || self.staged.is_some() {
+            return Err(simple_error(
+                HtsOperation::FinishTextOutput,
+                &path,
+                None,
+                HtsErrorKind::Terminal,
+            ));
+        }
+        let backend = self.backend.take().ok_or_else(|| {
+            simple_error(
+                HtsOperation::FinishTextOutput,
+                &path,
+                None,
+                HtsErrorKind::Terminal,
+            )
+        })?;
+        let file = backend
+            .finish()
+            .map_err(|source| io_error(HtsOperation::FinishTextOutput, &path, None, source))?;
+        file.sync_all()
+            .map_err(|source| io_error(HtsOperation::SyncOutput, &path, None, source))
     }
 }
 
@@ -205,10 +315,22 @@ impl CompletedTextOutput {
             .map(|published| TextPublication { published })
             .map_err(map_publication_error)
     }
+
+    /// Atomically publishes the completed bytes, replacing an existing file.
+    ///
+    /// # Errors
+    ///
+    /// Returns synchronization, identity, backup, or rename failures.
+    pub fn publish_replace(self) -> Result<TextPublication, HtsError> {
+        self.completed
+            .publish_replace()
+            .map(|published| TextPublication { published })
+            .map_err(map_publication_error)
+    }
 }
 
 /// Details and rollback authority for one published text output.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct TextPublication {
     published: PublishedFile,
 }

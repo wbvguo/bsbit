@@ -1,0 +1,13 @@
+[package]
+name = "bsbit-cpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Portable and architecture-optimized backend policy for bsbit"
+autobins = false
+autobenches = false
+
+[lints]
+workspace = true

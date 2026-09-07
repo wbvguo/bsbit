@@ -8,13 +8,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bsbit_core::bisulfite::{AlignmentOrientation, BisulfiteStrand, CytosineStrand};
 use bsbit_core::cigar::CoreCigar;
 use bsbit_core::coordinate::{ReferenceInterval, ReferenceLength};
+use bsbit_core::reference::ReferenceSequenceMd5;
 use bsbit_hts::{
     AlignmentAuxiliaryMode, AlignmentCigarOp, AlignmentCigarRun, AlignmentRecord,
     AlignmentRecordBatch, AlignmentRecordLimits, AlignmentRecordResource, BamStagingWriter,
-    BorrowedAlignmentRecord, BsbitAlignmentMode, BsbitProgramProvenance, Compression,
-    DecodedReader, HtsErrorKind, HtsOperation, IndexedBamReader, MappedAlignmentRecord,
-    RecordMappingQuality, RecordReference, RecordSegment, SamHeader, SamHeaderReference,
-    SamSortOrder, build_bam_index_create_new,
+    BorrowedAlignmentRecord, BsbitAlignmentMode, BsbitHeaderMetadata, Compression, DecodedReader,
+    HtsErrorKind, HtsOperation, IndexedBamReader, MappedAlignmentRecord, RecordMappingQuality,
+    RecordReference, RecordSegment, SamHeader, SamHeaderReference, SamSortOrder,
+    build_bam_index_create_new,
 };
 
 fn unique_directory(label: &str) -> PathBuf {
@@ -30,28 +31,36 @@ fn unique_directory(label: &str) -> PathBuf {
 
 fn header() -> SamHeader {
     SamHeader::new(
-        vec![SamHeaderReference::new(0, b"chr1", 8).expect("dictionary entry")],
+        vec![
+            SamHeaderReference::new(0, b"chr1", 8)
+                .expect("dictionary entry")
+                .with_md5(ReferenceSequenceMd5::from_ascii(b"ACGTACGT")),
+        ],
         AlignmentRecordLimits::default(),
     )
     .expect("header")
     .with_sort_order(SamSortOrder::Coordinate)
 }
 
-fn provenance_writer(path: &Path, provenance: BsbitProgramProvenance) -> BamStagingWriter {
-    let provenance_header = header()
-        .with_bsbit_provenance(provenance, AlignmentRecordLimits::default())
-        .expect("provenance header");
-    BamStagingWriter::create_new(path, &provenance_header, AlignmentRecordLimits::default())
+fn metadata_writer(path: &Path, metadata: BsbitHeaderMetadata) -> BamStagingWriter {
+    let metadata_header = header()
+        .with_bsbit_metadata(metadata, AlignmentRecordLimits::default())
+        .expect("metadata header");
+    BamStagingWriter::create_new(path, &metadata_header, AlignmentRecordLimits::default())
         .expect("BAM staging")
 }
 
-fn assert_bsbit_provenance(reader: &IndexedBamReader, expected: BsbitProgramProvenance) {
+fn assert_bsbit_metadata(reader: &IndexedBamReader, expected: BsbitHeaderMetadata) {
     assert_eq!(
         reader
             .header()
-            .bsbit_program_provenance()
-            .expect("valid BAM provenance"),
+            .bsbit_header_metadata()
+            .expect("valid BAM metadata"),
         Some(expected)
+    );
+    assert_eq!(
+        reader.header().reference_md5s().expect("valid M5 fields"),
+        vec![Some(ReferenceSequenceMd5::from_ascii(b"ACGTACGT"))]
     );
 }
 
@@ -126,11 +135,8 @@ fn direct_fields_round_trip_through_public_bam_and_index_contracts() {
     let mut batch = AlignmentRecordBatch::new();
     batch.push(&direct).expect("batch retention");
 
-    let expected_provenance = BsbitProgramProvenance::new(
-        [0x5a; 32],
-        BsbitAlignmentMode::CallerCompatibleDirectionalPaired,
-    );
-    let mut writer = provenance_writer(&staging, expected_provenance);
+    let expected_metadata = BsbitHeaderMetadata::new(BsbitAlignmentMode::DirectionalPairedEnd);
+    let mut writer = metadata_writer(&staging, expected_metadata);
     writer
         .write_borrowed_alignment_record(&batch.records().next().expect("retained record"))
         .expect("direct BAM fields");
@@ -160,7 +166,7 @@ fn direct_fields_round_trip_through_public_bam_and_index_contracts() {
     let mut reader = IndexedBamReader::open(&target).expect("indexed BAM");
     assert!(reader.header().is_coordinate_sorted());
     assert_eq!(reader.header().references()[0].name(), b"chr1");
-    assert_bsbit_provenance(&reader, expected_provenance);
+    assert_bsbit_metadata(&reader, expected_metadata);
     reader.query(0, 0, 8).expect("region query");
     let record = reader
         .next_record()
@@ -198,6 +204,31 @@ fn direct_fields_round_trip_through_public_bam_and_index_contracts() {
     remove_if_present(&index);
     remove_if_present(&target);
     remove_if_present(&staging);
+    fs::remove_dir(directory).expect("directory cleanup");
+}
+
+#[test]
+fn direct_bam_writer_truncates_and_finishes_the_target() {
+    let directory = unique_directory("direct-writer");
+    fs::create_dir(&directory).expect("directory");
+    let target = directory.join("result.bam");
+    fs::write(&target, b"previous BAM").expect("existing output fixture");
+
+    let limits = AlignmentRecordLimits::default();
+    let mut writer = BamStagingWriter::create_direct_with_threads(&target, &header(), limits, 0)
+        .expect("direct BAM writer");
+    writer
+        .write_record_as_bam(&shared_record_fixture())
+        .expect("direct BAM record");
+    assert_eq!(writer.finish_direct().expect("direct BAM finalization"), 1);
+
+    let mut decoded = DecodedReader::open(&target).expect("decoded BAM source");
+    let mut magic = [0_u8; 4];
+    decoded.read_exact(&mut magic).expect("BAM magic");
+    assert_eq!(&magic, b"BAM\x01");
+    decoded.close().expect("decoded source closes");
+
+    fs::remove_file(target).expect("target cleanup");
     fs::remove_dir(directory).expect("directory cleanup");
 }
 
@@ -493,7 +524,6 @@ fn direct_record_constructor_enforces_bam_text_and_optional_caps() {
     ));
 }
 
-#[allow(dead_code)]
 mod mutation_oracle {
     use super::*;
 

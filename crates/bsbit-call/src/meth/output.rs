@@ -4,8 +4,8 @@ use std::io::{self, Write};
 
 use bsbit_hts::{BedMethylContext, BedMethylRecord, BedMethylStrand};
 
-use super::OutputFormat;
 use super::aggregation::{DenseMethRegion, SiteCounts, SiteKey};
+use super::{OutputFormat, Parameters};
 use crate::call_input::BamReference;
 use crate::evidence::{ContextClass, CytosineContext, EvidenceStrand};
 use crate::{CallError, CallErrorKind, CallWarning};
@@ -44,17 +44,21 @@ impl UnresolvedContextSummary {
 pub(crate) fn render_region(
     writer: &mut (impl Write + ?Sized),
     format: OutputFormat,
+    parameters: Parameters,
     references: &[BamReference],
     region: &DenseMethRegion,
     unresolved: &mut UnresolvedContextSummary,
 ) -> Result<(), CallError> {
     region.for_each_site(|key, counts| {
         let coverage = counts.valid_coverage()?;
+        if coverage < u64::from(parameters.minimum_depth) {
+            return Ok(());
+        }
         unresolved.observe(&counts, coverage)?;
         let Some(context) = counts.context else {
             return Ok(());
         };
-        if coverage == 0 {
+        if parameters.cg_only && context.class != ContextClass::Cg {
             return Ok(());
         }
         let reference = references

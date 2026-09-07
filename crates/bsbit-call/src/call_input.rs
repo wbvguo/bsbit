@@ -1,21 +1,22 @@
 //! Shared BAM, reference, region, and sample preflight for call modes.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use bsbit_core::reference::ReferenceSemanticDigest;
+use bsbit_core::reference::ReferenceSequenceMd5;
 use bsbit_hts::IndexedBamReader;
 
-use crate::reference_context::CallReferenceReader;
+use crate::reference_context::CallReferenceSource;
 use crate::region::{CallRegion, RegionSelection, plan_call_regions};
 use crate::region_workers::{IndexedCallMode, region_bases_for};
-use crate::{CallError, CallErrorKind};
+use crate::{CallError, CallErrorKind, CallWarning};
 
 /// One validated entry from the input BAM reference dictionary.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct BamReference {
     pub(crate) name: Vec<u8>,
     pub(crate) length: u32,
+    pub(crate) md5: ReferenceSequenceMd5,
 }
 
 pub(crate) fn resolve_sample_name(
@@ -74,7 +75,8 @@ pub(crate) struct PreparedCallInput {
     pub(crate) references: Vec<BamReference>,
     pub(crate) regions: Vec<CallRegion>,
     pub(crate) worker_count: usize,
-    pub(crate) reference: PathBuf,
+    pub(crate) reference: CallReferenceSource,
+    pub(crate) reference_warning: Option<CallWarning>,
     pub(crate) bam_sample_name: Option<Vec<u8>>,
 }
 
@@ -98,35 +100,13 @@ pub(crate) fn prepare_call_input(
             error,
         )
     })?;
-    if !reader.header().has_program(b"bsbit", b"bsbit") {
-        return Err(CallError::input(format!(
-            "{command}: BAM {} header does not contain `@PG ID:bsbit PN:bsbit`",
-            path.display()
-        )));
-    }
-    let provenance = reader
-        .header()
-        .bsbit_program_provenance()
-        .map_err(|error| {
-            CallError::with_source(
-                CallErrorKind::Input,
-                format!("{command}: validate BAM {} provenance", path.display()),
-                error,
-            )
-        })?
-        .ok_or_else(|| {
-            CallError::input(format!(
-                "{command}: BAM {} lacks structured bsbit reference/alignment provenance",
-                path.display()
-            ))
-        })?;
-    if !provenance.alignment_mode().is_caller_compatible() {
-        return Err(CallError::input(format!(
-            "{command}: BAM {} was produced by the {:?} alignment path, which does not provide caller-calibrated mapping quality",
-            path.display(),
-            provenance.alignment_mode()
-        )));
-    }
+    let reference_md5s = reader.header().reference_md5s().map_err(|error| {
+        CallError::with_source(
+            CallErrorKind::Input,
+            format!("{command}: validate BAM {} @SQ M5 fields", path.display()),
+            error,
+        )
+    })?;
     if !reader.header().is_coordinate_sorted() {
         return Err(CallError::input(format!(
             "{command}: BAM {} requires `@HD SO:coordinate`; run name sort, fixmate -m, coordinate sort, markdup, and index first",
@@ -146,9 +126,17 @@ pub(crate) fn prepare_call_input(
                     reference.length()
                 ))
             })?;
+            let md5 = reference_md5s[ordinal].ok_or_else(|| {
+                CallError::input(format!(
+                    "{command}: BAM {} @SQ record {ordinal} (`{}`) lacks the standard M5 reference checksum",
+                    path.display(),
+                    String::from_utf8_lossy(reference.name())
+                ))
+            })?;
             Ok(BamReference {
                 name: reference.name().to_vec(),
                 length,
+                md5,
             })
         })
         .collect::<Result<Vec<_>, CallError>>()
@@ -160,14 +148,13 @@ pub(crate) fn prepare_call_input(
             error,
         )
     })?;
-    let mut reference_reader = CallReferenceReader::open(reference_path, &references)?;
-    reference_reader.validate_semantic_digest(
-        &references,
-        ReferenceSemanticDigest::from_bytes(provenance.reference_semantic_digest()),
-    )?;
+    let reference = CallReferenceSource::prepare(reference_path, &references)?;
+    let reference_warning = reference.warning();
+    let mut reference_reader = reference.open()?;
+    reference_reader.validate_reference_md5s(&references)?;
     reference_reader.close().map_err(|error| {
         error.with_context(format!(
-            "{command}: validate indexed reference FASTA {}",
+            "{command}: validate reference FASTA {}",
             reference_path.display()
         ))
     })?;
@@ -179,7 +166,8 @@ pub(crate) fn prepare_call_input(
         references,
         regions,
         worker_count,
-        reference: reference_path.to_path_buf(),
+        reference,
+        reference_warning,
         bam_sample_name,
     })
 }

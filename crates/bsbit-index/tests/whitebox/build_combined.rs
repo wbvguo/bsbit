@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::reference::ContigInput;
+use crate::storage::combined::CombinedIndexSaStride;
+use crate::storage::combined_layout::{META_EXTENSION_MINOR, META_EXTENSION_MINOR_SA8};
 use bsbit_core::sequence::normalize_dna;
 
 use super::*;
@@ -52,6 +54,19 @@ fn read_u32_at(bytes: &[u8], offset: usize) -> u32 {
 }
 
 #[test]
+fn builder_memory_budget_is_explicit_and_validated() {
+    let defaults = CombinedIndexBuildOptions::new(1).expect("default builder options");
+    assert_eq!(defaults.memory_mib(), DEFAULT_COMBINED_INDEX_MEMORY_MIB);
+    assert_eq!(defaults.sa_stride(), CombinedIndexSaStride::Eight);
+    let customized = defaults
+        .with_memory_mib(512)
+        .expect("positive representable budget");
+    assert_eq!(customized.memory_mib(), 512);
+    assert!(customized.with_memory_mib(0).is_err());
+    assert!(customized.with_memory_mib(u64::MAX).is_err());
+}
+
+#[test]
 fn metadata_binds_the_combined_image_to_the_reference_digest() {
     let directory = TestDirectory::new("bound-metadata");
     let path = directory.path("index");
@@ -66,7 +81,7 @@ fn metadata_binds_the_combined_image_to_the_reference_digest() {
             bwt_words: 3,
             high_occ_entries: 2,
         },
-        16,
+        crate::storage::combined::CombinedIndexSaStride::Sixteen,
         digest,
     )
     .expect("write bound metadata");
@@ -85,6 +100,44 @@ fn metadata_binds_the_combined_image_to_the_reference_digest() {
         digest.as_bytes()
     );
     assert_eq!(&bytes[116..120], &[0; 4]);
+    assert_eq!(read_u32_at(&bytes, 56), 16);
+}
+
+#[test]
+fn metadata_distinguishes_compact_and_fast_sparse_sa_layouts() {
+    let directory = TestDirectory::new("stride-metadata");
+    let dimensions = BwtDimensions {
+        suffix_count: 17,
+        sentinel_row: 3,
+        first_occurrence: [1, 5, 9, 17],
+        bwt_words: 3,
+        high_occ_entries: 2,
+    };
+    let digest = ReferenceSemanticDigest::from_bytes([0x5a; 32]);
+    for (name, stride, expected_value, expected_minor) in [
+        (
+            "compact",
+            CombinedIndexSaStride::Sixteen,
+            16,
+            META_EXTENSION_MINOR,
+        ),
+        (
+            "fast",
+            CombinedIndexSaStride::Eight,
+            8,
+            META_EXTENSION_MINOR_SA8,
+        ),
+    ] {
+        let path = directory.path(name);
+        let file = create_new_file(&path).expect("create metadata file");
+        write_metadata(&file, dimensions, stride, digest).expect("write stride metadata");
+        let bytes = fs::read(path).expect("read stride metadata");
+        assert_eq!(read_u32_at(&bytes, 56), expected_value);
+        assert_eq!(
+            u16::from_le_bytes(bytes[78..80].try_into().expect("minor bytes")),
+            expected_minor
+        );
+    }
 }
 
 #[test]
@@ -313,20 +366,16 @@ fn packed_bwt_rank_matches_naive_prefixes_at_layout_boundaries() {
 }
 
 fn assert_sa16_tail_contract(suffix_count: u64, expected_flag_entries: u64) {
+    const FIXTURE_SA_STRIDE: u32 = 16;
+
     let directory = TestDirectory::new("sa-tail");
-    let sample_count = (suffix_count - 1) / u64::from(DEFAULT_COMBINED_INDEX_SA_STRIDE) + 1;
+    let sample_count = (suffix_count - 1) / u64::from(FIXTURE_SA_STRIDE) + 1;
     let mut rows = (0..sample_count)
-        .map(|quotient| quotient * u64::from(DEFAULT_COMBINED_INDEX_SA_STRIDE))
+        .map(|quotient| quotient * u64::from(FIXTURE_SA_STRIDE))
         .collect::<Vec<_>>();
     let sa_path = directory.path("index.sa");
-    let dimensions = write_sa16(
-        &mut rows,
-        suffix_count,
-        2,
-        DEFAULT_COMBINED_INDEX_SA_STRIDE,
-        &sa_path,
-    )
-    .expect("write SA16");
+    let dimensions =
+        write_sa16(&mut rows, suffix_count, 2, FIXTURE_SA_STRIDE, &sa_path).expect("write SA16");
     assert_eq!(dimensions.sparse_entries, sample_count);
     assert_eq!(dimensions.flag_entries, expected_flag_entries);
 

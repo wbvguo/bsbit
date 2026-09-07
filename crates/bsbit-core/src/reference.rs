@@ -1,14 +1,126 @@
-//! Stable semantic identity for an ordered normalized reference catalog.
+//! Stable identities for normalized reference sequences and catalogs.
 //!
-//! This module defines only the value and hashing contract shared by index
-//! construction, alignment provenance, and callers. It owns no index or file
-//! format and performs no I/O.
+//! This module defines the SAM-compatible per-sequence MD5 and the private
+//! catalog-level semantic digest shared by bsbit products. It owns no index or
+//! file format and performs no I/O.
 
 use core::fmt;
 
+use md5::Md5;
 use sha2::{Digest, Sha256};
 
 use crate::alphabet::Base;
+
+/// The SAM `@SQ M5` digest of one normalized reference sequence.
+///
+/// SAM calculates this value after removing bytes outside printable ASCII and
+/// converting lowercase ASCII to uppercase. Reference names and line wrapping
+/// are not part of the digest.
+#[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ReferenceSequenceMd5([u8; 16]);
+
+impl ReferenceSequenceMd5 {
+    /// Constructs a digest from its exact 16 bytes.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    /// Calculates the SAM digest of an ASCII reference sequence.
+    #[must_use]
+    pub fn from_ascii(sequence: &[u8]) -> Self {
+        let mut builder = ReferenceSequenceMd5Builder::new();
+        builder.push_ascii(sequence);
+        builder.finish()
+    }
+
+    /// Calculates the SAM digest of already normalized core bases.
+    #[must_use]
+    pub fn from_normalized(sequence: &[Base]) -> Self {
+        let mut builder = ReferenceSequenceMd5Builder::new();
+        builder.push_normalized(sequence);
+        builder.finish()
+    }
+
+    /// Returns the exact digest bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+
+    /// Consumes the value and returns its exact bytes.
+    #[must_use]
+    pub const fn into_bytes(self) -> [u8; 16] {
+        self.0
+    }
+}
+
+impl fmt::Debug for ReferenceSequenceMd5 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "ReferenceSequenceMd5({self})")
+    }
+}
+
+impl fmt::Display for ReferenceSequenceMd5 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for byte in self.0 {
+            write!(formatter, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Streaming SAM `@SQ M5` calculation for one reference sequence.
+#[derive(Debug)]
+pub struct ReferenceSequenceMd5Builder {
+    hasher: Md5,
+}
+
+impl ReferenceSequenceMd5Builder {
+    /// Starts an empty reference-sequence digest.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { hasher: Md5::new() }
+    }
+
+    /// Adds an ASCII chunk using the normalization required by SAM `M5`.
+    pub fn push_ascii(&mut self, sequence: &[u8]) {
+        let mut normalized = [0_u8; 8192];
+        for chunk in sequence.chunks(normalized.len()) {
+            let mut length = 0;
+            for &byte in chunk {
+                if (b'!'..=b'~').contains(&byte) {
+                    normalized[length] = byte.to_ascii_uppercase();
+                    length += 1;
+                }
+            }
+            self.hasher.update(&normalized[..length]);
+        }
+    }
+
+    /// Adds a chunk already represented by normalized core bases.
+    pub fn push_normalized(&mut self, sequence: &[Base]) {
+        let mut ascii = [0_u8; 8192];
+        for chunk in sequence.chunks(ascii.len()) {
+            for (&base, target) in chunk.iter().zip(ascii.iter_mut()) {
+                *target = base.as_ascii();
+            }
+            self.hasher.update(&ascii[..chunk.len()]);
+        }
+    }
+
+    /// Finishes and returns the 16-byte digest.
+    #[must_use]
+    pub fn finish(self) -> ReferenceSequenceMd5 {
+        ReferenceSequenceMd5::from_bytes(self.hasher.finalize().into())
+    }
+}
+
+impl Default for ReferenceSequenceMd5Builder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// Domain separator for the frozen reference semantic digest contract.
 pub const REFERENCE_SEMANTIC_DIGEST_DOMAIN: &[u8] = b"BSBIT-REFERENCE-SEMANTIC-SHA256-V1\0";
@@ -379,6 +491,20 @@ impl ReferenceSemanticDigestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequence_md5_matches_the_sam_normalization_example() {
+        let sequence = b"ACGT ACGT ACGT  \nacgt acgt acgt  \n... 12345 !!!";
+        assert_eq!(
+            ReferenceSequenceMd5::from_ascii(sequence).to_string(),
+            "dfabdbb36e239a6da88957841f32b8e4"
+        );
+
+        let mut chunks = ReferenceSequenceMd5Builder::new();
+        chunks.push_ascii(b"ACGT ACGT ACGT  \nacgt");
+        chunks.push_ascii(b" acgt acgt  \n... 12345 !!!");
+        assert_eq!(chunks.finish(), ReferenceSequenceMd5::from_ascii(sequence));
+    }
 
     #[test]
     fn ascii_stream_is_case_insensitive_and_chunk_stable() {

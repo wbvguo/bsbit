@@ -52,6 +52,9 @@ fn main() {
         fs::remove_dir_all(&output_root).expect("remove previous private native build");
     }
     copy_tree_without_git(&external, &staged_source);
+    let version_script = staged_source.join("version.sh");
+    normalize_shell_script(&version_script);
+    make_executable(&version_script);
     let htscodecs_version = staged_source.join("htscodecs/htscodecs/version.h");
     fs::write(
         htscodecs_version,
@@ -71,9 +74,9 @@ fn main() {
         .arg("--disable-libcurl")
         .arg("--disable-gcs")
         .arg("--disable-s3")
-        // Keep the native dependency ISA contract aligned with the Rust
-        // x86-64-v3 build: retain SSE4/AVX2, but do not compile HTScodecs'
-        // independently dispatched AVX-512 CRAM implementation.
+        // HTScodecs retains its architecture-specific SSE/AVX2 or AArch64
+        // NEON implementation. Its independently dispatched AVX-512 CRAM
+        // implementation is intentionally omitted from the x86 build.
         .env(
             "hts_cv_check_cflags_needed_avx512f___mavx512f__mpopcnt",
             "unsupported",
@@ -216,6 +219,39 @@ fn copy_tree_without_git(source: &Path, destination: &Path) {
         }
     }
 }
+
+fn normalize_shell_script(path: &Path) {
+    let bytes = fs::read(path).expect("read staged shell script");
+    if !bytes.windows(2).any(|pair| pair == b"\r\n") {
+        return;
+    }
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        if bytes.get(cursor..cursor + 2) == Some(b"\r\n") {
+            normalized.push(b'\n');
+            cursor += 2;
+        } else {
+            normalized.push(bytes[cursor]);
+            cursor += 1;
+        }
+    }
+    fs::write(path, normalized).expect("normalize staged shell script line endings");
+}
+
+#[cfg(unix)]
+fn make_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)
+        .expect("inspect staged executable")
+        .permissions();
+    permissions.set_mode(permissions.mode() | 0o111);
+    fs::set_permissions(path, permissions).expect("make staged script executable");
+}
+
+#[cfg(not(unix))]
+fn make_executable(_path: &Path) {}
 
 #[cfg(unix)]
 fn copy_symlink(source: &Path, destination: &Path) {

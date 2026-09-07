@@ -12,14 +12,15 @@ use std::ffi::{CString, NulError};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use crate::AlignmentRecordError;
 
 #[cfg(test)]
 use crate::sys;
-use crate::sys::{NativeBgzfWriter, NativeCompression, NativeReader};
-pub use crate::sys::{NativeError, NativeStatus};
+use crate::sys::{NativeBgzfWriter, NativeCompression, NativeError, NativeReader, NativeStatus};
 
 /// One content-derived source compression class.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -55,7 +56,7 @@ pub enum HtsOperation {
     DetectCompression,
     /// Decode bytes.
     Read,
-    /// Open a BAM together with its BAI or CSI index.
+    /// Open a BAM together with its index.
     OpenIndexedBam,
     /// Copy and validate an indexed BAM header.
     ReadIndexedBamHeader,
@@ -315,8 +316,8 @@ pub struct BgzfWriter {
 impl BgzfWriter {
     /// Starts BGZF encoding on `file` with optional private compression workers.
     ///
-    /// `compression_threads == 0` selects synchronous compression. Values above
-    /// 64 are rejected by the native shim.
+    /// `compression_threads == 0` selects synchronous compression. Positive
+    /// values must fit the native signed `int` worker domain.
     ///
     /// # Errors
     ///
@@ -449,27 +450,19 @@ pub(crate) fn validate_reader_path(path: &Path) -> Result<(), HtsError> {
 
 pub(crate) fn path_cstring(path: &Path) -> Result<CString, HtsError> {
     validate_path_spelling(path)?;
-    let text = path.to_str().ok_or_else(|| {
-        simple_error(
-            HtsOperation::ValidatePath,
-            path,
-            None,
-            HtsErrorKind::PathEncoding,
-        )
-    })?;
-    CString::new(text).map_err(|source| nul_error(path, source))
+    #[cfg(unix)]
+    let bytes = path_bytes(path);
+    #[cfg(not(unix))]
+    let bytes = path_bytes(path)?;
+    CString::new(bytes).map_err(|source| nul_error(path, source))
 }
 
 fn validate_path_spelling(path: &Path) -> Result<(), HtsError> {
-    let text = path.to_str().ok_or_else(|| {
-        simple_error(
-            HtsOperation::ValidatePath,
-            path,
-            None,
-            HtsErrorKind::PathEncoding,
-        )
-    })?;
-    if text == "-" || text.contains("://") {
+    #[cfg(unix)]
+    let bytes = path_bytes(path);
+    #[cfg(not(unix))]
+    let bytes = path_bytes(path)?;
+    if bytes == b"-" || bytes.windows(3).any(|window| window == b"://") {
         return Err(simple_error(
             HtsOperation::ValidatePath,
             path,
@@ -477,7 +470,7 @@ fn validate_path_spelling(path: &Path) -> Result<(), HtsError> {
             HtsErrorKind::UnsupportedPath,
         ));
     }
-    if text.contains('\0') {
+    if bytes.contains(&0) {
         return Err(simple_error(
             HtsOperation::ValidatePath,
             path,
@@ -486,6 +479,23 @@ fn validate_path_spelling(path: &Path) -> Result<(), HtsError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn path_bytes(path: &Path) -> &[u8] {
+    path.as_os_str().as_bytes()
+}
+
+#[cfg(not(unix))]
+fn path_bytes(path: &Path) -> Result<&[u8], HtsError> {
+    path.to_str().map(str::as_bytes).ok_or_else(|| {
+        simple_error(
+            HtsOperation::ValidatePath,
+            path,
+            None,
+            HtsErrorKind::PathEncoding,
+        )
+    })
 }
 
 pub(crate) fn nul_error(path: &Path, _source: NulError) -> HtsError {
@@ -584,6 +594,19 @@ mod tests {
             native_versions().expect("versions"),
             (3, String::from("1.24"))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_path_conversion_preserves_non_utf8_filesystem_bytes() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        use std::path::PathBuf;
+
+        let bytes = b"sample-\xff.bam".to_vec();
+        let path = PathBuf::from(OsString::from_vec(bytes.clone()));
+        let native = super::path_cstring(&path).expect("Unix path bytes are accepted");
+        assert_eq!(native.as_bytes(), bytes);
     }
 
     #[test]

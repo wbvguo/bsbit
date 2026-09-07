@@ -1,35 +1,70 @@
-//! Local-data qualification tests for the combined-index runtime.
+//! Hermetic white-box contract tests for the combined-index runtime.
 //!
-//! Every test is explicitly ignored and names the current local tiny index it
-//! requires. The file is loaded as a `#[cfg(test)]` child module so private
-//! qualification invariants remain testable without widening the production
-//! API. Hermetic layout checks live separately in `tests/whitebox/`.
+//! The file is loaded as a `#[cfg(test)]` child module so private runtime
+//! invariants remain testable without widening the production API. One tiny
+//! index is constructed per suite and reused across all assertions; this keeps
+//! the dense 16-mer table out of Git while making CI independent of local data.
 
 use super::*;
+use crate::build::combined::{
+    CombinedIndexBuildOptions, build_combined_index_from_catalog_create_new,
+};
+use crate::reference::ContigInput;
+use bsbit_core::reference::ReferenceSemanticDigestBuilder;
+use bsbit_core::sequence::normalize_dna;
 
-fn tiny_prefix() -> PathBuf {
-    std::env::var_os("BSBIT_COMBINED_INDEX_TINY_INDEX_PREFIX")
-        .map(PathBuf::from)
-        .expect("set BSBIT_COMBINED_INDEX_TINY_INDEX_PREFIX for ignored qualification tests")
+struct TestDirectory(PathBuf);
+
+impl TestDirectory {
+    fn new(label: &str) -> Self {
+        Self(unique_test_directory(label))
+    }
 }
 
-fn tiny_reference() -> Vec<u8> {
-    let path = std::env::var_os("BSBIT_COMBINED_INDEX_TINY_REFERENCE").map_or_else(
-        || {
-            tiny_prefix()
-                .parent()
-                .and_then(Path::parent)
-                .expect("default tiny index has a runtime parent")
-                .join("reference.fa")
-        },
-        PathBuf::from,
-    );
-    std::fs::read_to_string(path)
-        .expect("tiny reference exists")
-        .lines()
-        .filter(|line| !line.starts_with('>'))
-        .flat_map(str::bytes)
-        .collect()
+impl Drop for TestDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+struct TinyFixture {
+    _directory: TestDirectory,
+    prefix: PathBuf,
+    reference: Vec<u8>,
+}
+
+impl TinyFixture {
+    fn build() -> Self {
+        let directory = TestDirectory::new("hermetic");
+        let prefix = directory.0.join("genome.index.bs.index");
+        let mut state = 0x6a09_e667_f3bc_c909_u64;
+        let reference = (0..257)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                b"ACGT"[usize::try_from((state >> 32) & 3).expect("two bits fit usize")]
+            })
+            .collect::<Vec<_>>();
+        let sequence = normalize_dna(&reference).expect("canonical tiny reference");
+        let contig = ContigInput::new(b"tiny".to_vec(), sequence);
+        let mut digest = ReferenceSemanticDigestBuilder::new(1);
+        digest
+            .push_normalized_contig(contig.name(), contig.sequence().bases())
+            .expect("tiny reference contributes to its semantic digest");
+        let digest = digest.finish().expect("tiny semantic digest completes");
+        let options = CombinedIndexBuildOptions::new(1)
+            .expect("one build thread")
+            .with_memory_mib(512)
+            .expect("bounded test memory budget");
+        build_combined_index_from_catalog_create_new(vec![contig], digest, &prefix, options)
+            .expect("hermetic tiny combined index builds");
+        Self {
+            _directory: directory,
+            prefix,
+            reference,
+        }
+    }
 }
 
 fn unique_test_directory(label: &str) -> PathBuf {
@@ -45,12 +80,12 @@ fn unique_test_directory(label: &str) -> PathBuf {
     directory
 }
 
-fn copied_tiny_prefix(label: &str) -> (PathBuf, PathBuf) {
+fn copied_tiny_prefix(fixture: &TinyFixture, label: &str) -> (PathBuf, PathBuf) {
     let directory = unique_test_directory(label);
     let target = directory.join("genome.index.bs.index");
     for suffix in ["", ".bwt", ".sa", ".occ"] {
         std::fs::copy(
-            suffixed_path(&tiny_prefix(), suffix),
+            suffixed_path(&fixture.prefix, suffix),
             suffixed_path(&target, suffix),
         )
         .expect("tiny combined-index component is copied");
@@ -85,10 +120,8 @@ fn search_bases(pattern: &[u8]) -> Vec<SearchBase> {
         .collect()
 }
 
-#[test]
-#[ignore = "requires the locally built frozen combined-index tiny-index fixture"]
-fn public_backward_extend_rejects_foreign_domains_and_unsupported_symbols() {
-    let index = CombinedIndex::open(&tiny_prefix()).expect("tiny combined index opens");
+fn public_backward_extend_rejects_foreign_domains_and_unsupported_symbols(fixture: &TinyFixture) {
+    let index = CombinedIndex::open(&fixture.prefix).expect("tiny combined index opens");
     let foreign = FmInterval::private_checked(0, 1, index.suffix_count() + 1)
         .expect("foreign interval is internally valid");
     assert_eq!(index.backward_extend(foreign, SearchBase::A), None);
@@ -98,13 +131,11 @@ fn public_backward_extend_rejects_foreign_domains_and_unsupported_symbols() {
     assert_eq!(index.backward_extend(local, SearchBase::C), None);
 }
 
-#[test]
-#[ignore = "requires the locally built frozen combined-index tiny-index fixture"]
-fn combined_index_open_rejects_cumulative_counts_beyond_the_suffix_domain() {
-    let suffix_count = CombinedIndex::open(&tiny_prefix())
+fn combined_index_open_rejects_cumulative_counts_beyond_the_suffix_domain(fixture: &TinyFixture) {
+    let suffix_count = CombinedIndex::open(&fixture.prefix)
         .expect("tiny combined index opens")
         .suffix_count();
-    let (directory, target) = copied_tiny_prefix("metadata-domain");
+    let (directory, target) = copied_tiny_prefix(fixture, "metadata-domain");
     overwrite_u64(&target, 40, suffix_count + 1);
 
     assert!(matches!(
@@ -116,13 +147,13 @@ fn combined_index_open_rejects_cumulative_counts_beyond_the_suffix_domain() {
     std::fs::remove_dir_all(directory).expect("unique test directory is removed");
 }
 
-#[test]
-#[ignore = "requires the locally built frozen combined-index tiny-index fixture"]
-fn combined_index_open_rejects_high_occurrence_values_beyond_the_suffix_domain() {
-    let suffix_count = CombinedIndex::open(&tiny_prefix())
+fn combined_index_open_rejects_high_occurrence_values_beyond_the_suffix_domain(
+    fixture: &TinyFixture,
+) {
+    let suffix_count = CombinedIndex::open(&fixture.prefix)
         .expect("tiny combined index opens")
         .suffix_count();
-    let (directory, target) = copied_tiny_prefix("occ-domain");
+    let (directory, target) = copied_tiny_prefix(fixture, "occ-domain");
     overwrite_u64(&suffixed_path(&target, ".occ"), 8, suffix_count + 1);
 
     assert!(matches!(
@@ -134,10 +165,8 @@ fn combined_index_open_rejects_high_occurrence_values_beyond_the_suffix_domain()
     std::fs::remove_dir_all(directory).expect("unique test directory is removed");
 }
 
-#[test]
-#[ignore = "requires the locally built frozen combined-index tiny-index fixture"]
-fn wavefront_boundary_rank_matches_scalar_for_every_batch_lane() {
-    let index = CombinedIndex::open(&tiny_prefix()).expect("tiny combined index opens");
+fn wavefront_boundary_rank_matches_scalar_for_every_batch_lane(fixture: &TinyFixture) {
+    let index = CombinedIndex::open(&fixture.prefix).expect("tiny combined index opens");
     let suffix_count = index.suffix_count();
     for round in 0_u64..257 {
         let lane_count = usize::try_from(round % MAX_WAVEFRONT_LANES as u64 + 1).unwrap();
@@ -175,10 +204,8 @@ fn wavefront_boundary_rank_matches_scalar_for_every_batch_lane() {
     }
 }
 
-#[test]
-#[ignore = "requires the locally built frozen combined-index tiny-index fixture"]
-fn two_lane_complete_direct_locate_matches_two_scalar_intervals() {
-    let index = CombinedIndex::open(&tiny_prefix()).expect("tiny combined index opens");
+fn two_lane_complete_direct_locate_matches_two_scalar_intervals(fixture: &TinyFixture) {
+    let index = CombinedIndex::open(&fixture.prefix).expect("tiny combined index opens");
     for first_row in 0..index.suffix_count() {
         for second_row in 0..index.suffix_count() {
             assert_eq!(
@@ -255,11 +282,9 @@ fn two_lane_complete_direct_locate_matches_two_scalar_intervals() {
     }
 }
 
-#[test]
-#[ignore = "requires the locally built frozen combined-index tiny-index fixture"]
-fn combined_index_lookup_rank_and_sa16_match_tiny_directional_text() {
-    let index = CombinedIndex::open(&tiny_prefix()).expect("tiny combined index opens");
-    let reference = tiny_reference();
+fn combined_index_lookup_rank_and_sa16_match_tiny_directional_text(fixture: &TinyFixture) {
+    let index = CombinedIndex::open(&fixture.prefix).expect("tiny combined index opens");
+    let reference = &fixture.reference;
     assert_eq!(
         index.reference_length(),
         u64::try_from(reference.len()).unwrap()
@@ -303,10 +328,8 @@ fn combined_index_lookup_rank_and_sa16_match_tiny_directional_text() {
     }
 }
 
-#[test]
-#[ignore = "requires the locally built frozen combined-index tiny-index fixture"]
-fn boundary_pair_matches_two_scalar_ranks() {
-    let index = CombinedIndex::open(&tiny_prefix()).expect("tiny combined index opens");
+fn boundary_pair_matches_two_scalar_ranks(fixture: &TinyFixture) {
+    let index = CombinedIndex::open(&fixture.prefix).expect("tiny combined index opens");
     for lower in 0..=index.suffix_count() {
         for width in [0_u64, 1, 2, 7, 31, 63, 64, 65, 127] {
             let upper = lower.saturating_add(width).min(index.suffix_count());
@@ -326,10 +349,8 @@ fn boundary_pair_matches_two_scalar_ranks() {
     }
 }
 
-#[test]
-#[ignore = "requires the locally built frozen combined-index tiny-index fixture"]
-fn two_lane_backward_extension_matches_two_scalar_extensions() {
-    let index = CombinedIndex::open(&tiny_prefix()).expect("tiny combined index opens");
+fn two_lane_backward_extension_matches_two_scalar_extensions(fixture: &TinyFixture) {
+    let index = CombinedIndex::open(&fixture.prefix).expect("tiny combined index opens");
     let suffix_count = index.suffix_count();
     for lower in (0..=suffix_count).step_by(7) {
         for width in [0_u64, 1, 2, 7, 31, 63, 64, 65, 127] {
@@ -363,4 +384,17 @@ fn two_lane_backward_extension_matches_two_scalar_extensions() {
             }
         }
     }
+}
+
+#[test]
+fn hermetic_combined_index_runtime_contract_suite() {
+    let fixture = TinyFixture::build();
+    public_backward_extend_rejects_foreign_domains_and_unsupported_symbols(&fixture);
+    combined_index_open_rejects_cumulative_counts_beyond_the_suffix_domain(&fixture);
+    combined_index_open_rejects_high_occurrence_values_beyond_the_suffix_domain(&fixture);
+    wavefront_boundary_rank_matches_scalar_for_every_batch_lane(&fixture);
+    two_lane_complete_direct_locate_matches_two_scalar_intervals(&fixture);
+    combined_index_lookup_rank_and_sa16_match_tiny_directional_text(&fixture);
+    boundary_pair_matches_two_scalar_ranks(&fixture);
+    two_lane_backward_extension_matches_two_scalar_extensions(&fixture);
 }

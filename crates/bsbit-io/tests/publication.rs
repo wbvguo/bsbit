@@ -7,8 +7,9 @@ use std::sync::{Arc, Barrier};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bsbit_io::{
-    PublicationPhase, StagedFile, reopen_read_write, select_sibling_staging_path,
-    validate_create_target, validate_distinct_paths, validate_regular_file_or_absent,
+    PublicationPhase, StagedFile, open_direct_output, open_direct_output_distinct_from,
+    reopen_read_write, select_sibling_staging_path, validate_create_target,
+    validate_distinct_paths, validate_regular_file_or_absent, validate_replace_target,
 };
 
 fn unique_path(label: &str) -> PathBuf {
@@ -24,6 +25,13 @@ fn unique_path(label: &str) -> PathBuf {
 
 fn complete_bytes(target: &Path, label: &str, bytes: &[u8]) -> bsbit_io::CompletedFile {
     let mut staged = StagedFile::create_sibling(target, label).expect("stage");
+    let mut file = staged.take_file().expect("descriptor");
+    file.write_all(bytes).expect("write");
+    staged.complete(file).expect("complete")
+}
+
+fn complete_replacement_bytes(target: &Path, label: &str, bytes: &[u8]) -> bsbit_io::CompletedFile {
+    let mut staged = StagedFile::create_sibling_replace(target, label).expect("stage replacement");
     let mut file = staged.take_file().expect("descriptor");
     file.write_all(bytes).expect("write");
     staged.complete(file).expect("complete")
@@ -79,6 +87,111 @@ fn generic_reader_path_validation_rejects_non_files_but_preserves_missing_paths(
 }
 
 #[test]
+fn generic_replace_target_validation_accepts_files_and_rejects_directories() {
+    let directory = unique_path("replace-target-directory");
+    fs::create_dir(&directory).expect("directory");
+    let target = directory.join("result.dat");
+    validate_replace_target(&target).expect("missing target");
+    fs::write(&target, b"existing").expect("target");
+    validate_replace_target(&target).expect("regular target");
+    assert_eq!(
+        validate_replace_target(&directory)
+            .expect_err("directory target fails")
+            .kind(),
+        std::io::ErrorKind::Unsupported
+    );
+    fs::remove_file(target).expect("target cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
+}
+
+#[test]
+fn direct_output_creates_or_truncates_only_regular_files() {
+    let directory = unique_path("direct-output-directory");
+    fs::create_dir(&directory).expect("directory");
+    let target = directory.join("result.dat");
+
+    let mut created = open_direct_output(&target).expect("create direct output");
+    created.write_all(b"first").expect("write created output");
+    drop(created);
+    assert_eq!(fs::read(&target).expect("created bytes"), b"first");
+
+    let mut truncated = open_direct_output(&target).expect("truncate direct output");
+    assert_eq!(truncated.metadata().expect("metadata").len(), 0);
+    truncated
+        .write_all(b"second")
+        .expect("write truncated output");
+    drop(truncated);
+    assert_eq!(fs::read(&target).expect("replacement bytes"), b"second");
+    assert_eq!(
+        open_direct_output(&directory)
+            .expect_err("directory is not direct output")
+            .kind(),
+        std::io::ErrorKind::Unsupported
+    );
+
+    fs::remove_file(target).expect("target cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
+}
+
+#[test]
+fn direct_output_rejects_protected_paths_and_hard_links_before_truncation() {
+    let directory = unique_path("direct-output-protected-directory");
+    fs::create_dir(&directory).expect("directory");
+    let input = directory.join("input.dat");
+    let alias = directory.join("alias.dat");
+    fs::write(&input, b"input bytes").expect("input");
+    fs::hard_link(&input, &alias).expect("hard link");
+
+    for output in [&input, &alias] {
+        assert_eq!(
+            open_direct_output_distinct_from(output, &[&input])
+                .expect_err("input aliases cannot be outputs")
+                .kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(fs::read(&input).expect("preserved input"), b"input bytes");
+    }
+    assert_eq!(
+        validate_distinct_paths(&input, &alias)
+            .expect_err("hard links identify one file")
+            .kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+
+    fs::remove_file(alias).expect("alias cleanup");
+    fs::remove_file(input).expect("input cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
+}
+
+#[cfg(unix)]
+#[test]
+fn direct_output_rejects_symbolic_links_without_touching_the_referent() {
+    use std::os::unix::fs::symlink;
+
+    let directory = unique_path("direct-output-symlink-directory");
+    fs::create_dir(&directory).expect("directory");
+    let referent = directory.join("referent.dat");
+    let target = directory.join("result.dat");
+    fs::write(&referent, b"referent bytes").expect("referent");
+    symlink(&referent, &target).expect("symlink");
+
+    assert_eq!(
+        open_direct_output(&target)
+            .expect_err("symlink is not direct output")
+            .kind(),
+        std::io::ErrorKind::Unsupported
+    );
+    assert_eq!(
+        fs::read(&referent).expect("unchanged referent"),
+        b"referent bytes"
+    );
+
+    fs::remove_file(target).expect("symlink cleanup");
+    fs::remove_file(referent).expect("referent cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
+}
+
+#[test]
 fn selected_staging_candidates_are_absolute_unused_unique_siblings() {
     let directory = unique_path("selected-staging-directory");
     fs::create_dir(&directory).expect("directory");
@@ -121,6 +234,43 @@ fn completed_bytes_publish_create_only_and_can_roll_back() {
     );
     published.rollback().expect("rollback");
     assert!(!target.exists());
+}
+
+#[test]
+fn completed_bytes_replace_atomically_and_rollback_restores_old_target() {
+    let directory = unique_path("replace-rollback-directory");
+    fs::create_dir(&directory).expect("directory");
+    let target = directory.join("result.dat");
+    fs::write(&target, b"old bytes").expect("old target");
+    let completed = complete_replacement_bytes(&target, "replace", b"new bytes");
+    let published = completed.publish_replace().expect("replace target");
+    assert_eq!(fs::read(&target).expect("new target"), b"new bytes");
+    published.rollback().expect("restore old target");
+    assert_eq!(fs::read(&target).expect("restored target"), b"old bytes");
+    assert_eq!(
+        fs::read_dir(&directory).expect("directory entries").count(),
+        1
+    );
+    fs::remove_file(target).expect("target cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
+}
+
+#[test]
+fn successful_replacement_drop_removes_private_backup() {
+    let directory = unique_path("replace-commit-directory");
+    fs::create_dir(&directory).expect("directory");
+    let target = directory.join("result.dat");
+    fs::write(&target, b"old bytes").expect("old target");
+    let completed = complete_replacement_bytes(&target, "replace", b"new bytes");
+    let published = completed.publish_replace().expect("replace target");
+    drop(published);
+    assert_eq!(fs::read(&target).expect("new target"), b"new bytes");
+    assert_eq!(
+        fs::read_dir(&directory).expect("directory entries").count(),
+        1
+    );
+    fs::remove_file(target).expect("target cleanup");
+    fs::remove_dir(directory).expect("directory cleanup");
 }
 
 #[test]

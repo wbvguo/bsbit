@@ -1,9 +1,16 @@
 //! Verified per-read placement facts shared by single-end and paired-end mapping.
 
+#[cfg(test)]
+use bsbit_core::alphabet::Base;
+#[cfg(test)]
+use bsbit_core::bisulfite::CytosineStrand;
 use bsbit_core::bisulfite::{AlignmentOrientation, BisulfiteStrand, strand_semantics};
+#[cfg(test)]
+use bsbit_index::reference::ReferenceIndex;
+
+use crate::alignment_policy::SEMI_GLOBAL_EDIT_PENALTY;
 
 pub(crate) const FULL_QUERY_END: u16 = u16::MAX;
-pub(crate) const SEMI_GLOBAL_EDIT_PENALTY: u8 = 7;
 
 /// One verified in-budget placement represented in reference coordinates.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -109,4 +116,84 @@ pub(crate) fn placement_origin_key(
         }
     };
     (placement.contig_ordinal(), placement.strand(), five_prime)
+}
+
+/// Counts converted and unconverted susceptible bases by CG/CHG/CHH context
+/// for a full-length ungapped placement.
+#[cfg(test)]
+pub(crate) fn placement_conversion_counts(
+    reference: &ReferenceIndex,
+    read: &[Base],
+    placement: ReadPlacement,
+) -> Option<([u16; 3], [u16; 3])> {
+    let retained = placement.retained_query_interval(read.len());
+    let reference_span = placement.end().checked_sub(placement.start())?;
+    if retained.start != 0
+        || retained.end != read.len()
+        || reference_span != u64::try_from(read.len()).ok()?
+    {
+        return None;
+    }
+    let contig = reference.contig_by_ordinal(placement.contig_ordinal())?;
+    let start = usize::try_from(placement.start()).ok()?;
+    let end = usize::try_from(placement.end()).ok()?;
+    let reference_bases = contig.sequence().bases();
+    let aligned = reference_bases.get(start..end)?;
+    let semantics = strand_semantics(placement.strand());
+    let mut converted = [0_u16; 3];
+    let mut unconverted = [0_u16; 3];
+    for (offset, &reference_base) in aligned.iter().enumerate() {
+        let query_base = match semantics.orientation() {
+            AlignmentOrientation::Forward => read[offset],
+            AlignmentOrientation::Reverse => read[read.len() - offset - 1].complement(),
+        };
+        let absolute = start + offset;
+        let (susceptible, converted_base) = match semantics.cytosine_strand() {
+            CytosineStrand::Top => (Base::C, Base::T),
+            CytosineStrand::Bottom => (Base::G, Base::A),
+        };
+        if reference_base != susceptible {
+            continue;
+        }
+        let context = cytosine_context(reference_bases, absolute, semantics.cytosine_strand());
+        if query_base == converted_base {
+            converted[context] = converted[context].saturating_add(1);
+        } else if query_base == susceptible {
+            unconverted[context] = unconverted[context].saturating_add(1);
+        }
+    }
+    Some((converted, unconverted))
+}
+
+#[cfg(test)]
+fn cytosine_context(reference: &[Base], position: usize, strand: CytosineStrand) -> usize {
+    let (first_is_g, second_is_g) = match strand {
+        CytosineStrand::Top => (
+            position
+                .checked_add(1)
+                .and_then(|index| reference.get(index))
+                == Some(&Base::G),
+            position
+                .checked_add(2)
+                .and_then(|index| reference.get(index))
+                == Some(&Base::G),
+        ),
+        CytosineStrand::Bottom => (
+            position
+                .checked_sub(1)
+                .and_then(|index| reference.get(index))
+                == Some(&Base::C),
+            position
+                .checked_sub(2)
+                .and_then(|index| reference.get(index))
+                == Some(&Base::C),
+        ),
+    };
+    if first_is_g {
+        0
+    } else if second_is_g {
+        1
+    } else {
+        2
+    }
 }

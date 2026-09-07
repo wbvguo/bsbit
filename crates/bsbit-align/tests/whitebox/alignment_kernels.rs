@@ -5,14 +5,6 @@
 
 use super::*;
 
-const LITERAL_MASKS: [u64; 5] = [
-    0x1111_1111_1111_1111,
-    0x2222_2222_2222_2222,
-    0x4444_4444_4444_4444,
-    0x8888_8888_8888_8888,
-    0,
-];
-
 fn brute_narrow_result(
     reference_masks_by_query: [u8; 5],
     query: &[u8],
@@ -114,83 +106,6 @@ fn brute_unrestricted_semiglobal_distance(query: &[u8], pattern: &[u8]) -> u32 {
 }
 
 #[test]
-fn validation_is_fail_closed_before_output() {
-    let reference = [0_u8, 1, 2, 3];
-    let mut output = [99_u64];
-    assert!(matches!(
-        myers_distance_batch(&LITERAL_MASKS, 0, &reference, &[0], &[1], &mut output),
-        Err(BatchError::QueryLength { observed: 0 })
-    ));
-    assert_eq!(output, [99]);
-    assert!(matches!(
-        myers_distance_batch(&LITERAL_MASKS, 4, &reference, &[3], &[2], &mut output),
-        Err(BatchError::CandidateOutOfBounds { candidate: 0, .. })
-    ));
-    assert_eq!(output, [99]);
-}
-
-#[test]
-fn runtime_and_available_simd_equal_scalar_for_variable_candidates() {
-    let reference = (0_u16..193)
-        .map(|index| u8::try_from(index * 3 % 5).expect("modulo five fits u8"))
-        .collect::<Vec<_>>();
-    let starts = [0, 3, 9, 17, 35, 67, 101, 140, 192];
-    let lengths = [7, 7, 7, 16, 31, 48, 64, 53, 1];
-    let mut scalar = [0_u64; 9];
-    myers_distance_batch_with_flavor(
-        KernelFlavor::Scalar,
-        &LITERAL_MASKS,
-        64,
-        &reference,
-        &starts,
-        &lengths,
-        &mut scalar,
-    )
-    .unwrap();
-    let mut runtime = [0_u64; 9];
-    myers_distance_batch(
-        &LITERAL_MASKS,
-        64,
-        &reference,
-        &starts,
-        &lengths,
-        &mut runtime,
-    )
-    .unwrap();
-    assert_eq!(runtime, scalar);
-    for flavor in [
-        KernelFlavor::Sse42,
-        KernelFlavor::Avx2,
-        KernelFlavor::Avx512,
-    ] {
-        if flavor_available(flavor) {
-            let mut observed = [0_u64; 9];
-            myers_distance_batch_with_flavor(
-                flavor,
-                &LITERAL_MASKS,
-                64,
-                &reference,
-                &starts,
-                &lengths,
-                &mut observed,
-            )
-            .unwrap();
-            assert_eq!(observed, scalar, "{flavor}");
-        }
-    }
-}
-
-#[test]
-fn empty_reference_and_unknown_codes_have_global_semantics() {
-    let reference = [9_u8; 8];
-    let mut output = [0_u64; 2];
-    let mut masks = LITERAL_MASKS;
-    masks[4] = u64::MAX;
-    myers_distance_batch(&masks, 4, &reference, &[0, 0], &[0, 8], &mut output).unwrap();
-    assert_eq!(output, [4, 8]);
-}
-
-#[test]
 fn narrow_available_simd_equals_scalar_for_full_and_partial_chunks() {
     let masks = [1_u8, 2, 4, 8, 0];
     let query = (0..100)
@@ -199,7 +114,7 @@ fn narrow_available_simd_equals_scalar_for_full_and_partial_chunks() {
     let distance = 2;
     let pattern_length = query.len() + 2 * distance;
     let mut patterns = Vec::new();
-    for lane in 0..13 {
+    for lane in 0..17 {
         let mut pattern = vec![u8::try_from(lane % 4).unwrap(); pattern_length];
         let shift = lane % 5;
         let copied = query.len().min(pattern_length - shift);
@@ -209,7 +124,7 @@ fn narrow_available_simd_equals_scalar_for_full_and_partial_chunks() {
         }
         patterns.extend(pattern);
     }
-    let mut scalar = vec![NarrowBandedResult::ABSENT; 13];
+    let mut scalar = vec![NarrowBandedResult::ABSENT; 17];
     narrow_banded_prefix_batch_with_flavor(
         NarrowBandedFlavor::Scalar,
         &masks,
@@ -219,11 +134,24 @@ fn narrow_available_simd_equals_scalar_for_full_and_partial_chunks() {
         &mut scalar,
     )
     .unwrap();
-    let mut runtime = vec![NarrowBandedResult::ABSENT; 13];
+    let mut runtime = vec![NarrowBandedResult::ABSENT; 17];
     narrow_banded_prefix_batch(&masks, &query, &patterns, distance, &mut runtime).unwrap();
     assert_eq!(runtime, scalar);
+    if narrow_sse2_available() {
+        let mut sse2 = vec![NarrowBandedResult::ABSENT; 17];
+        narrow_banded_prefix_batch_with_flavor(
+            NarrowBandedFlavor::Sse2,
+            &masks,
+            &query,
+            &patterns,
+            distance,
+            &mut sse2,
+        )
+        .unwrap();
+        assert_eq!(sse2, scalar);
+    }
     if narrow_sse42_available() {
-        let mut sse42 = vec![NarrowBandedResult::ABSENT; 13];
+        let mut sse42 = vec![NarrowBandedResult::ABSENT; 17];
         narrow_banded_prefix_batch_with_flavor(
             NarrowBandedFlavor::Sse42,
             &masks,
@@ -236,7 +164,7 @@ fn narrow_available_simd_equals_scalar_for_full_and_partial_chunks() {
         assert_eq!(sse42, scalar);
     }
     if narrow_avx2_available() {
-        let mut avx2 = vec![NarrowBandedResult::ABSENT; 13];
+        let mut avx2 = vec![NarrowBandedResult::ABSENT; 17];
         narrow_banded_prefix_batch_with_flavor(
             NarrowBandedFlavor::Avx2,
             &masks,
@@ -247,6 +175,19 @@ fn narrow_available_simd_equals_scalar_for_full_and_partial_chunks() {
         )
         .unwrap();
         assert_eq!(avx2, scalar);
+    }
+    if narrow_avx512_available() {
+        let mut avx512 = vec![NarrowBandedResult::ABSENT; 17];
+        narrow_banded_prefix_batch_with_flavor(
+            NarrowBandedFlavor::Avx512,
+            &masks,
+            &query,
+            &patterns,
+            distance,
+            &mut avx512,
+        )
+        .unwrap();
+        assert_eq!(avx512, scalar);
     }
 }
 
@@ -266,7 +207,7 @@ fn fixed_start_batch_equals_center_row_for_full_and_partial_chunks() {
         }
         let mut patterns = Vec::new();
         let mut expected = Vec::new();
-        for _ in 0..37 {
+        for _ in 0..67 {
             let mut pattern = vec![0_u8; pattern_length];
             for code in &mut pattern {
                 state = state
@@ -286,24 +227,211 @@ fn fixed_start_batch_equals_center_row_for_full_and_partial_chunks() {
         narrow_banded_fixed_start_batch(&masks, &query, &patterns, max_distance, &mut observed)
             .unwrap();
         assert_eq!(observed, expected, "distance {max_distance}");
-        #[cfg(target_arch = "x86_64")]
-        if narrow_sse42_available() {
-            let mut sse42 = vec![NarrowEndpointDistances::EMPTY; expected.len()];
-            // SAFETY: the runtime check proves SSE4.2 support, and the local
-            // construction supplies fixed-width patterns and output slots.
-            unsafe {
-                narrow_fixed_start_sse42(
+        for flavor in [
+            NarrowBandedFlavor::Sse2,
+            NarrowBandedFlavor::Sse42,
+            NarrowBandedFlavor::Avx2,
+            NarrowBandedFlavor::Avx512,
+        ] {
+            let available = match flavor {
+                NarrowBandedFlavor::Sse2 => narrow_sse2_available(),
+                NarrowBandedFlavor::Sse42 => narrow_sse42_available(),
+                NarrowBandedFlavor::Avx2 => narrow_avx2_available(),
+                NarrowBandedFlavor::Avx512 => narrow_avx512_available(),
+                NarrowBandedFlavor::Scalar => true,
+            };
+            if available {
+                let mut simd = vec![NarrowEndpointDistances::EMPTY; expected.len()];
+                narrow_banded_fixed_start_batch_with_flavor(
+                    flavor,
                     &masks,
                     &query,
                     &patterns,
-                    pattern_length,
                     max_distance,
-                    &mut sse42,
-                );
+                    &mut simd,
+                )
+                .unwrap();
+                assert_eq!(simd, expected, "{flavor:?} distance {max_distance}");
             }
-            assert_eq!(sse42, expected, "SSE4.2 distance {max_distance}");
         }
     }
+}
+
+fn reverse_complement_codes(query: &[u8]) -> Vec<u8> {
+    query
+        .iter()
+        .rev()
+        .map(|code| match code {
+            0 => 3,
+            1 => 2,
+            2 => 1,
+            3 => 0,
+            _ => 4,
+        })
+        .collect()
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn forced_backends_are_bit_exact_for_unaligned_boundary_and_bisulfite_inputs() {
+    use bsbit_core::bisulfite::CytosineStrand;
+
+    let literal = [1_u8, 2, 4, 8, 0];
+    let mask_sets = [
+        ("literal", literal),
+        (
+            "C-to-T",
+            ungapped::reference_masks_by_query(CytosineStrand::Top),
+        ),
+        (
+            "G-to-A",
+            ungapped::reference_masks_by_query(CytosineStrand::Bottom),
+        ),
+    ];
+    let lengths = [
+        1_usize, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 151, 192,
+    ];
+    let candidate_counts = [0_usize, 1, 5, 17, 33, 65];
+
+    for (length_index, query_length) in lengths.into_iter().enumerate() {
+        let max_distance = query_length.saturating_sub(1).min(3);
+        let raw_query = (0..query_length)
+            .map(|position| u8::try_from((position * 7 + query_length) % 5).unwrap())
+            .collect::<Vec<_>>();
+        for (orientation, query) in [
+            ("forward", raw_query.clone()),
+            ("reverse-complement", reverse_complement_codes(&raw_query)),
+        ] {
+            // Offset both byte slices positively from their allocations. This
+            // exercises every load with an address not aligned to 16/32 bytes.
+            let mut query_backing = vec![0xff; query.len() + 17];
+            let query_offset = (1..=16)
+                .find(|offset| !(query_backing.as_ptr() as usize + offset).is_multiple_of(16))
+                .expect("one positive byte offset is unaligned");
+            query_backing[query_offset..query_offset + query.len()].copy_from_slice(&query);
+            let query = &query_backing[query_offset..query_offset + query.len()];
+            assert!(!(query.as_ptr() as usize).is_multiple_of(16));
+
+            for (semantics, masks) in mask_sets {
+                for candidate_count in candidate_counts {
+                    let pattern_length = query.len() + 2 * max_distance;
+                    let patterns_bytes = pattern_length.saturating_mul(candidate_count);
+                    let mut patterns_backing = vec![0xfe; patterns_bytes + 17];
+                    let patterns_offset = (1..=16)
+                        .find(|offset| {
+                            !(patterns_backing.as_ptr() as usize + offset).is_multiple_of(16)
+                        })
+                        .expect("one positive byte offset is unaligned");
+                    let mut patterns_cursor = patterns_offset;
+                    for lane in 0..candidate_count {
+                        let mut pattern = (0..pattern_length)
+                            .map(|position| {
+                                u8::try_from((position * 11 + lane * 3 + length_index) % 5).unwrap()
+                            })
+                            .collect::<Vec<_>>();
+                        pattern[max_distance..max_distance + query.len()].copy_from_slice(query);
+
+                        // Guarantee both chemistry-specific zero-cost pairs
+                        // occur, rather than relying on pseudo-random coverage.
+                        for (position, query_code) in query.iter().copied().enumerate() {
+                            let reference_code = match (semantics, query_code) {
+                                ("C-to-T", 3) => Some(1),
+                                ("G-to-A", 0) => Some(2),
+                                _ => None,
+                            };
+                            if let Some(reference_code) = reference_code {
+                                pattern[max_distance + position] = reference_code;
+                            }
+                        }
+                        if !query.is_empty() && lane % 3 == 1 {
+                            let position = max_distance + (lane * 13 % query.len());
+                            pattern[position] = 4;
+                        }
+                        patterns_backing[patterns_cursor..patterns_cursor + pattern.len()]
+                            .copy_from_slice(&pattern);
+                        patterns_cursor += pattern.len();
+                    }
+                    let patterns =
+                        &patterns_backing[patterns_offset..patterns_offset + patterns_bytes];
+                    assert!(!(patterns.as_ptr() as usize).is_multiple_of(16));
+
+                    let mut expected = vec![NarrowEndpointDistances::EMPTY; candidate_count];
+                    narrow_banded_fixed_start_batch_with_flavor(
+                        NarrowBandedFlavor::Scalar,
+                        &masks,
+                        query,
+                        patterns,
+                        max_distance,
+                        &mut expected,
+                    )
+                    .unwrap();
+
+                    let mut runtime = vec![NarrowEndpointDistances::EMPTY; candidate_count];
+                    narrow_banded_fixed_start_batch(
+                        &masks,
+                        query,
+                        patterns,
+                        max_distance,
+                        &mut runtime,
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        runtime, expected,
+                        "runtime: {semantics}, {orientation}, query={query_length}, candidates={candidate_count}"
+                    );
+
+                    for flavor in [
+                        NarrowBandedFlavor::Sse2,
+                        NarrowBandedFlavor::Sse42,
+                        NarrowBandedFlavor::Avx2,
+                        NarrowBandedFlavor::Avx512,
+                    ] {
+                        let available = match flavor {
+                            NarrowBandedFlavor::Sse2 => narrow_sse2_available(),
+                            NarrowBandedFlavor::Sse42 => narrow_sse42_available(),
+                            NarrowBandedFlavor::Avx2 => narrow_avx2_available(),
+                            NarrowBandedFlavor::Avx512 => narrow_avx512_available(),
+                            NarrowBandedFlavor::Scalar => true,
+                        };
+                        if !available {
+                            continue;
+                        }
+                        let mut observed = vec![NarrowEndpointDistances::EMPTY; candidate_count];
+                        narrow_banded_fixed_start_batch_with_flavor(
+                            flavor,
+                            &masks,
+                            query,
+                            patterns,
+                            max_distance,
+                            &mut observed,
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            observed, expected,
+                            "{flavor:?}: {semantics}, {orientation}, query={query_length}, candidates={candidate_count}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    let mut output = [NarrowEndpointDistances::EMPTY];
+    assert_eq!(
+        narrow_banded_fixed_start_batch_with_flavor(
+            NarrowBandedFlavor::Scalar,
+            &[1, 2, 4, 8, 0],
+            &[],
+            &[],
+            0,
+            &mut output,
+        ),
+        Err(NarrowBandedError::EmptyQuery)
+    );
+    assert_eq!(
+        narrow_banded_fixed_start_batch(&[1, 2, 4, 8, 0], &[], &[], 0, &mut output),
+        Err(NarrowBandedError::EmptyQuery)
+    );
 }
 
 #[test]
@@ -412,9 +540,18 @@ fn narrow_placement_available_simd_equals_scalar_for_every_supported_band() {
                 .expect("validated placement dimensions");
             assert_eq!(runtime, scalar);
             #[cfg(target_arch = "x86_64")]
-            if narrow_sse42_available() {
-                // SAFETY: the runtime check proves SSE4.2 support and all
+            if narrow_sse2_available() {
+                // SAFETY: the runtime check proves SSE2 support and all
                 // dimensions satisfy the private kernel preconditions.
+                let sse2 = unsafe {
+                    narrow_placement_distances_sse2(&masks, &query, &pattern, max_distance)
+                };
+                assert_eq!(sse2, scalar);
+            }
+            #[cfg(target_arch = "x86_64")]
+            if narrow_sse42_available() {
+                // SAFETY: the runtime check proves SSE4.1, SSE4.2, and POPCNT
+                // support; dimensions satisfy the private preconditions.
                 let sse42 = unsafe {
                     narrow_placement_distances_sse42(&masks, &query, &pattern, max_distance)
                 };
@@ -540,6 +677,60 @@ fn narrow_placement_distance_three_compact_batch_equals_general_batch() {
             let mut observed = vec![NarrowPlacementDistances::EMPTY; candidates];
             narrow_banded_placement_distances_batch_d3(&masks, &query, &patterns, &mut observed)
                 .unwrap();
+            assert_eq!(observed, expected);
+        }
+    }
+}
+
+#[test]
+fn narrow_placement_distance_three_interleaved_batch_equals_independent_candidates() {
+    let masks = [1_u8, 2, 4, 2 | 8, 0];
+    let mut state = 0xbb67_ae85_84ca_a73b_u64;
+    for query_length in [1, 17, 100, 192] {
+        let pattern_length = query_length + 6;
+        for candidates in 2..=4 {
+            let mut query = vec![0_u8; query_length];
+            let mut candidate_major = vec![0_u8; pattern_length * candidates];
+            for code in query.iter_mut().chain(&mut candidate_major) {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                *code = u8::try_from((state >> 61) % 5).unwrap();
+            }
+            let expected = candidate_major
+                .chunks_exact(pattern_length)
+                .map(|pattern| {
+                    narrow_banded_placement_distances(&masks, &query, pattern, 3).unwrap()
+                })
+                .collect::<Vec<_>>();
+            let mut interleaved = vec![4_u8; pattern_length * 4];
+            for candidate in 0..candidates {
+                for position in 0..pattern_length {
+                    interleaved[position * 4 + candidate] =
+                        candidate_major[candidate * pattern_length + position];
+                }
+            }
+            let scalar = (0..candidates)
+                .map(|candidate| {
+                    narrow_placement_distances_scalar_interleaved(
+                        &masks,
+                        &query,
+                        &interleaved,
+                        candidate,
+                        4,
+                        3,
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(scalar, expected);
+            let mut observed = vec![NarrowPlacementDistances::EMPTY; candidates];
+            narrow_banded_placement_distances_interleaved_batch_d3(
+                &masks,
+                &query,
+                &interleaved,
+                &mut observed,
+            )
+            .unwrap();
             assert_eq!(observed, expected);
         }
     }

@@ -2,23 +2,23 @@
 
 use std::collections::HashMap;
 
-use super::result::{Base, SnpConfig, VariantCall, filtered_observation, validate_config};
+use super::result::{SnpConfig, VariantCall, filtered_observation, validate_config};
 use crate::CallError;
-use crate::evidence::{BitSlicedU8, EvidenceObservation, EvidenceStrand};
+use crate::evidence::{BaseCode, BitSlicedU8, EvidenceObservation, EvidenceStrand};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum CandidateCounter {
     Reference,
-    Alternate(Base),
+    Alternate(BaseCode),
 }
 
 impl CandidateCounter {
     const ALL: [Self; 5] = [
         Self::Reference,
-        Self::Alternate(Base::A),
-        Self::Alternate(Base::C),
-        Self::Alternate(Base::G),
-        Self::Alternate(Base::T),
+        Self::Alternate(BaseCode::A),
+        Self::Alternate(BaseCode::C),
+        Self::Alternate(BaseCode::G),
+        Self::Alternate(BaseCode::T),
     ];
 
     const fn index(self) -> usize {
@@ -67,7 +67,7 @@ impl CandidateBlock {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CandidateSite {
     pub(crate) position: u32,
-    pub(super) reference: Base,
+    pub(super) reference: BaseCode,
 }
 
 #[cfg(test)]
@@ -75,7 +75,7 @@ impl CandidateSite {
     pub(crate) fn for_test(position: u32, reference: u8) -> Self {
         Self {
             position,
-            reference: Base::from_ascii(reference).expect("test reference is canonical"),
+            reference: BaseCode::from_ascii(reference).expect("test reference is canonical"),
         }
     }
 }
@@ -186,7 +186,7 @@ impl CandidateRegion {
             if encoded == 0 {
                 continue;
             }
-            let reference = Base::ALL
+            let reference = BaseCode::ALL
                 .get(usize::from(encoded - 1))
                 .copied()
                 .ok_or_else(|| CallError::operation("invalid encoded SNP reference base"))?;
@@ -200,7 +200,7 @@ impl CandidateRegion {
             let reference_count = self.count(position, offset, CandidateCounter::Reference)?;
             let mut alternate_total = 0_u64;
             let mut maximum_alternate = 0_u64;
-            for base in Base::ALL {
+            for base in BaseCode::ALL {
                 if base == reference {
                     continue;
                 }
@@ -325,10 +325,15 @@ impl CandidateRegion {
     }
 }
 
-const fn is_conversion_confounded(reference: Base, observed: Base, strand: EvidenceStrand) -> bool {
+const fn is_conversion_confounded(
+    reference: BaseCode,
+    observed: BaseCode,
+    strand: EvidenceStrand,
+) -> bool {
     matches!(
         (reference, observed, strand),
-        (Base::C, Base::T, EvidenceStrand::Top) | (Base::G, Base::A, EvidenceStrand::Bottom)
+        (BaseCode::C, BaseCode::T, EvidenceStrand::Top)
+            | (BaseCode::G, BaseCode::A, EvidenceStrand::Bottom)
     )
 }
 

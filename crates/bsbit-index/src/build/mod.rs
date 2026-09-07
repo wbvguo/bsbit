@@ -2,10 +2,10 @@
 
 #[cfg(feature = "index-construction")]
 #[allow(unsafe_code)]
-pub mod combined;
+pub(crate) mod bounded_bwt;
 #[cfg(feature = "index-construction")]
 #[allow(unsafe_code)]
-pub(crate) mod combined_blocks;
+pub mod combined;
 #[cfg(feature = "index-construction")]
 #[allow(unsafe_code)]
 pub(crate) mod libsais;

@@ -7,7 +7,7 @@ mod run;
 use std::path::PathBuf;
 
 use crate::region::RegionSelection;
-use crate::{CallError, CallReport, validate_threads};
+use crate::{CallError, CallReport, validate_compression_threads, validate_threads};
 
 /// Supported methylation output schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -18,20 +18,29 @@ pub enum OutputFormat {
     Bed,
 }
 
-/// Base and mapping quality thresholds for methylation evidence.
+/// Methylation evidence and site filters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Parameters {
     /// Minimum observed-base Phred quality in `0..=93`.
     pub minimum_base_quality: u8,
     /// Minimum mapping quality in `0..=254`.
     pub minimum_mapping_quality: u8,
+    /// Minimum valid methylated-plus-unmethylated depth; must be nonzero.
+    pub minimum_depth: u32,
+    /// Emit only `CpG` sites when true.
+    pub cg_only: bool,
+    /// Ignore paired records that do not carry the SAM proper-pair flag.
+    pub ignore_orphans: bool,
 }
 
 impl Default for Parameters {
     fn default() -> Self {
         Self {
-            minimum_base_quality: 15,
+            minimum_base_quality: 20,
             minimum_mapping_quality: 20,
+            minimum_depth: 10,
+            cg_only: false,
+            ignore_orphans: false,
         }
     }
 }
@@ -48,6 +57,11 @@ impl Parameters {
                 "{command}: minimum mapping quality must be within 0..=254"
             )));
         }
+        if self.minimum_depth == 0 {
+            return Err(CallError::configuration(format!(
+                "{command}: minimum depth must be nonzero"
+            )));
+        }
         Ok(())
     }
 }
@@ -61,26 +75,29 @@ pub struct Options {
     pub reference: PathBuf,
     /// Optional interval restriction; empty means the whole BAM dictionary.
     pub regions: RegionSelection,
-    /// Create-only `CGmap` or BED destination.
+    /// `CGmap` or BED destination, replacing an existing file after completion.
     pub output: PathBuf,
     /// Output schema.
     pub format: OutputFormat,
     /// Encode output as BGZF when true, otherwise plain text.
     pub compress: bool,
-    /// Regional calling workers in `1..=64`.
+    /// Positive regional calling worker count.
     pub threads: u64,
+    /// Private BGZF workers; zero performs compression synchronously.
+    pub compression_threads: u32,
     /// Base and mapping quality thresholds.
     pub parameters: Parameters,
 }
 
-/// Calls methylation and publishes one create-only output.
+/// Calls methylation and writes one output directly.
 ///
 /// # Errors
 ///
 /// Returns an operational error for an invalid configuration, input contract,
-/// calling failure, or output publication failure.
+/// calling or output failure.
 pub fn call(options: &Options) -> Result<CallReport, CallError> {
     validate_threads("call meth", options.threads)?;
+    validate_compression_threads("call meth", options.compress, options.compression_threads)?;
     options.parameters.validate("call meth")?;
     run::run(options)
 }

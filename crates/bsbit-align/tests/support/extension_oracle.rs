@@ -3,8 +3,6 @@
 //! This module imports no implementation sequence, strand, coordinate, candidate,
 //! distance, CIGAR, extension, ordering, or result type.
 
-#![allow(dead_code)]
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OracleStrand {
     Ot,
@@ -67,47 +65,6 @@ pub(crate) fn whole_contig_best(
 ) -> OracleWindow {
     assert!(!query.is_empty());
     interval_best(reference, query, strand, 0, reference.len(), budget)
-}
-
-pub(crate) fn whole_contig_passing(
-    reference: &[u8],
-    query: &[u8],
-    strand: OracleStrand,
-    budget: u64,
-) -> Vec<OraclePlacement> {
-    assert!(!query.is_empty());
-    let oriented_query = if strand.is_reverse() {
-        reverse_complement(query)
-    } else {
-        query.to_vec()
-    };
-    let minimum_length = query.len().saturating_sub(to_usize(budget)).max(1);
-    let maximum_length = query
-        .len()
-        .saturating_add(to_usize(budget))
-        .min(reference.len());
-    let mut placements = Vec::new();
-    if minimum_length > maximum_length {
-        return placements;
-    }
-    for start in 0..reference.len() {
-        let remaining = reference.len() - start;
-        if remaining < minimum_length {
-            break;
-        }
-        for length in minimum_length..=maximum_length.min(remaining) {
-            let end = start + length;
-            let distance = full_matrix_distance(&reference[start..end], &oriented_query, strand);
-            if distance <= budget {
-                placements.push(OraclePlacement {
-                    start,
-                    end,
-                    distance,
-                });
-            }
-        }
-    }
-    placements
 }
 
 fn interval_best(

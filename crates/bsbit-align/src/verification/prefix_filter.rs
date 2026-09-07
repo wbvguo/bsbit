@@ -6,9 +6,6 @@
 
 use super::MAX_QUERY_BASES;
 
-#[cfg(test)]
-use super::{KernelFlavor, myers_distance_batch};
-
 use crate::score::EditDistance;
 use crate::verification::distance::{DistanceError, MatrixAllocation, TracebackResult};
 use bsbit_core::alphabet::Base;
@@ -44,32 +41,6 @@ impl WordMyersQuery {
             equality_masks,
             query_length: query.len(),
         })
-    }
-
-    #[cfg(test)]
-    // The test-only path is entered only for one-word queries, so all upper
-    // 64 bits are known to be zero before the conversion.
-    #[allow(clippy::cast_possible_truncation)]
-    pub(crate) fn distances(
-        &self,
-        reference_codes: &[u8],
-        starts: &[usize],
-        lengths: &[usize],
-        output: &mut [u64],
-    ) -> Option<KernelFlavor> {
-        if self.query_length > MAX_QUERY_BASES {
-            return None;
-        }
-        let equality_masks = self.equality_masks.map(|mask| mask as u64);
-        myers_distance_batch(
-            &equality_masks,
-            self.query_length,
-            reference_codes,
-            starts,
-            lengths,
-            output,
-        )
-        .ok()
     }
 
     /// Computes the edit distance to every nonempty reference prefix.
@@ -550,14 +521,15 @@ mod tests {
                 let kernel = WordMyersQuery::new(query.bases(), strand).expect("short query");
                 for reference in &references {
                     let encoded = encode_bases(reference.bases());
-                    let mut observed = [u64::MAX];
-                    kernel
-                        .distances(&encoded, &[0], &[encoded.len()], &mut observed)
-                        .expect("kernel dispatch");
+                    let mut prefix_distances = vec![u64::MAX; encoded.len()];
+                    assert!(kernel.prefix_distances_encoded(&encoded, &mut prefix_distances));
+                    let observed = prefix_distances.last().copied().unwrap_or_else(|| {
+                        u64::from(u8::try_from(query.len()).expect("test query fits u8"))
+                    });
                     let expected = global_bs_distance(reference, query, strand, DpCellLimit::MAX)
                         .expect("scalar distance");
                     assert_eq!(
-                        observed[0],
+                        observed,
                         expected.get(),
                         "{strand:?} {reference:?} {query:?}"
                     );

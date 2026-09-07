@@ -2,14 +2,13 @@
 
 use super::candidate::CandidateSite;
 use super::result::{
-    Base, FILTER_LOW_ALLELE_QUALITY, FILTER_LOW_ALTERNATE_DEPTH, FILTER_LOW_GENOTYPE_QUALITY,
-    GENOTYPES, Genotype, SnpConfig, VariantCall, alternate_alleles, filtered_observation,
-    genotype_index, has_exact_alternate_set, informative_allele_depth, selected_alleles,
-    validate_config,
+    FILTER_LOW_ALLELE_QUALITY, FILTER_LOW_ALTERNATE_DEPTH, FILTER_LOW_GENOTYPE_QUALITY, GENOTYPES,
+    Genotype, SnpConfig, VariantCall, alternate_alleles, filtered_observation, genotype_index,
+    has_exact_alternate_set, informative_allele_depth, selected_alleles, validate_config,
 };
 use crate::CallError;
 use crate::evidence::fragment::combined_observation_error;
-use crate::evidence::{EvidenceObservation, EvidenceStrand};
+use crate::evidence::{BaseCode, EvidenceObservation, EvidenceStrand};
 
 const OBSERVATION_HISTOGRAM_FLUSH: usize = 1_024;
 const METHYLATION_MODE_ITERATIONS: usize = 64;
@@ -19,7 +18,7 @@ const METHYLATION_INTEGRATION_MAX_EVALUATIONS: usize = 16_384;
 const LOG10_SCALE: f64 = 10.0 / std::f64::consts::LN_10;
 
 struct LikelihoodSite {
-    reference: Base,
+    reference: BaseCode,
     // Evidence that is independent of methylation is accumulated once per genotype.
     // Conversion-sensitive evidence is retained as compact encoded observations and
     // run-length encoded once it becomes deep. This permits stable adaptive
@@ -31,7 +30,7 @@ struct LikelihoodSite {
 }
 
 impl LikelihoodSite {
-    fn new(reference: Base) -> Self {
+    fn new(reference: BaseCode) -> Self {
         Self {
             reference,
             constant_log_likelihoods: [0.0; 10],
@@ -57,7 +56,7 @@ struct ObservationHistogram {
 impl ObservationHistogram {
     fn observe(
         &mut self,
-        observed: Base,
+        observed: BaseCode,
         strand: EvidenceStrand,
         base_quality: u8,
         mapping_quality: u8,
@@ -145,8 +144,8 @@ struct LikelihoodModel {
 
 impl LikelihoodModel {
     fn new(config: SnpConfig) -> Self {
-        let genotype_log_priors =
-            Base::ALL.map(|reference| genotype_log_priors(reference, config.heterozygosity_rate));
+        let genotype_log_priors = BaseCode::ALL
+            .map(|reference| genotype_log_priors(reference, config.heterozygosity_rate));
         Self {
             config,
             genotype_log_priors,
@@ -439,9 +438,9 @@ fn call_site(
 // without the rare-site prior. One ALT compares REF/ALT with ALT/ALT; two
 // selected ALTs have one possible diploid dosage.
 fn maximum_likelihood_dosage(
-    reference: Base,
+    reference: BaseCode,
     posterior_genotype: Genotype,
-    alternates: &[Base],
+    alternates: &[BaseCode],
     likelihoods: &[f64; 10],
 ) -> (Genotype, f64, [f64; 2]) {
     let [alternate] = alternates else {
@@ -475,7 +474,7 @@ fn maximum_likelihood_dosage(
     )
 }
 
-fn genotype_log_priors(reference: Base, heterozygosity: f64) -> [f64; 10] {
+fn genotype_log_priors(reference: BaseCode, heterozygosity: f64) -> [f64; 10] {
     let reference_frequency = (1.0 - heterozygosity).sqrt();
     let alternate_frequency = (1.0 - reference_frequency) / 3.0;
     GENOTYPES.map(|genotype| {
@@ -599,14 +598,14 @@ fn likelihood_mode(factors: &[AffineLogFactor]) -> f64 {
     let mut lower = 0.0_f64;
     let mut upper = 1.0_f64;
     for _ in 0..METHYLATION_MODE_ITERATIONS {
-        let middle = (lower + upper) * 0.5;
+        let middle = f64::midpoint(lower, upper);
         if affine_log_likelihood_derivative(factors, middle) > 0.0 {
             lower = middle;
         } else {
             upper = middle;
         }
     }
-    (lower + upper) * 0.5
+    f64::midpoint(lower, upper)
 }
 
 fn affine_log_likelihood(factors: &[AffineLogFactor], methylation: f64) -> f64 {
@@ -649,7 +648,7 @@ fn adaptive_simpson_interval(
     tolerance: f64,
     evaluate: &mut impl FnMut(f64) -> Result<f64, CallError>,
 ) -> Result<f64, CallError> {
-    let middle = (start + end) * 0.5;
+    let middle = f64::midpoint(start, end);
     let at_start = evaluate(start)?;
     let at_middle = evaluate(middle)?;
     let at_end = evaluate(end)?;
@@ -679,9 +678,9 @@ fn adaptive_simpson_refine(
     depth: u8,
     evaluate: &mut impl FnMut(f64) -> Result<f64, CallError>,
 ) -> Result<f64, CallError> {
-    let middle = (start + end) * 0.5;
-    let left_middle = (start + middle) * 0.5;
-    let right_middle = (middle + end) * 0.5;
+    let middle = f64::midpoint(start, end);
+    let left_middle = f64::midpoint(start, middle);
+    let right_middle = f64::midpoint(middle, end);
     let at_left_middle = evaluate(left_middle)?;
     let at_right_middle = evaluate(right_middle)?;
     let left = simpson_estimate(start, middle, at_start, at_left_middle, at_middle);
@@ -756,7 +755,7 @@ fn bounded_rounded_u16(value: f64, maximum: u16) -> u16 {
     value.round().clamp(0.0, f64::from(maximum)) as u16
 }
 
-fn selected_phred_likelihoods(alleles: &[Base], likelihoods: &[f64; 10]) -> [u16; 6] {
+fn selected_phred_likelihoods(alleles: &[BaseCode], likelihoods: &[f64; 10]) -> [u16; 6] {
     let mut selected = [f64::NEG_INFINITY; 6];
     let mut count = 0;
     for second in 0..alleles.len() {
@@ -777,7 +776,7 @@ fn selected_phred_likelihoods(alleles: &[Base], likelihoods: &[f64; 10]) -> [u16
 }
 
 fn encode_observation(
-    observed: Base,
+    observed: BaseCode,
     strand: EvidenceStrand,
     base_quality: u8,
     mapping_quality: u8,
@@ -792,13 +791,13 @@ fn encode_observation(
         | (u16::from(mapping_quality.min(60)) << 9)
 }
 
-fn decode_observation(encoded: u16) -> Result<(Base, EvidenceStrand, u8, u8), CallError> {
+fn decode_observation(encoded: u16) -> Result<(BaseCode, EvidenceStrand, u8, u8), CallError> {
     if encoded >> 15 != 0 {
         return Err(CallError::operation(
             "encoded SNP conversion observation exceeds fifteen bits",
         ));
     }
-    let observed = Base::ALL
+    let observed = BaseCode::ALL
         .get(usize::from(encoded & 0x03))
         .copied()
         .ok_or_else(|| CallError::operation("encoded SNP observation base is invalid"))?;
@@ -821,32 +820,32 @@ fn decode_observation(encoded: u16) -> Result<(Base, EvidenceStrand, u8, u8), Ca
 
 fn genotype_observation_probability(
     genotype: Genotype,
-    observed: Base,
+    observed: BaseCode,
     strand: EvidenceStrand,
     error: f64,
     retention: f64,
 ) -> f64 {
     let left = allele_observation_probability(genotype.left, observed, strand, error, retention);
     let right = allele_observation_probability(genotype.right, observed, strand, error, retention);
-    ((left + right) * 0.5).max(f64::MIN_POSITIVE)
+    f64::midpoint(left, right).max(f64::MIN_POSITIVE)
 }
 
 fn allele_observation_probability(
-    allele: Base,
-    observed: Base,
+    allele: BaseCode,
+    observed: BaseCode,
     strand: EvidenceStrand,
     error: f64,
     retention: f64,
 ) -> f64 {
     let mut truth = [0.0_f64; 4];
     match (allele, strand) {
-        (Base::C, EvidenceStrand::Top) => {
-            truth[Base::C.index()] = retention;
-            truth[Base::T.index()] = 1.0 - retention;
+        (BaseCode::C, EvidenceStrand::Top) => {
+            truth[BaseCode::C.index()] = retention;
+            truth[BaseCode::T.index()] = 1.0 - retention;
         }
-        (Base::G, EvidenceStrand::Bottom) => {
-            truth[Base::G.index()] = retention;
-            truth[Base::A.index()] = 1.0 - retention;
+        (BaseCode::G, EvidenceStrand::Bottom) => {
+            truth[BaseCode::G.index()] = retention;
+            truth[BaseCode::A.index()] = 1.0 - retention;
         }
         _ => truth[allele.index()] = 1.0,
     }
@@ -898,7 +897,7 @@ mod tests {
         };
         let candidates = [CandidateSite {
             position: 10,
-            reference: Base::A,
+            reference: BaseCode::A,
         }];
         let mut likelihood = LikelihoodRegion::new(&candidates, config).unwrap();
         let observations = (0..24)
@@ -907,12 +906,12 @@ mod tests {
         likelihood.observe_fragment(&observations).unwrap();
         let calls = likelihood.calls().unwrap();
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].reference, Base::A);
+        assert_eq!(calls[0].reference, BaseCode::A);
         assert_eq!(
             calls[0].genotype,
             Genotype {
-                left: Base::G,
-                right: Base::G
+                left: BaseCode::G,
+                right: BaseCode::G
             }
         );
         assert!(calls[0].genotype_quality >= 10);
@@ -942,7 +941,7 @@ mod tests {
             );
         }
 
-        for reference in Base::ALL {
+        for reference in BaseCode::ALL {
             let priors = genotype_log_priors(reference, 0.001);
             let total = priors.into_iter().map(f64::exp).sum::<f64>();
             assert!((total - 1.0).abs() < 1e-12);
@@ -990,11 +989,11 @@ mod tests {
 
     #[test]
     fn genotype_likelihood_not_site_prior_determines_alt_dosage() {
-        let heterozygous = genotype_index(Base::A, Base::G);
-        let homozygous_alternate = genotype_index(Base::G, Base::G);
+        let heterozygous = genotype_index(BaseCode::A, BaseCode::G);
+        let homozygous_alternate = genotype_index(BaseCode::G, BaseCode::G);
 
         for heterozygosity_rate in [0.0001, 0.001, 0.1] {
-            let mut site = LikelihoodSite::new(Base::A);
+            let mut site = LikelihoodSite::new(BaseCode::A);
             site.depth = 10;
             site.constant_log_likelihoods = [-100.0; GENOTYPES.len()];
             site.constant_log_likelihoods[heterozygous] = 0.0;
@@ -1009,8 +1008,8 @@ mod tests {
             assert_eq!(
                 call.genotype,
                 Genotype {
-                    left: Base::G,
-                    right: Base::G,
+                    left: BaseCode::G,
+                    right: BaseCode::G,
                 }
             );
         }
@@ -1030,7 +1029,7 @@ mod tests {
         };
         let candidates = [CandidateSite {
             position: 10,
-            reference: Base::C,
+            reference: BaseCode::C,
         }];
         let mut likelihood = LikelihoodRegion::new(&candidates, config).unwrap();
         let mut observations = Vec::with_capacity(1_000);
@@ -1050,7 +1049,7 @@ mod tests {
         };
         let candidates = [CandidateSite {
             position: 10,
-            reference: Base::C,
+            reference: BaseCode::C,
         }];
         let mut likelihood = LikelihoodRegion::new(&candidates, config).unwrap();
         let mut observations = Vec::with_capacity(48);
@@ -1063,8 +1062,8 @@ mod tests {
         assert_eq!(
             calls[0].genotype,
             Genotype {
-                left: Base::C,
-                right: Base::T,
+                left: BaseCode::C,
+                right: BaseCode::T,
             }
         );
         assert_eq!(calls[0].filters & FILTER_LOW_ALTERNATE_DEPTH, 0);
@@ -1081,7 +1080,7 @@ mod tests {
         };
         let candidates = [CandidateSite {
             position: 10,
-            reference: Base::A,
+            reference: BaseCode::A,
         }];
         let mut likelihood = LikelihoodRegion::new(&candidates, config).unwrap();
         let observations = (0..4)

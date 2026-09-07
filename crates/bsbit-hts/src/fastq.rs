@@ -9,13 +9,12 @@ use bsbit_core::sequence::{NormalizationError, NormalizedSequence};
 use crate::htslib::{Compression, DecodedBufReader, HtsError};
 #[cfg(test)]
 use crate::text::LineReadError;
-pub use crate::text::PairSourceSide;
 use crate::text::{
-    BoundedLineReader, ErrorContext, PhysicalLine, RecordField, RecordName, RecordOrdinal,
-    TextRecordAllocation, TextRecordError, TextRecordErrorKind, TextRecordFormat, TextRecordLimits,
-    TextRecordResource, check_limit, checked_add, line_error, normalize_sequence_line,
-    parse_header, sequence_normalization_error, storage_len, validate_header, write_record_name,
-    write_sequence,
+    BoundedLineReader, ErrorContext, PairSourceSide, PhysicalLine, RecordField, RecordName,
+    RecordOrdinal, TextRecordAllocation, TextRecordError, TextRecordErrorKind, TextRecordFormat,
+    TextRecordLimits, TextRecordResource, check_limit, checked_add, line_error,
+    normalize_sequence_line, parse_header, sequence_normalization_error, storage_len,
+    validate_header, write_record_name, write_sequence,
 };
 
 /// One owned normalized strict four-line FASTQ record.

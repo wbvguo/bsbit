@@ -10,7 +10,7 @@ autobins = false
 autobenches = false
 
 [lints.rust]
-unsafe_code = "allow"
+unsafe_code = "deny"
 missing_docs = "warn"
 unsafe_op_in_unsafe_fn = "deny"
 

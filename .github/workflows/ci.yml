@@ -1,0 +1,292 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/ci.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".gitattributes"
+      - ".gitignore"
+      - ".gitmodules"
+      - "LICENSE-*"
+      - "crates/**"
+      - "docs/**"
+      - "external/**"
+      - "pyproject.toml"
+      - "scripts/**"
+      - "tests/**"
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - ".github/workflows/ci.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".gitattributes"
+      - ".gitignore"
+      - ".gitmodules"
+      - "LICENSE-*"
+      - "crates/**"
+      - "docs/**"
+      - "external/**"
+      - "pyproject.toml"
+      - "scripts/**"
+      - "tests/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-stable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository and native sources
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Select current stable Rust
+        run: |
+          rustup toolchain install stable --profile minimal \
+            --component rustfmt --component clippy --no-self-update
+          rustup default stable
+
+      - name: Install native and quick-start dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            zlib1g-dev libbz2-dev liblzma-dev libdeflate-dev samtools
+
+      - name: Verify pinned native sources
+        run: scripts/check-native-sources.sh
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Link the combined-index reader and current aligner without builder tools
+        env:
+          AR: /definitely/missing
+          CC: /definitely/missing
+          CARGO_TARGET_DIR: target/reader-query-no-builder
+        run: |
+          cargo test --locked -p bsbit-index --no-default-features \
+            --features combined-index --no-run
+          cargo check --locked -p bsbit-align --lib
+
+      - name: Check the CLI orchestration crate explicitly
+        run: >-
+          cargo check --locked -p bsbit-cli --lib --bins
+
+      - name: Test the standard workspace invocation
+        run: cargo test --locked --workspace --all-targets
+
+      - name: Test the complete live feature graph
+        run: cargo test --locked --workspace --all-features --all-targets
+
+      - name: Test each index capability closure independently
+        run: |
+          cargo test --locked -p bsbit-index --no-default-features \
+            --features combined-index --all-targets
+          cargo test --locked -p bsbit-index --no-default-features \
+            --features index-construction --all-targets
+
+      - name: Reject warnings in the minimal index closure
+        run: >-
+          cargo clippy --locked -p bsbit-index --no-default-features
+          --all-targets --no-deps -- -D warnings
+
+      - name: Check the independent fuzz workspace and lockfile
+        run: |
+          cargo fmt --manifest-path tests/fuzz/Cargo.toml --all -- --check
+          cargo check --locked --manifest-path tests/fuzz/Cargo.toml --all-targets
+
+      - name: Reject all Clippy warnings
+        run: >-
+          cargo clippy --locked --workspace --all-targets --all-features
+          --no-deps -- -D warnings
+
+      - name: Check shell runner syntax
+        run: >-
+          bash -n scripts/*.sh tests/qualification/*.sh tests/fuzz/*.sh
+          docs/examples/*.sh
+
+      - name: Build the documented CLI
+        run: cargo build --locked -p bsbit-cli --bin bsbit
+
+      - name: Compare every host-supported SIMD backend
+        run: bash tests/qualification/check-simd-backends.sh target/debug/bsbit
+
+      - name: Run the documentation smoke tests
+        env:
+          BSBIT_BIN_DIR: target/debug
+        run: |
+          bash docs/examples/run-end-to-end.sh
+
+  rust-aarch64-neon:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Check out repository and native sources
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Select the audited Rust toolchain
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal \
+            --component rustfmt --component clippy --no-self-update
+          rustup default 1.94.0
+
+      - name: Install native test and audit dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            autoconf automake binutils build-essential libtool pkg-config time \
+            zlib1g-dev libbz2-dev liblzma-dev libdeflate-dev ripgrep samtools
+
+      - name: Confirm the AArch64 NEON baseline
+        run: |
+          test "$(uname -m)" = aarch64
+          rustc --print cfg -C target-cpu=generic \
+            | grep -qx 'target_feature="neon"'
+
+      - name: Test the complete AArch64 feature graph
+        run: cargo test --locked --workspace --all-targets --all-features
+
+      - name: Reject AArch64 Clippy warnings
+        run: >-
+          cargo clippy --locked --workspace --all-targets --all-features
+          --no-deps -- -D warnings
+
+      - name: Compare the automatic and forced NEON backends
+        run: |
+          cargo build --locked -p bsbit-cli --bin bsbit
+          bash tests/qualification/check-simd-backends.sh target/debug/bsbit
+
+      - name: Exercise and report the NEON verification microbenchmark
+        run: >-
+          cargo bench --locked -p bsbit-align --bench simd_bench
+          -- neon 20000
+
+      - name: Build and inspect the audited AArch64 binary
+        run: scripts/build-bsbit.sh /tmp/bsbit-aarch64-audited
+
+  minimum-rust:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository and native sources
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Select the minimum supported Rust
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal --no-self-update
+          rustup default 1.89.0
+          rustup target add \
+            aarch64-unknown-linux-gnu \
+            riscv64gc-unknown-linux-gnu
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            zlib1g-dev libbz2-dev liblzma-dev libdeflate-dev
+
+      - name: Link the combined-index reader and current aligner without builder tools at the declared lower bound
+        env:
+          AR: /definitely/missing
+          CC: /definitely/missing
+          CARGO_TARGET_DIR: target/msrv-reader-query-no-builder
+        run: |
+          cargo test --locked -p bsbit-index --no-default-features \
+            --features combined-index --no-run
+          cargo check --locked -p bsbit-align --lib
+
+      - name: Check the CLI orchestration crate at the declared lower bound
+        run: >-
+          cargo check --locked -p bsbit-cli --lib --bins
+
+      - name: Cross-check the AArch64 Rust core at the declared lower bound
+        env:
+          CARGO_TARGET_DIR: target/msrv-aarch64-rust-core
+        run: |
+          cargo check --locked --target aarch64-unknown-linux-gnu \
+            -p bsbit-cpu --all-targets
+          cargo check --locked --target aarch64-unknown-linux-gnu \
+            -p bsbit-align --all-targets
+          cargo check --locked --target aarch64-unknown-linux-gnu \
+            -p bsbit-index --no-default-features \
+            --features combined-index --all-targets
+
+      - name: Cross-check the portable scalar Rust core on RISC-V
+        env:
+          CARGO_TARGET_DIR: target/msrv-riscv64-rust-core
+        run: |
+          cargo check --locked --target riscv64gc-unknown-linux-gnu \
+            -p bsbit-cpu --all-targets
+          cargo check --locked --target riscv64gc-unknown-linux-gnu \
+            -p bsbit-align --all-targets
+          cargo check --locked --target riscv64gc-unknown-linux-gnu \
+            -p bsbit-index --no-default-features \
+            --features combined-index --all-targets
+
+      - name: Link the complete feature graph at the declared lower bound
+        run: >-
+          cargo test --locked --workspace --all-targets --all-features
+          --no-run
+
+  audited-release-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository and native sources
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Select the audited release Rust
+        run: |
+          rustup toolchain install 1.94.0 --profile minimal \
+            --component rustfmt --component clippy --no-self-update
+          rustup default 1.94.0
+
+      - name: Install audited native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            zlib1g-dev libbz2-dev liblzma-dev libdeflate-dev ripgrep
+
+      - name: Self-test the release notice checker
+        run: >-
+          python3 scripts/check-release-notices.py
+          --self-test --require-project-license
+
+      - name: Verify the audited binary license closure
+        run: >-
+          python3 scripts/check-release-notices.py
+          --artifact binary --require-project-license
+
+      - name: Build and inspect the audited bsbit binary
+        run: scripts/build-bsbit.sh /tmp/bsbit-audited
+
+  python-policy-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Run policy-tool tests
+        run: python -m unittest discover --start-directory tests/tools --pattern "test_*.py"

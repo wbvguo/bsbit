@@ -4,6 +4,18 @@
 //! invariants can be tested without widening the crate API.
 
 use super::*;
+use crate::alignment_policy::{
+    DEFAULT_MAX_SOFT_CLIP_BASES, LOCAL_FILTER_BLOCKS, ORIGIN_ENDPOINT_ADAPTER_CLIP_OPEN_PENALTY,
+    ORIGIN_ENDPOINT_CLIP_EXTENSION_PENALTY, ORIGIN_ENDPOINT_CLIP_OPEN_PENALTY,
+    SEMI_GLOBAL_ADMISSION_EDIT_PENALTY, SEMI_GLOBAL_CLIP_PENALTY, SEMI_GLOBAL_EDIT_PENALTY,
+    SEMI_GLOBAL_MIN_ALIGNED_BASES, SENSITIVE_ADAPTIVE_BOUNDARY_SHIFTS,
+    SENSITIVE_ADAPTIVE_MIN_BLOCK_BASES, SENSITIVE_BALANCED_BOUNDARY_SHIFTS, SENSITIVE_CLIP_PENALTY,
+    SENSITIVE_PROOF_BLOCKS,
+};
+use crate::paired_end::rescue::append_local_flexible_proof_candidates;
+use crate::placement::placement_origin_key;
+use crate::search::combined_adaptive::FLEXIBLE_NOMINAL_PROOF;
+use bsbit_core::bisulfite::BisulfiteStrand;
 use bsbit_core::sequence::NormalizedSequence;
 use bsbit_index::reference::{ContigInput, ReferenceBuildLimits};
 
@@ -16,6 +28,147 @@ fn reference(bases: &[Base]) -> ReferenceIndex {
         ReferenceBuildLimits::MAX,
     )
     .expect("test reference builds")
+}
+
+fn repeated_named_reference(names: [&[u8]; 2]) -> ReferenceIndex {
+    ReferenceIndex::build(
+        names
+            .into_iter()
+            .map(|name| {
+                ContigInput::new(
+                    name.to_vec(),
+                    NormalizedSequence::from_bases([Base::A; 128]),
+                )
+            })
+            .collect(),
+        ReferenceBuildLimits::MAX,
+    )
+    .expect("repeated named reference builds")
+}
+
+#[test]
+fn paired_reporting_lottery_is_seeded_and_reference_order_independent() {
+    let forward = repeated_named_reference([b"alpha", b"beta"]);
+    let reversed = repeated_named_reference([b"beta", b"alpha"]);
+    let reads = [&[Base::A; 20][..], &[Base::A; 20][..]];
+    let pair = |contig_ordinal| PairedPlacement {
+        mate1: ReadPlacement::strict(contig_ordinal, 10, 30, BisulfiteStrand::OT, 0),
+        mate2: ReadPlacement::strict(contig_ordinal, 80, 100, BisulfiteStrand::OB, 0),
+        template_start: 10,
+        template_end: 100,
+        distance: 0,
+        score: 0,
+    };
+    let choose_name = |reference: &ReferenceIndex, mut pairs: Vec<PairedPlacement>, seed| {
+        let retained = pairs.clone();
+        prefer_fair_pair_representative(
+            reference,
+            reads,
+            &mut pairs,
+            ReportingTieBreak { seed, read_key: 91 },
+            false,
+        )
+        .expect("paired fair tie-break succeeds");
+        assert_eq!(pairs.len(), retained.len());
+        assert!(pairs.iter().all(|candidate| retained.contains(candidate)));
+        reference
+            .contig_by_ordinal(pairs[0].mate1().contig_ordinal())
+            .expect("selected contig exists")
+            .name()
+            .to_vec()
+    };
+
+    for seed in 0..32 {
+        assert_eq!(
+            choose_name(&forward, vec![pair(0), pair(1)], seed),
+            choose_name(&reversed, vec![pair(1), pair(0)], seed),
+        );
+    }
+    let first = choose_name(&forward, vec![pair(0), pair(1)], 0);
+    let alternate = (1..256)
+        .map(|seed| choose_name(&forward, vec![pair(0), pair(1)], seed))
+        .find(|name| *name != first)
+        .expect("a seed changes a fair paired two-way lottery");
+    assert_ne!(first, alternate);
+}
+
+#[test]
+fn nondirectional_second_pass_uses_final_mate_order_for_the_lottery() {
+    let reference = repeated_named_reference([b"alpha", b"beta"]);
+    let read1 = [Base::A; 20];
+    let read2 = [Base::A; 30];
+    // A non-directional second pass is searched internally as [R2, R1].
+    let internal_reads = [&read2[..], &read1[..]];
+    let candidate = |mate1_contig, mate2_contig| PairedPlacement {
+        mate1: ReadPlacement::strict(mate1_contig, 70, 100, BisulfiteStrand::CTOT, 0),
+        mate2: ReadPlacement::strict(mate2_contig, 10, 30, BisulfiteStrand::OT, 0),
+        template_start: 10,
+        template_end: 100,
+        distance: 0,
+        score: 0,
+    };
+    let left = candidate(0, 1);
+    let right = candidate(1, 0);
+
+    let seed = (0..10_000)
+        .find(|&seed| {
+            let tie_break = ReportingTieBreak { seed, read_key: 17 };
+            let final_left = pair_origin_hash_in_reporting_order(
+                &reference,
+                tie_break,
+                left,
+                internal_reads,
+                true,
+            )
+            .expect("final-order hash succeeds");
+            let final_right = pair_origin_hash_in_reporting_order(
+                &reference,
+                tie_break,
+                right,
+                internal_reads,
+                true,
+            )
+            .expect("final-order hash succeeds");
+            let internal_left = pair_origin_hash_in_reporting_order(
+                &reference,
+                tie_break,
+                left,
+                internal_reads,
+                false,
+            )
+            .expect("internal-order hash succeeds");
+            let internal_right = pair_origin_hash_in_reporting_order(
+                &reference,
+                tie_break,
+                right,
+                internal_reads,
+                false,
+            )
+            .expect("internal-order hash succeeds");
+            (final_left < final_right) != (internal_left < internal_right)
+        })
+        .expect("a seed distinguishes final and internal mate order");
+    let tie_break = ReportingTieBreak { seed, read_key: 17 };
+    let expected =
+        if pair_origin_hash_in_reporting_order(&reference, tie_break, left, internal_reads, true)
+            .expect("final-order hash succeeds")
+            < pair_origin_hash_in_reporting_order(
+                &reference,
+                tie_break,
+                right,
+                internal_reads,
+                true,
+            )
+            .expect("final-order hash succeeds")
+        {
+            left
+        } else {
+            right
+        };
+    let mut pairs = vec![left, right];
+    prefer_fair_pair_representative(&reference, internal_reads, &mut pairs, tie_break, true)
+        .expect("swapped-order fair tie-break succeeds");
+    assert_eq!(pairs[0], expected);
 }
 
 #[test]
@@ -38,35 +191,35 @@ fn sensitive_profile_is_separate_and_prefers_whole_read_edits() {
 #[test]
 fn mapping_options_fix_primary_and_adapter_trimmed_policies() {
     let default = PairedAlignmentOptions::primary(
-        PairedLibraryProfile::Directional,
+        LibraryProfile::Directional,
         PairedSearchMode::Default,
         0,
         1_000,
     );
     let sensitive = PairedAlignmentOptions::primary(
-        PairedLibraryProfile::Directional,
+        LibraryProfile::Directional,
         PairedSearchMode::Sensitive,
         0,
         1_000,
     );
     let trimmed = PairedAlignmentOptions::adapter_trimmed(
-        PairedLibraryProfile::Directional,
+        LibraryProfile::Directional,
         PairedSearchMode::Sensitive,
         0,
         1_000,
     );
-    assert_eq!(
-        default.derived_policy(),
-        (PAIRED_MAX_EDIT_DISTANCE, false, false)
-    );
-    assert_eq!(
-        sensitive.derived_policy(),
-        (PAIRED_MAX_EDIT_DISTANCE, true, true)
-    );
-    assert_eq!(
-        trimmed.derived_policy(),
-        (PAIRED_MAX_EDIT_DISTANCE, true, false)
-    );
+    assert_eq!(default.derived_policy(), (MAX_EDIT_DISTANCE, false, false));
+    assert_eq!(sensitive.derived_policy(), (MAX_EDIT_DISTANCE, true, true));
+    assert_eq!(trimmed.derived_policy(), (MAX_EDIT_DISTANCE, true, false));
+    let bounded = sensitive
+        .with_maximum_edit_distance(3)
+        .expect("PE edit budget inside the fixed domain");
+    assert_eq!(bounded.maximum_edit_distance(), 3);
+    assert_eq!(bounded.derived_policy(), (3, true, true));
+    assert!(matches!(
+        sensitive.with_maximum_edit_distance(MAX_EDIT_DISTANCE + 1),
+        Err(AlignmentError::UnsupportedEditDistance { .. })
+    ));
 }
 
 #[test]
@@ -112,92 +265,79 @@ fn adaptive_ranked_partitions_are_disjoint_and_cover_the_read() {
 }
 
 #[test]
-fn sensitive_repeat_recheck_is_limited_to_suspicious_unique_results() {
-    let below_threshold = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            located_rows: SENSITIVE_REPEAT_RECHECK_ROWS - 1,
-            ..ReadAlignmentMetrics::default()
-        },
-        ..empty_pair_metrics()
-    };
-    assert!(!sensitive_repeat_recheck_required(
+fn sensitive_frontier_completion_covers_every_provisional_unique_result() {
+    assert!(sensitive_unique_frontier_completion_required(
         PairMappingStatus::Unique,
-        below_threshold,
     ));
-
-    let at_threshold = PairAlignmentMetrics {
-        mate2: ReadAlignmentMetrics {
-            located_rows: SENSITIVE_REPEAT_RECHECK_ROWS,
-            ..ReadAlignmentMetrics::default()
-        },
-        ..below_threshold
-    };
-    assert!(sensitive_repeat_recheck_required(
-        PairMappingStatus::Unique,
-        at_threshold,
-    ));
-    assert!(!sensitive_repeat_recheck_required(
+    assert!(!sensitive_unique_frontier_completion_required(
         PairMappingStatus::Ambiguous,
-        at_threshold,
     ));
-
-    let rescued = PairAlignmentMetrics {
-        window_rescue_attempted: true,
-        ..below_threshold
-    };
-    assert!(sensitive_repeat_recheck_required(
-        PairMappingStatus::Unique,
-        rescued,
+    assert!(!sensitive_unique_frontier_completion_required(
+        PairMappingStatus::Unmapped,
     ));
 }
 
 #[test]
-fn targeted_semi_global_admits_only_the_frozen_incomplete_sparse_cell() {
+fn completed_worse_frontier_is_retained_as_adverse_mapq_evidence() {
+    let incumbent = PairAlignmentMetrics {
+        compatible_pairs: 1,
+        best_pair_placements: 1,
+        best_pair_score: Some(-12),
+        mapq_compatible_pairs: 1,
+        mapq_best_pair_score: Some(-12),
+        frontier_complete: true,
+        alternative_margin_frontier_complete: true,
+        ..empty_pair_metrics()
+    };
+    let completed = PairAlignmentMetrics {
+        compatible_pairs: 1,
+        best_pair_placements: 1,
+        best_pair_score: Some(-16),
+        mapq_compatible_pairs: 1,
+        mapq_best_pair_score: Some(-16),
+        frontier_complete: true,
+        alternative_margin_frontier_complete: true,
+        ..empty_pair_metrics()
+    };
+
+    let merged = retain_completed_runner_up_evidence(incumbent, completed);
+    assert_eq!(merged.best_pair_score, Some(-12));
+    assert_eq!(merged.second_best_pair_score, Some(-16));
+    assert_eq!(merged.mapq_second_best_pair_score, Some(-16));
+    assert_eq!(merged.near_best_pairings, 1);
+    assert_eq!(merged.mapq_near_best_pairings, 1);
+    assert_eq!(
+        sensitive_effective_mapping_quality(PairMappingStatus::Unique, merged),
+        39,
+    );
+}
+
+#[test]
+fn targeted_semi_global_uses_frontier_state_instead_of_benchmark_cells() {
     let complete_ambiguous = PairAlignmentMetrics {
         best_pair_placements: 2,
         best_pair_score: Some(100),
         frontier_complete: true,
+        alternative_margin_frontier_complete: true,
         ..empty_pair_metrics()
     };
     assert!(sensitive_targeted_semi_global_required(
         PairMappingStatus::Ambiguous,
         complete_ambiguous,
-        None,
     ));
 
     let incomplete = PairAlignmentMetrics {
         frontier_complete: false,
+        alternative_margin_frontier_complete: false,
         ..complete_ambiguous
-    };
-    assert!(!sensitive_targeted_semi_global_required(
-        PairMappingStatus::Ambiguous,
-        incomplete,
-        Some(2),
-    ));
-
-    let incomplete_sparse = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            located_rows: 4,
-            ..ReadAlignmentMetrics::default()
-        },
-        near_best_pairings: 0,
-        second_best_pair_score: None,
-        ..incomplete
     };
     assert!(sensitive_targeted_semi_global_required(
         PairMappingStatus::Ambiguous,
-        incomplete_sparse,
-        Some(2),
-    ));
-    assert!(!sensitive_targeted_semi_global_required(
-        PairMappingStatus::Ambiguous,
-        incomplete_sparse,
-        Some(4),
+        incomplete,
     ));
     assert!(!sensitive_targeted_semi_global_required(
         PairMappingStatus::Unmapped,
         complete_ambiguous,
-        None,
     ));
 
     let high_confidence = PairAlignmentMetrics {
@@ -207,364 +347,36 @@ fn targeted_semi_global_admits_only_the_frozen_incomplete_sparse_cell() {
     assert!(!sensitive_targeted_semi_global_required(
         PairMappingStatus::Unique,
         high_confidence,
-        None,
     ));
 }
 
 #[test]
-fn ambiguity_q10_uses_only_the_three_frozen_integer_cells() {
-    let original = PairAlignmentMetrics {
-        best_pair_placements: 3,
-        frontier_complete: true,
-        ..empty_pair_metrics()
-    };
-    let candidate = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            located_rows: 3,
-            ..ReadAlignmentMetrics::default()
-        },
-        mate2: ReadAlignmentMetrics {
-            located_rows: 9,
-            ..ReadAlignmentMetrics::default()
-        },
-        near_best_pairings: 1,
-        frontier_complete: true,
-        ..empty_pair_metrics()
-    };
-    assert!(sensitive_ambiguity_q10_certified(
-        PairMappingStatus::Ambiguous,
-        original,
-        Some(7),
-        Some(2),
-        PairMappingStatus::Ambiguous,
-        candidate,
-        Some(3),
-        (Some(0), Some(1), 1),
-        false,
-    ));
-    assert!(sensitive_ambiguity_q10_certified(
-        PairMappingStatus::Ambiguous,
-        original,
-        Some(7),
-        Some(2),
-        PairMappingStatus::Ambiguous,
-        candidate,
-        Some(3),
-        (Some(0), None, 2),
-        true,
-    ));
-    assert!(!sensitive_ambiguity_q10_certified(
-        PairMappingStatus::Ambiguous,
-        original,
-        Some(7),
-        Some(2),
-        PairMappingStatus::Ambiguous,
-        candidate,
-        Some(3),
-        (Some(0), None, 2),
-        false,
-    ));
-
-    let incomplete_sparse = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            located_rows: 4,
-            ..ReadAlignmentMetrics::default()
-        },
-        best_pair_placements: 2,
-        near_best_pairings: 0,
-        second_best_pair_score: None,
-        frontier_complete: false,
-        ..empty_pair_metrics()
-    };
-    let completed_unique = PairAlignmentMetrics {
-        best_pair_placements: 1,
-        ..candidate
-    };
-    assert!(sensitive_ambiguity_q10_certified(
-        PairMappingStatus::Ambiguous,
-        incomplete_sparse,
-        Some(4),
-        Some(2),
-        PairMappingStatus::Unique,
-        completed_unique,
-        Some(2),
-        (Some(0), None, 2),
-        true,
-    ));
-    assert!(!sensitive_ambiguity_q10_certified(
-        PairMappingStatus::Ambiguous,
-        incomplete_sparse,
-        Some(4),
-        Some(2),
-        PairMappingStatus::Unique,
-        completed_unique,
-        Some(2),
-        (Some(0), None, 2),
-        false,
-    ));
-}
-
-#[test]
-// This table-driven policy test keeps all Q20 boundary counterexamples beside
-// the positive case so omissions are visible in one assertion group.
-#[allow(clippy::too_many_lines)]
-fn stable_one_mate_rescue_certifies_only_the_q20_boundary() {
-    let original = PairAlignmentMetrics {
-        window_rescue_attempted: true,
-        best_pair_score: Some(100),
-        frontier_complete: true,
-        ..empty_pair_metrics()
-    };
-    let moderate_candidate = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            located_rows: 0,
-            verified_placements: 2,
-            ..ReadAlignmentMetrics::default()
-        },
-        mate2: ReadAlignmentMetrics {
-            located_rows: 8,
-            verified_placements: 4,
-            ..ReadAlignmentMetrics::default()
-        },
-        window_rescue_attempted: true,
-        best_pair_score: Some(100),
-        frontier_complete: true,
-        ..empty_pair_metrics()
-    };
-    assert!(sensitive_stable_rescue_q20_certified(
-        PairMappingStatus::Unique,
-        original,
-        19,
-        PairMappingStatus::Unique,
-        moderate_candidate,
-        19,
-        true,
-    ));
-    assert!(!sensitive_stable_rescue_q20_certified(
-        PairMappingStatus::Unique,
-        original,
-        19,
-        PairMappingStatus::Unique,
-        moderate_candidate,
-        19,
-        false,
-    ));
-
-    let two_informative_mates = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            located_rows: 1,
-            ..moderate_candidate.mate1
-        },
-        ..moderate_candidate
-    };
-    assert!(!sensitive_stable_rescue_q20_certified(
-        PairMappingStatus::Unique,
-        original,
-        19,
-        PairMappingStatus::Unique,
-        two_informative_mates,
-        19,
-        true,
-    ));
-
-    let below_row_floor = PairAlignmentMetrics {
-        mate2: ReadAlignmentMetrics {
-            located_rows: 4,
-            ..moderate_candidate.mate2
-        },
-        ..moderate_candidate
-    };
-    assert!(!sensitive_stable_rescue_q20_certified(
-        PairMappingStatus::Unique,
-        original,
-        19,
-        PairMappingStatus::Unique,
-        below_row_floor,
-        19,
-        true,
-    ));
-
-    let above_verified_ceiling = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            verified_placements: 27,
-            ..moderate_candidate.mate1
-        },
-        mate2: ReadAlignmentMetrics {
-            verified_placements: 28,
-            ..moderate_candidate.mate2
-        },
-        ..moderate_candidate
-    };
-    assert!(!sensitive_stable_rescue_q20_certified(
-        PairMappingStatus::Unique,
-        original,
-        19,
-        PairMappingStatus::Unique,
-        above_verified_ceiling,
-        19,
-        true,
-    ));
-    assert!(!sensitive_stable_rescue_q20_certified(
-        PairMappingStatus::Unique,
-        original,
-        19,
-        PairMappingStatus::Unique,
-        moderate_candidate,
-        18,
-        true,
-    ));
-
-    let sparse_candidate = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            located_rows: 0,
-            verified_placements: 1,
-            ..ReadAlignmentMetrics::default()
-        },
-        mate2: ReadAlignmentMetrics {
-            located_rows: 8,
-            verified_placements: 2,
-            ..ReadAlignmentMetrics::default()
-        },
-        ..moderate_candidate
-    };
-    assert!(sensitive_stable_rescue_q20_certified(
-        PairMappingStatus::Unique,
-        original,
-        19,
-        PairMappingStatus::Unique,
-        sparse_candidate,
-        19,
-        true,
-    ));
-    let weak_gap = PairAlignmentMetrics {
-        second_best_pair_score: Some(95),
-        ..sparse_candidate
-    };
-    assert!(!sensitive_stable_rescue_q20_certified(
-        PairMappingStatus::Unique,
-        original,
-        19,
-        PairMappingStatus::Unique,
-        weak_gap,
-        19,
-        true,
-    ));
-}
-
-#[test]
-// The complete and incomplete parsimony counterexamples intentionally share
-// one fixture to make the certificate boundary explicit.
-#[allow(clippy::too_many_lines)]
-fn bounded_two_way_parsimony_certifies_only_qualified_complete_ties() {
-    let minimum_gap_pair = PairedPlacement {
-        mate1: placement(0, 100, 251, BisulfiteStrand::OT, 1),
-        mate2: placement(0, 300, 451, BisulfiteStrand::CTOT, 1),
+fn rejected_targeted_semi_global_restores_every_incumbent_origin() {
+    let first = PairedPlacement {
+        mate1: ReadPlacement::strict(0, 100, 250, BisulfiteStrand::OT, 1),
+        mate2: ReadPlacement::strict(0, 300, 450, BisulfiteStrand::CTOT, 0),
         template_start: 100,
-        template_end: 451,
-        distance: 2,
-        score: 14,
+        template_end: 450,
+        distance: 1,
+        score: 1,
     };
-    let larger_gap_pair = PairedPlacement {
-        mate1: placement(0, 100, 252, BisulfiteStrand::OT, 1),
-        ..minimum_gap_pair
+    let second = PairedPlacement {
+        mate1: ReadPlacement::strict(1, 500, 650, BisulfiteStrand::OT, 1),
+        mate2: ReadPlacement::strict(1, 700, 850, BisulfiteStrand::CTOT, 0),
+        template_start: 500,
+        template_end: 850,
+        ..first
     };
-    let candidate_pairs = [minimum_gap_pair, larger_gap_pair];
-    let gap_profile = pair_net_gap_profile(&candidate_pairs, 151, 151);
-    assert_eq!(gap_profile, (Some(0), Some(1), 1));
+    let incumbent = vec![first, second];
+    let mut speculative = vec![second];
 
-    let original = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            located_rows: SENSITIVE_PARSIMONY_MAX_LOCATED_ROWS,
-            ..ReadAlignmentMetrics::default()
-        },
-        best_pair_placements: 2,
-        best_pair_score: Some(100),
-        second_best_pair_score: Some(100 - SENSITIVE_PARSIMONY_REQUIRED_SCORE_GAP),
-        frontier_complete: true,
-        ..empty_pair_metrics()
-    };
-    let candidate = PairAlignmentMetrics {
-        mate1: ReadAlignmentMetrics {
-            verified_placements: 3,
-            ..ReadAlignmentMetrics::default()
-        },
-        mate2: ReadAlignmentMetrics {
-            verified_placements: 4,
-            ..ReadAlignmentMetrics::default()
-        },
-        best_pair_placements: 2,
-        frontier_complete: true,
-        ..empty_pair_metrics()
-    };
-    let certified = |original, candidate, candidate_best, profile, same_origin| {
-        sensitive_two_way_parsimony_q20_certified(
-            PairMappingStatus::Ambiguous,
-            original,
-            Some(minimum_gap_pair),
-            PairMappingStatus::Ambiguous,
-            candidate,
-            candidate_best,
-            2,
-            profile,
-            151,
-            151,
-            same_origin,
-        )
-    };
-    assert!(certified(
-        original,
-        candidate,
-        Some(minimum_gap_pair),
-        gap_profile,
-        true,
-    ));
-    assert!(!certified(
-        original,
-        candidate,
-        Some(minimum_gap_pair),
-        gap_profile,
-        false,
-    ));
-    assert!(!certified(
-        PairAlignmentMetrics {
-            mate1: ReadAlignmentMetrics {
-                located_rows: SENSITIVE_PARSIMONY_MAX_LOCATED_ROWS + 1,
-                ..original.mate1
-            },
-            ..original
-        },
-        candidate,
-        Some(minimum_gap_pair),
-        gap_profile,
-        true,
-    ));
-    assert!(!certified(
-        original,
-        PairAlignmentMetrics {
-            mate2: ReadAlignmentMetrics {
-                verified_placements: 5,
-                ..candidate.mate2
-            },
-            ..candidate
-        },
-        Some(minimum_gap_pair),
-        gap_profile,
-        true,
-    ));
-    assert!(!certified(
-        original,
-        candidate,
-        Some(larger_gap_pair),
-        gap_profile,
-        true,
-    ));
-    assert!(!certified(
-        original,
-        candidate,
-        Some(minimum_gap_pair),
-        (Some(0), None, 2),
-        true,
-    ));
+    restore_rejected_targeted_frontier(&mut speculative, incumbent.clone(), true);
+
+    assert_eq!(speculative, incumbent);
+
+    let mut unique = vec![second];
+    restore_rejected_targeted_frontier(&mut unique, incumbent, false);
+    assert_eq!(unique, [first]);
 }
 
 #[test]
@@ -628,6 +440,7 @@ fn non_directional_result_merge_swaps_mates_and_resolves_global_evidence() {
             best_pair_placements: 1,
             best_pair_score: Some(score),
             frontier_complete: true,
+            alternative_margin_frontier_complete: true,
             ..empty_pair_metrics()
         };
         let best_pair = Some(pair);
@@ -636,10 +449,6 @@ fn non_directional_result_merge_swaps_mates_and_resolves_global_evidence() {
             metrics,
             best_pair,
             second_best_distance: None,
-            repeat_risk_q20_certified: true,
-            parsimony_q20_certified: true,
-            ambiguity_q10_certified: false,
-            requires_positive_mapq_for_reporting: false,
         }
     };
 
@@ -662,16 +471,13 @@ fn non_directional_result_merge_swaps_mates_and_resolves_global_evidence() {
     assert_eq!(merged.near_best_pairings(), 1);
     assert_eq!(merged.metrics().mate1.located_rows, 14);
     assert_eq!(merged.metrics().mate2.located_rows, 12);
-    assert!(!merged.repeat_risk_q20_certified());
-    assert!(!merged.parsimony_q20_certified());
-
     let tied =
         merge_non_directional_batch_results(&result(directional_pair, -4, 1, 1), &complementary);
     assert_eq!(tied.class(), PairMappingStatus::Ambiguous);
     assert_eq!(tied.best_pair_score(), Some(-4));
     assert_eq!(tied.second_best_pair_score(), Some(-4));
     assert!(tied.metrics().best_pair_placements >= 2);
-    assert_eq!(tied.evidence_mapping_quality(), 0);
+    assert_eq!(super::super::mapq::evidence_mapping_quality(tied), 0);
     assert_eq!(
         tied.best_pair()
             .expect("original-strand tie preference")
@@ -930,8 +736,8 @@ fn linear_semi_global_endpoint_choice_matches_exhaustive_grid() {
             }
         }
         let mut expected = None;
-        for left in 0..=SEMI_GLOBAL_MAX_CLIP_BASES {
-            for right in 0..=SEMI_GLOBAL_MAX_CLIP_BASES {
+        for left in 0..=DEFAULT_MAX_SOFT_CLIP_BASES {
+            for right in 0..=DEFAULT_MAX_SOFT_CLIP_BASES {
                 let clipped = left + right;
                 if clipped == 0
                     || read.len().saturating_sub(clipped) < SEMI_GLOBAL_MIN_ALIGNED_BASES
@@ -1231,6 +1037,7 @@ fn reported_origin_endpoint_does_not_clip_unsupported_terminal_errors() {
         MAX_EDIT_DISTANCE,
         0,
         500,
+        &AlignmentOutputPolicy::default(),
     );
 
     assert_eq!(
@@ -1273,6 +1080,7 @@ fn reported_origin_endpoint_keeps_an_isolated_terminal_mismatch_aligned() {
         MAX_EDIT_DISTANCE,
         0,
         500,
+        &AlignmentOutputPolicy::default(),
     );
 
     assert_eq!(
@@ -1316,8 +1124,16 @@ fn endpoint_policy_recognizes_supported_three_prime_adapter_sequence() {
     };
     let unsupported_read = vec![Base::A; 100];
 
-    assert!(sequencing_three_prime_adapter_supported(&adapter_read, 87));
-    assert_eq!(supported_three_prime_adapter_start(&adapter_read), Some(87));
+    let output_policy = AlignmentOutputPolicy::default();
+    assert!(sequencing_three_prime_adapter_supported(
+        &adapter_read,
+        87,
+        &output_policy,
+    ));
+    assert_eq!(
+        supported_three_prime_adapter_start(&adapter_read, &output_policy),
+        Some(87),
+    );
     assert_eq!(
         placement_endpoint_cost(&adapter_read, supported),
         ORIGIN_ENDPOINT_ADAPTER_CLIP_OPEN_PENALTY
@@ -1330,12 +1146,12 @@ fn endpoint_policy_recognizes_supported_three_prime_adapter_sequence() {
     let mut partial_adapter_read = vec![Base::A; 100];
     partial_adapter_read[90..].copy_from_slice(&adapter[..10]);
     assert_eq!(
-        supported_three_prime_adapter_start(&partial_adapter_read),
+        supported_three_prime_adapter_start(&partial_adapter_read, &output_policy),
         Some(90)
     );
     partial_adapter_read[90] = Base::C;
     assert_eq!(
-        supported_three_prime_adapter_start(&partial_adapter_read),
+        supported_three_prime_adapter_start(&partial_adapter_read, &output_policy),
         None
     );
 }
@@ -1377,6 +1193,7 @@ fn reported_origin_endpoint_clips_an_explicit_three_prime_adapter() {
         MAX_EDIT_DISTANCE,
         0,
         500,
+        &AlignmentOutputPolicy::default(),
     );
 
     assert_eq!(
@@ -1386,6 +1203,58 @@ fn reported_origin_endpoint_clips_an_explicit_three_prime_adapter() {
     assert_eq!(reported.mate1().retained_query_interval(151), 0..138);
     assert_eq!(reported.mate1().distance(), 0);
     assert_eq!(reported.score(), selected.score());
+}
+
+#[test]
+fn adapter_only_endpoint_policy_never_adds_generic_five_prime_clipping() {
+    let reference = reference(&vec![Base::A; 600]);
+    let mut read1 = vec![Base::A; 151];
+    read1[..2].fill(Base::C);
+    read1[138..].copy_from_slice(&[
+        Base::A,
+        Base::G,
+        Base::A,
+        Base::T,
+        Base::C,
+        Base::G,
+        Base::G,
+        Base::A,
+        Base::A,
+        Base::G,
+        Base::A,
+        Base::G,
+        Base::C,
+    ]);
+    let read2 = vec![Base::T; 151];
+    let selected = PairedPlacement {
+        mate1: ReadPlacement::strict(0, 100, 251, BisulfiteStrand::OT, 15),
+        mate2: ReadPlacement::strict(0, 300, 451, BisulfiteStrand::CTOT, 0),
+        template_start: 100,
+        template_end: 451,
+        distance: 15,
+        score: 105,
+    };
+    let policy = AlignmentOutputPolicy::new(
+        Some(b"AGATCGGAAGAGC"),
+        8,
+        30,
+        crate::SoftClipMode::Adapter,
+        30,
+    )
+    .expect("adapter-only policy");
+
+    let reported = select_reported_origin_endpoint(
+        &reference,
+        [&read1, &read2],
+        selected,
+        MAX_EDIT_DISTANCE,
+        0,
+        500,
+        &policy,
+    );
+
+    assert_eq!(reported.mate1().retained_query_interval(151), 0..138);
+    assert_eq!(reported.mate1().distance(), 2);
 }
 
 #[test]
@@ -1431,9 +1300,56 @@ fn equivalent_cigar_endpoints_share_one_five_prime_origin() {
     let mut best = Vec::new();
     select_best_pairs_with_fallback_score(&mate1, &mate2, 3, 0, 500, &mut best);
     assert_eq!(best.len(), 2);
-    collapse_equivalent_pair_origins(&mut best, 151, 151);
+    collapse_equivalent_pair_origins(&mut best, 151, 151, false);
     assert_eq!(best.len(), 1);
     assert_eq!(placement_origin_key(best[0].mate1(), 151).2, 100);
+}
+
+#[test]
+fn equivalent_pair_origins_retain_the_minimum_net_gap_endpoint() {
+    let mate2 = ReadPlacement::strict(0, 300, 450, BisulfiteStrand::CTOT, 0);
+    let gapped = PairedPlacement {
+        mate1: ReadPlacement::strict(0, 100, 249, BisulfiteStrand::OT, 1),
+        mate2,
+        template_start: 100,
+        template_end: 450,
+        distance: 1,
+        score: 1,
+    };
+    let ungapped = PairedPlacement {
+        mate1: ReadPlacement::strict(0, 100, 250, BisulfiteStrand::OT, 1),
+        ..gapped
+    };
+    let mut best = vec![gapped, ungapped];
+
+    collapse_equivalent_pair_origins(&mut best, 150, 150, true);
+
+    assert_eq!(best, [ungapped]);
+}
+
+#[test]
+fn distinct_pair_origins_can_report_the_minimum_net_gap_representative() {
+    let gapped = PairedPlacement {
+        mate1: ReadPlacement::strict(0, 100, 249, BisulfiteStrand::OT, 1),
+        mate2: ReadPlacement::strict(0, 300, 450, BisulfiteStrand::CTOT, 0),
+        template_start: 100,
+        template_end: 450,
+        distance: 1,
+        score: 1,
+    };
+    let ungapped = PairedPlacement {
+        mate1: ReadPlacement::strict(0, 500, 650, BisulfiteStrand::OT, 1),
+        mate2: ReadPlacement::strict(0, 700, 850, BisulfiteStrand::CTOT, 0),
+        template_start: 500,
+        template_end: 850,
+        ..gapped
+    };
+    let mut best = vec![gapped, ungapped];
+
+    collapse_equivalent_pair_origins(&mut best, 150, 150, true);
+
+    assert_eq!(best.len(), 2);
+    assert_eq!(best[0], ungapped);
 }
 
 #[test]
@@ -1532,30 +1448,15 @@ fn affine_score_uses_bwa_penalties_and_bisulfite_zero_cost_matches() {
 }
 
 #[test]
-fn selective_unmapped_deepening_uses_a_bounded_reciprocal_hit_window() {
+fn selective_unmapped_deepening_requires_two_incomplete_frontiers() {
     let selection = |retained_hits, complete| RankedBlockSelection {
         retained_hits,
         complete,
     };
-    let required =
-        |first, second| selective_unmapped_frontier_deepening_required([first, second], None);
-    let required_sum = |retained_hits| {
-        let first = retained_hits / 2;
-        required(
-            Some(selection(first, false)),
-            Some(selection(retained_hits - first, false)),
-        )
-    };
-
-    if let Some(below_minimum) = SENSITIVE_SELECTIVE_UNMAPPED_MIN_RETAINED_HITS.checked_sub(1) {
-        assert!(!required_sum(below_minimum));
-    }
-    assert!(required_sum(SENSITIVE_SELECTIVE_UNMAPPED_MIN_RETAINED_HITS));
-    assert!(required_sum(
-        SENSITIVE_SELECTIVE_UNMAPPED_MAX_RETAINED_HITS - 1
-    ));
-    assert!(!required_sum(
-        SENSITIVE_SELECTIVE_UNMAPPED_MAX_RETAINED_HITS
+    let required = |first, second| incomplete_unmapped_frontier_deepening_required([first, second]);
+    assert!(required(
+        Some(selection(1, false)),
+        Some(selection(u64::MAX, false))
     ));
     assert!(!required(
         Some(selection(64, true)),
@@ -1598,7 +1499,7 @@ fn verification_cache_is_exact_and_read_scoped() {
 
     workspace.placements.clear();
     workspace.candidates.push(candidate);
-    workspace.retain_uncached_candidates(PAIRED_MAX_EDIT_DISTANCE, true);
+    workspace.retain_uncached_candidates(MAX_EDIT_DISTANCE, true);
     assert_eq!(workspace.candidates, [candidate]);
     assert!(workspace.placements.is_empty());
 

@@ -11,14 +11,14 @@ autobenches = false
 
 [features]
 default = []
-combined-index = ["dep:libc"]
+combined-index = ["dep:bsbit-cpu", "dep:bsbit-io", "dep:sha2"]
 index-construction = ["combined-index"]
 
 [dependencies]
 bsbit-core = { path = "../bsbit-core" }
-bsbit-io = { path = "../bsbit-io" }
-libc = { version = "=0.2.189", optional = true }
-sha2 = { version = "=0.11.0", default-features = false }
+bsbit-cpu = { path = "../bsbit-cpu", optional = true }
+bsbit-io = { path = "../bsbit-io", optional = true }
+sha2 = { version = "=0.11.0", default-features = false, optional = true }
 
 [lints.rust]
 unsafe_code = "deny"

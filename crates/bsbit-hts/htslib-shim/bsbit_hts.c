@@ -157,7 +157,7 @@ int bsbit_hts_tabix_index_build(const char *path,
     int saved_errno = 0;
 
     if (path == NULL || path[0] == '\0' || index_path == NULL ||
-        index_path[0] == '\0' || threads > UINT32_C(64)) {
+        index_path[0] == '\0' || threads > (uint32_t)INT_MAX) {
         return set_result(BSBIT_HTS_INVALID_ARGUMENT, 0,
                           "invalid tabix index arguments", out_system_errno,
                           error, error_capacity);
@@ -197,7 +197,7 @@ int bsbit_hts_bam_index_build(const char *path,
     int saved_errno = 0;
 
     if (path == NULL || path[0] == '\0' || index_path == NULL ||
-        index_path[0] == '\0' || threads > UINT32_C(64)) {
+        index_path[0] == '\0' || threads > (uint32_t)INT_MAX) {
         return set_result(BSBIT_HTS_INVALID_ARGUMENT, 0,
                           "invalid BAM index arguments", out_system_errno,
                           error, error_capacity);
@@ -1001,9 +1001,9 @@ int bsbit_hts_bgzf_writer_open(const char *path,
                           "a nonempty path is required", out_system_errno,
                           error, error_capacity);
     }
-    if (compression_threads > UINT32_C(64)) {
+    if (compression_threads > (uint32_t)INT_MAX) {
         return set_result(BSBIT_HTS_INVALID_ARGUMENT, 0,
-                          "compression_threads must be in 0..=64",
+                          "compression_threads exceed the native int domain",
                           out_system_errno, error, error_capacity);
     }
     writer = (bsbit_hts_bgzf_writer *)calloc(1, sizeof(*writer));
@@ -1191,9 +1191,9 @@ int bsbit_hts_writer_open_bam_threads_level(const char *path,
                           "path and nonempty header are required",
                           out_system_errno, error, error_capacity);
     }
-    if (compression_threads > UINT32_C(64)) {
+    if (compression_threads > (uint32_t)INT_MAX) {
         return set_result(BSBIT_HTS_INVALID_ARGUMENT, 0,
-                          "compression_threads must be in 0..=64",
+                          "compression_threads exceed the native int domain",
                           out_system_errno, error, error_capacity);
     }
     if (compression_level < -1 || compression_level > 9) {

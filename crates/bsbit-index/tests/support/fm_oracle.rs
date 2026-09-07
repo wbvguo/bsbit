@@ -2,9 +2,9 @@ use core::cmp::Ordering;
 
 use bsbit_index::storage::fm::SearchBase;
 
-pub(crate) const CANONICAL: [u8; 4] = [b'A', b'C', b'G', b'T'];
-pub(crate) const CT_PROJECTED: [u8; 3] = [b'A', b'G', b'T'];
-pub(crate) const GA_PROJECTED: [u8; 3] = [b'A', b'C', b'T'];
+pub(crate) const CANONICAL: [u8; 4] = *b"ACGT";
+pub(crate) const CT_PROJECTED: [u8; 3] = *b"AGT";
+pub(crate) const GA_PROJECTED: [u8; 3] = *b"ACT";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OracleBwt {

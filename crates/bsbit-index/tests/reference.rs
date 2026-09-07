@@ -1506,9 +1506,8 @@ fn linked_bsbit_index_rlibs() -> (std::path::PathBuf, Vec<std::path::PathBuf>) {
         })
         .collect::<Vec<_>>();
     // Prefer the artifact produced by the current Cargo invocation. A shared
-    // target directory can contain many older feature-hash variants; probing
-    // every compatible historical rlib makes this four-case API gate grow
-    // without bound over the lifetime of a checkout.
+    // target directory can contain multiple feature-hash variants, so keep
+    // this API gate bounded to four candidates.
     candidates.sort_unstable_by(|left, right| {
         let modified = |path: &std::path::Path| {
             std::fs::metadata(path)

@@ -9,29 +9,29 @@ use bsbit_core::bisulfite::{AlignmentOrientation, BisulfiteStrand, strand_semant
 use bsbit_index::reference::ReferenceIndex;
 
 use crate::AlignmentError;
+use crate::alignment_policy::LOCAL_FILTER_BLOCKS;
 use crate::placement::ReadPlacement;
 use crate::read_mapping_limits::{
-    INITIAL_EDIT_DISTANCE, MAX_EDIT_DISTANCE, MAX_READ_BASES, VERIFICATION_BATCH,
+    INITIAL_EDIT_DISTANCE, MAX_EDIT_DISTANCE, MAX_READ_BASES, MIN_READ_BASES, VERIFICATION_BATCH,
 };
-use crate::search::combined_adaptive::{DIRECT_SINGLETON_PROOF, FLEXIBLE_NOMINAL_PROOF};
+use crate::search::combined_adaptive::{
+    DIRECT_SINGLETON_PROOF, FLEXIBLE_NOMINAL_PROOF, direct_singleton_distance,
+};
 use crate::verification::ungapped::{UngappedProfile, reference_masks_by_query};
 use crate::verification::{
     NarrowEndpointDistances, NarrowPlacementDistances, narrow_banded_fixed_start_batch,
     narrow_banded_placement_distances, narrow_banded_placement_distances_batch,
-    narrow_banded_placement_distances_batch_d3, narrow_banded_placement_distances_batch_d5,
-    narrow_banded_placement_distances_d3, narrow_banded_placement_distances_d5,
+    narrow_banded_placement_distances_batch_d5, narrow_banded_placement_distances_d3,
+    narrow_banded_placement_distances_d5, narrow_banded_placement_distances_interleaved_batch_d3,
 };
 
-const MINIMUM_READ_BASES: usize = 3;
 const EDIT_BUDGET: u64 = INITIAL_EDIT_DISTANCE as u64;
-pub(crate) const LOCAL_FILTER_BLOCKS: usize = 8;
 const LOCAL_FILTER_SUPPORT: usize = LOCAL_FILTER_BLOCKS - INITIAL_EDIT_DISTANCE as usize;
 const VERIFICATION_PATTERN_BASES: usize = MAX_READ_BASES + 2 * MAX_EDIT_DISTANCE as usize;
 const MAX_FLEXIBLE_PLACEMENTS: usize = (2 * MAX_EDIT_DISTANCE as usize + 1).pow(2);
 // Collisions are ordinary misses. Generation tags invalidate the table
 // between reads without clearing it on the hot path.
 const VERIFICATION_CACHE_SLOTS: usize = 256;
-const DIRECT_SINGLETON_DISTANCE_MASK: u8 = 0b11;
 
 #[derive(Clone, Copy)]
 struct LocalFilterBlock {
@@ -136,7 +136,7 @@ pub(crate) struct ReadCandidate {
     pub(crate) contig_ordinal: u64,
     pub(crate) start: u64,
     pub(crate) strand: BisulfiteStrand,
-    pub(crate) proof_mask: u8,
+    pub(crate) proof_mask: u16,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -184,7 +184,7 @@ pub(crate) struct PlacementVerifier {
 
 impl PlacementVerifier {
     pub(crate) fn new(read: &[Base]) -> Result<Self, AlignmentError> {
-        if !(MINIMUM_READ_BASES..=MAX_READ_BASES).contains(&read.len()) {
+        if !(MIN_READ_BASES..=MAX_READ_BASES).contains(&read.len()) {
             return Err(AlignmentError::UnsupportedReadLength { length: read.len() });
         }
         let mut query_codes = [[4_u8; MAX_READ_BASES]; 2];
@@ -218,6 +218,9 @@ impl PlacementVerifier {
         Ok(output[0])
     }
 
+    // Pattern materialization, interleaved SIMD dispatch, and tie extraction
+    // share fixed buffers and must remain one ordered verification pass.
+    #[allow(clippy::too_many_lines)]
     fn verify_flexible_nominal_batch(
         &mut self,
         reference: &ReferenceIndex,
@@ -239,6 +242,10 @@ impl PlacementVerifier {
         let budget = usize::from(INITIAL_EDIT_DISTANCE);
         let pattern_len = self.read_len + 2 * budget;
         let mut window_starts = [0_usize; 4];
+        let interleaved = candidates.len() > 1;
+        if interleaved {
+            self.pattern_codes[..pattern_len * 4].fill(4);
+        }
         for (ordinal, &candidate) in candidates.iter().enumerate() {
             debug_assert_eq!(candidate.contig_ordinal(), first.contig_ordinal());
             debug_assert_eq!(candidate.strand(), first.strand());
@@ -249,16 +256,25 @@ impl PlacementVerifier {
             })?;
             let window_start = nominal.saturating_sub(budget);
             window_starts[ordinal] = window_start;
-            let pattern = &mut self.pattern_codes
-                [ordinal * pattern_len..ordinal.saturating_add(1) * pattern_len];
-            pattern.fill(4);
             let available = contig.sequence().bases().len().saturating_sub(window_start);
             let copied = available.min(pattern_len);
-            for (destination, &base) in pattern[..copied]
-                .iter_mut()
-                .zip(&contig.sequence().bases()[window_start..window_start + copied])
-            {
-                *destination = base_code(base);
+            if interleaved {
+                for (position, &base) in contig.sequence().bases()
+                    [window_start..window_start + copied]
+                    .iter()
+                    .enumerate()
+                {
+                    self.pattern_codes[position * 4 + ordinal] = base_code(base);
+                }
+            } else {
+                let pattern = &mut self.pattern_codes[..pattern_len];
+                pattern.fill(4);
+                for (destination, &base) in pattern[..copied]
+                    .iter_mut()
+                    .zip(&contig.sequence().bases()[window_start..window_start + copied])
+                {
+                    *destination = base_code(base);
+                }
             }
         }
         let semantics = strand_semantics(first.strand());
@@ -279,10 +295,10 @@ impl PlacementVerifier {
             )?;
         } else {
             debug_assert_eq!(budget, usize::from(INITIAL_EDIT_DISTANCE));
-            narrow_banded_placement_distances_batch_d3(
+            narrow_banded_placement_distances_interleaved_batch_d3(
                 &self.reference_masks[cytosine_axis],
                 &self.query_codes[axis][..self.read_len],
-                &self.pattern_codes[..pattern_len * candidates.len()],
+                &self.pattern_codes[..pattern_len * 4],
                 &mut self.placement_distances[..candidates.len()],
             )?;
         }
@@ -451,7 +467,7 @@ struct FlexibleVerifier {
 
 impl FlexibleVerifier {
     fn new(read: &[Base]) -> Result<Self, AlignmentError> {
-        if !(MINIMUM_READ_BASES..=MAX_READ_BASES).contains(&read.len()) {
+        if !(MIN_READ_BASES..=MAX_READ_BASES).contains(&read.len()) {
             return Err(AlignmentError::UnsupportedReadLength { length: read.len() });
         }
         let mut query_codes = [[4_u8; MAX_READ_BASES]; 2];
@@ -497,6 +513,10 @@ impl FlexibleVerifier {
         )?;
         let pattern_len = self.read_len + 2 * budget;
         let mut window_starts = [0_usize; 4];
+        let interleaved = candidates.len() > 1 && maximum_edit_distance == INITIAL_EDIT_DISTANCE;
+        if interleaved {
+            self.pattern_codes[..pattern_len * 4].fill(4);
+        }
         for (ordinal, &candidate) in candidates.iter().enumerate() {
             debug_assert_eq!(candidate.contig_ordinal(), first.contig_ordinal());
             debug_assert_eq!(candidate.strand(), first.strand());
@@ -507,16 +527,26 @@ impl FlexibleVerifier {
             })?;
             let window_start = nominal.saturating_sub(budget);
             window_starts[ordinal] = window_start;
-            let pattern =
-                &mut self.pattern_codes[ordinal * pattern_len..(ordinal + 1) * pattern_len];
-            pattern.fill(4);
             let available = contig.sequence().bases().len().saturating_sub(window_start);
             let copied = available.min(pattern_len);
-            for (destination, &base) in pattern[..copied]
-                .iter_mut()
-                .zip(&contig.sequence().bases()[window_start..window_start + copied])
-            {
-                *destination = base_code(base);
+            if interleaved {
+                for (position, &base) in contig.sequence().bases()
+                    [window_start..window_start + copied]
+                    .iter()
+                    .enumerate()
+                {
+                    self.pattern_codes[position * 4 + ordinal] = base_code(base);
+                }
+            } else {
+                let pattern =
+                    &mut self.pattern_codes[ordinal * pattern_len..(ordinal + 1) * pattern_len];
+                pattern.fill(4);
+                for (destination, &base) in pattern[..copied]
+                    .iter_mut()
+                    .zip(&contig.sequence().bases()[window_start..window_start + copied])
+                {
+                    *destination = base_code(base);
+                }
             }
         }
         let semantics = strand_semantics(first.strand());
@@ -550,10 +580,10 @@ impl FlexibleVerifier {
                 )?
             };
         } else if maximum_edit_distance == INITIAL_EDIT_DISTANCE {
-            narrow_banded_placement_distances_batch_d3(
+            narrow_banded_placement_distances_interleaved_batch_d3(
                 &self.reference_masks[cytosine_axis],
                 &self.query_codes[axis][..self.read_len],
-                &self.pattern_codes[..pattern_len * candidates.len()],
+                &self.pattern_codes[..pattern_len * 4],
                 &mut self.placement_distances[..candidates.len()],
             )?;
         } else if maximum_edit_distance == MAX_EDIT_DISTANCE {
@@ -654,6 +684,8 @@ pub(crate) struct ReadWorkspace {
     pub(crate) candidate_nominals: Vec<ReadCandidate>,
     pub(crate) candidates: Vec<ReadCandidate>,
     pub(crate) placements: Vec<ReadPlacement>,
+    pub(crate) affine_scores: Vec<(ReadPlacement, i16)>,
+    pub(crate) affine_score_cache: Vec<(ReadPlacement, i16)>,
     pub(crate) verification_cache: Vec<VerificationCacheEntry>,
     pub(crate) verification_cache_placements: Vec<ReadPlacement>,
     pub(crate) verification_cache_generation: u32,
@@ -667,6 +699,8 @@ impl ReadWorkspace {
             candidate_nominals: Vec::with_capacity(candidate_capacity / 5 + 1),
             candidates: Vec::with_capacity(candidate_capacity),
             placements: Vec::with_capacity(placement_capacity),
+            affine_scores: Vec::with_capacity(placement_capacity.min(192)),
+            affine_score_cache: Vec::with_capacity(placement_capacity.min(192)),
             verification_cache: vec![VerificationCacheEntry::default(); VERIFICATION_CACHE_SLOTS],
             verification_cache_placements: Vec::with_capacity(placement_capacity),
             verification_cache_generation: 0,
@@ -683,6 +717,8 @@ impl ReadWorkspace {
         }
         self.verification_cache_population = 0;
         self.verification_cache_placements.clear();
+        self.affine_scores.clear();
+        self.affine_score_cache.clear();
     }
 
     #[inline]
@@ -870,7 +906,7 @@ impl ReadWorkspace {
                         u64::try_from(read.len()).expect("bounded paired-end read length fits u64"),
                     ),
                     first.strand(),
-                    first.proof_mask & DIRECT_SINGLETON_DISTANCE_MASK,
+                    direct_singleton_distance(first.proof_mask),
                 ));
                 index += 1;
                 continue;
@@ -1136,6 +1172,24 @@ pub(crate) fn sort_nominal_candidates(candidates: &mut [ReadCandidate]) {
             candidate.start(),
         )
     });
+}
+
+/// Returns all seed-proof bits attached to nominal starts capable of
+/// producing one verified placement inside the supported displacement band.
+pub(crate) fn placement_proof_mask(workspace: &ReadWorkspace, placement: ReadPlacement) -> u16 {
+    let target = (placement.strand(), placement.contig_ordinal());
+    let first = workspace
+        .candidate_nominals
+        .partition_point(|candidate| (candidate.strand(), candidate.contig_ordinal()) < target);
+    let last = workspace
+        .candidate_nominals
+        .partition_point(|candidate| (candidate.strand(), candidate.contig_ordinal()) <= target);
+    workspace.candidate_nominals[first..last]
+        .iter()
+        .filter(|candidate| {
+            candidate.start().abs_diff(placement.start()) <= u64::from(MAX_EDIT_DISTANCE)
+        })
+        .fold(0_u16, |mask, candidate| mask | candidate.proof_mask)
 }
 
 pub(crate) fn ungapped_distance(

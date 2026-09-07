@@ -6,5 +6,6 @@
 pub mod candidate;
 pub mod seed;
 
+mod candidate_generation;
 pub(crate) mod combined_adaptive;
 pub(crate) mod combined_query;

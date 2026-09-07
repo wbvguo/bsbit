@@ -126,6 +126,55 @@ impl TextRecordLimits {
         }
     }
 
+    /// Sets the maximum physical-line content bytes, excluding LF or CRLF.
+    #[must_use]
+    pub const fn with_max_line_bytes(mut self, value: u64) -> Self {
+        self.max_line_bytes = value;
+        self
+    }
+
+    /// Sets the maximum number of emitted records.
+    #[must_use]
+    pub const fn with_max_records(mut self, value: u64) -> Self {
+        self.max_records = value;
+        self
+    }
+
+    /// Sets the maximum name bytes per record.
+    #[must_use]
+    pub const fn with_max_name_bytes(mut self, value: u64) -> Self {
+        self.max_name_bytes = value;
+        self
+    }
+
+    /// Sets the maximum description bytes per record.
+    #[must_use]
+    pub const fn with_max_description_bytes(mut self, value: u64) -> Self {
+        self.max_description_bytes = value;
+        self
+    }
+
+    /// Sets the maximum normalized bases per record.
+    #[must_use]
+    pub const fn with_max_bases_per_record(mut self, value: u64) -> Self {
+        self.max_bases_per_record = value;
+        self
+    }
+
+    /// Sets the maximum total emitted bases per source.
+    #[must_use]
+    pub const fn with_max_total_bases(mut self, value: u64) -> Self {
+        self.max_total_bases = value;
+        self
+    }
+
+    /// Sets the maximum quality bytes per FASTQ record.
+    #[must_use]
+    pub const fn with_max_quality_bytes(mut self, value: u64) -> Self {
+        self.max_quality_bytes = value;
+        self
+    }
+
     /// Returns the maximum physical-line content bytes, excluding LF or CRLF.
     #[must_use]
     pub const fn max_line_bytes(self) -> u64 {

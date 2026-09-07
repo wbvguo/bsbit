@@ -4,8 +4,9 @@ use bsbit_io::validate_distinct_paths;
 
 use super::Options;
 use crate::call_input::{prepare_call_input, resolve_sample_name, validate_explicit_sample_name};
+use crate::meth::Parameters as MethParameters;
 use crate::meth::output::{UnresolvedContextSummary, render_region as render_meth_region};
-use crate::publication::{create_text_staging, output_write_error, publication_warning};
+use crate::output::{create_text_output, finish_output, output_write_error};
 use crate::region_workers::{IndexedCallMode, stream_indexed_region_workers_mode};
 use crate::snp::output::{render_header as render_vcf_header, render_region as render_vcf_region};
 use crate::snp::result::SnpConfig;
@@ -21,8 +22,33 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
         )
     })?;
     let config = SnpConfig::from(options.parameters);
+    let meth_parameters = MethParameters {
+        minimum_base_quality: options.parameters.minimum_base_quality,
+        minimum_mapping_quality: options.parameters.minimum_mapping_quality,
+        minimum_depth: options.parameters.minimum_depth,
+        cg_only: options.cg_only,
+        ignore_orphans: options.parameters.ignore_orphans,
+    };
     let mode = IndexedCallMode::Joint(config);
     validate_explicit_sample_name("call joint", options.sample_name.as_deref())?;
+    let mut meth_output = create_text_output(
+        "call joint",
+        &options.meth_output,
+        &options.input,
+        &options.reference,
+        &[&options.vcf_output],
+        options.compress,
+        options.compression_threads,
+    )?;
+    let mut vcf_output = create_text_output(
+        "call joint",
+        &options.vcf_output,
+        &options.input,
+        &options.reference,
+        &[&options.meth_output],
+        options.compress,
+        options.compression_threads,
+    )?;
     let input = prepare_call_input(
         "call joint",
         &options.input,
@@ -36,18 +62,6 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
         &options.input,
         options.sample_name.as_deref(),
         input.bam_sample_name.as_deref(),
-    )?;
-    let mut meth_output = create_text_staging(
-        "call joint",
-        &options.meth_output,
-        options.compress,
-        options.threads,
-    )?;
-    let mut vcf_output = create_text_staging(
-        "call joint",
-        &options.vcf_output,
-        options.compress,
-        options.threads,
     )?;
     render_vcf_header(&mut vcf_output, &input.references, config, &sample_name)
         .map_err(|error| output_write_error("call joint", &options.vcf_output, error))?;
@@ -66,6 +80,7 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
             render_meth_region(
                 &mut meth_output,
                 options.meth_format,
+                meth_parameters,
                 &input.references,
                 meth,
                 &mut summary,
@@ -75,49 +90,7 @@ pub(super) fn run(options: &Options) -> Result<CallReport, CallError> {
         },
     )?;
     let unresolved_warning = summary.into_warning("call joint");
-    let meth_completed = meth_output.finish().map_err(|error| {
-        CallError::with_source(
-            CallErrorKind::Output,
-            "call joint: finalize methylation output",
-            error,
-        )
-    })?;
-    let vcf_completed = vcf_output.finish().map_err(|error| {
-        CallError::with_source(
-            CallErrorKind::Output,
-            "call joint: finalize SNP output",
-            error,
-        )
-    })?;
-    let meth_publication = meth_completed.publish_create_new().map_err(|error| {
-        CallError::with_source(
-            CallErrorKind::Publication,
-            "call joint: publish methylation output",
-            error,
-        )
-    })?;
-    let vcf_publication = match vcf_completed.publish_create_new() {
-        Ok(publication) => publication,
-        Err(error) => {
-            meth_publication.rollback().map_err(|rollback| {
-                CallError::with_source(
-                    CallErrorKind::Publication,
-                    format!(
-                        "call joint: publish SNP output failed ({error}); methylation rollback failed"
-                    ),
-                    rollback,
-                )
-            })?;
-            return Err(CallError::with_source(
-                CallErrorKind::Publication,
-                "call joint: publish SNP output",
-                error,
-            ));
-        }
-    };
-    let meth_warning = publication_warning(&meth_publication, "methylation output");
-    let vcf_warning = publication_warning(&vcf_publication, "SNP output");
-    Ok(CallReport::with_warning(vcf_warning)
-        .with_prior_warning(meth_warning)
-        .with_prior_warning(unresolved_warning))
+    finish_output("call joint methylation", meth_output)?;
+    finish_output("call joint SNP", vcf_output)?;
+    Ok(CallReport::with_warning(unresolved_warning).with_prior_warning(input.reference_warning))
 }

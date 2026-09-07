@@ -57,10 +57,24 @@ pub enum AlignmentError {
         /// Output slot count.
         output: usize,
     },
+    /// A mapper search wavefront exceeded its fixed lane capacity.
+    SearchBatchSize {
+        /// Observed read or read-pair count.
+        observed: usize,
+        /// Maximum count accepted by this mapper.
+        maximum: usize,
+    },
     /// A verification batch mixed bisulfite strands.
     MixedVerificationStrands,
     /// The located-coordinate counter overflowed.
     LocatedCountOverflow,
+    /// Caller-supplied reporting tie-break identities did not match the batch.
+    ReportingTieBreakKeyCount {
+        /// Number of reads or read pairs in the batch.
+        reads: usize,
+        /// Number of supplied stable input identities.
+        keys: usize,
+    },
     /// Combined-index search failed.
     CombinedIndex,
 }
@@ -108,12 +122,20 @@ impl fmt::Display for AlignmentError {
                 formatter,
                 "alignment verification candidates/output differ: {candidates}/{output}"
             ),
+            Self::SearchBatchSize { observed, maximum } => write!(
+                formatter,
+                "alignment search batch size {observed} exceeds mapper maximum {maximum}"
+            ),
             Self::MixedVerificationStrands => {
                 formatter.write_str("alignment verification batch mixes bisulfite strands")
             }
             Self::LocatedCountOverflow => {
                 formatter.write_str("alignment located-row count overflowed")
             }
+            Self::ReportingTieBreakKeyCount { reads, keys } => write!(
+                formatter,
+                "alignment reporting tie-break keys differ from reads: {keys}/{reads}"
+            ),
             Self::CombinedIndex => formatter.write_str("alignment combined-index query failed"),
         }
     }

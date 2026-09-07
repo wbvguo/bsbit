@@ -2,14 +2,14 @@
 //!
 //! The library owns evidence reconstruction, overlapping-mate collapse,
 //! regional parallelism, likelihood evaluation, and biological output
-//! rendering. BAM field access, BGZF transport, and create-only publication are
+//! rendering. BAM field access, BGZF transport, and direct output writing are
 //! delegated to `bsbit-hts`; command-line parsing remains in `bsbit-cli`.
 
 #![forbid(unsafe_code)]
 
 mod call_input;
 mod evidence;
-mod publication;
+mod output;
 mod reference_context;
 mod region_workers;
 
@@ -20,9 +20,6 @@ pub mod snp;
 
 use core::fmt;
 
-/// Maximum supported regional calling worker count.
-pub const MAX_THREADS: u64 = 64;
-
 /// Stable high-level class for one calling failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CallErrorKind {
@@ -32,10 +29,8 @@ pub enum CallErrorKind {
     Input,
     /// Regional aggregation or likelihood evaluation failed.
     Calling,
-    /// Staging creation, encoding, or finalization failed.
+    /// Output creation, encoding, or finalization failed.
     Output,
-    /// Create-only publication or transactional rollback failed.
-    Publication,
 }
 
 /// One operational calling failure.
@@ -117,7 +112,7 @@ impl std::error::Error for CallError {
     }
 }
 
-/// One non-fatal warning produced after a successful calling run.
+/// One non-fatal warning produced during a successful calling run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CallWarning {
     message: String,
@@ -144,7 +139,7 @@ pub struct CallReport {
 }
 
 impl CallReport {
-    /// Returns warnings emitted after or alongside successful publication.
+    /// Returns warnings emitted during the successful run.
     #[must_use]
     pub fn warnings(&self) -> &[CallWarning] {
         &self.warnings
@@ -165,11 +160,29 @@ impl CallReport {
 }
 
 pub(crate) fn validate_threads(command: &str, threads: u64) -> Result<(), CallError> {
-    if (1..=MAX_THREADS).contains(&threads) {
+    if threads > 0 && u32::try_from(threads).is_ok() {
         Ok(())
     } else {
         Err(CallError::configuration(format!(
-            "{command}: thread count must be within 1..={MAX_THREADS}"
+            "{command}: thread count must be positive and fit the supported u32 worker domain"
         )))
     }
+}
+
+pub(crate) fn validate_compression_threads(
+    command: &str,
+    compress: bool,
+    compression_threads: u32,
+) -> Result<(), CallError> {
+    if i32::try_from(compression_threads).is_err() {
+        return Err(CallError::configuration(format!(
+            "{command}: compression thread count must fit the native nonnegative signed 32-bit worker domain"
+        )));
+    }
+    if !compress && compression_threads != 0 {
+        return Err(CallError::configuration(format!(
+            "{command}: compression thread count must be zero for uncompressed output"
+        )));
+    }
+    Ok(())
 }

@@ -10,7 +10,7 @@ Run an ephemeral campaign from the repository root with:
 
 ```text
 BSBIT_NATIVE_FUZZ_SECONDS_PER_TARGET=1 \
-  scripts/run-native-fuzz.sh
+  tests/fuzz/run-native-fuzz.sh
 ```
 
 Pass one absent output directory for a committed-source formal capture. The

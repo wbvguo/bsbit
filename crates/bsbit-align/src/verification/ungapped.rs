@@ -6,7 +6,7 @@ use bsbit_core::bisulfite::{
 };
 
 /// Largest query represented by the allocation-free ungapped profile.
-pub const MAX_UNGAPPED_QUERY_BASES: usize = 192;
+pub const MAX_UNGAPPED_QUERY_BASES: usize = crate::read_mapping_limits::MAX_READ_BASES;
 type UngappedSelection = ((u8, usize, u8, usize, usize), UngappedEndpoint);
 
 /// Conversion-aware mismatch and barrier prefixes for one selected reference
@@ -157,6 +157,7 @@ impl UngappedProfile {
         let mut consider = |oriented_left_clip: usize, oriented_right_clip: usize| {
             let clipped = oriented_left_clip.saturating_add(oriented_right_clip);
             if clipped == 0
+                || clipped > config.maximum_clip_bases
                 || self.read_length.saturating_sub(clipped) < config.minimum_aligned_bases
             {
                 return false;

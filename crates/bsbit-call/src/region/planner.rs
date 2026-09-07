@@ -1,13 +1,15 @@
 //! Dictionary-aware region planning shared by all calling entry points.
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 
 use bsbit_hts::{BedInterval, DecodedReader};
 
 use super::{GenomicInterval, RegionSelection};
 use crate::call_input::BamReference;
 use crate::{CallError, CallErrorKind};
+
+const MAX_REGIONS_FILE_LINE_BYTES: usize = 1 << 20;
 
 /// One bounded unit of reference-coordinate work.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -182,19 +184,30 @@ fn parse_regions_file(
     let mut line_number = 0_u64;
     loop {
         line.clear();
-        let read = reader.read_until(b'\n', &mut line).map_err(|error| {
-            CallError::with_source(
-                CallErrorKind::Input,
-                format!("read calling regions file {}", path.display()),
-                error,
-            )
-        })?;
+        let maximum_read = MAX_REGIONS_FILE_LINE_BYTES + 2;
+        let read = reader
+            .take(u64::try_from(maximum_read).expect("region line limit fits u64"))
+            .read_until(b'\n', &mut line)
+            .map_err(|error| {
+                CallError::with_source(
+                    CallErrorKind::Input,
+                    format!("read calling regions file {}", path.display()),
+                    error,
+                )
+            })?;
         if read == 0 {
             break;
         }
         line_number += 1;
+        let stopped_at_limit = read == maximum_read && !line.ends_with(b"\n");
         while matches!(line.last(), Some(b'\n' | b'\r')) {
             line.pop();
+        }
+        if stopped_at_limit || line.len() > MAX_REGIONS_FILE_LINE_BYTES {
+            return Err(CallError::input(format!(
+                "calling regions file {} line {line_number} exceeds {MAX_REGIONS_FILE_LINE_BYTES} decoded bytes",
+                path.display()
+            )));
         }
         let Some(interval) = BedInterval::parse_line(&line).map_err(|error| {
             CallError::with_source(
@@ -230,11 +243,17 @@ fn parse_regions_file(
 
 #[cfg(test)]
 mod tests {
+    use bsbit_core::reference::ReferenceSequenceMd5;
+
     use std::fs;
+    use std::io::Cursor;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{GenomicInterval, RegionSelection, plan_call_regions};
+    use super::{
+        GenomicInterval, MAX_REGIONS_FILE_LINE_BYTES, RegionSelection, parse_regions_file,
+        plan_call_regions,
+    };
     use crate::{CallErrorKind, call_input::BamReference};
 
     fn unique_directory(label: &str) -> PathBuf {
@@ -253,10 +272,12 @@ mod tests {
             BamReference {
                 name: b"chr1".to_vec(),
                 length: 100,
+                md5: ReferenceSequenceMd5::from_bytes([0; 16]),
             },
             BamReference {
                 name: b"chr2".to_vec(),
                 length: 50,
+                md5: ReferenceSequenceMd5::from_bytes([0; 16]),
             },
         ]
     }
@@ -389,5 +410,33 @@ mod tests {
         assert!(message.contains("non-UTF-8 contig"));
 
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn regions_file_line_limit_is_exact_and_bounded() {
+        let path = PathBuf::from("oversized-regions.bed");
+        let mut maximum_comment = Vec::with_capacity(MAX_REGIONS_FILE_LINE_BYTES + 1);
+        maximum_comment.push(b'#');
+        maximum_comment.resize(MAX_REGIONS_FILE_LINE_BYTES, b'x');
+        maximum_comment.push(b'\n');
+        assert!(
+            parse_regions_file(&mut Cursor::new(maximum_comment), &path)
+                .unwrap()
+                .is_empty()
+        );
+
+        let mut oversized_comment = Vec::with_capacity(MAX_REGIONS_FILE_LINE_BYTES + 2);
+        oversized_comment.push(b'#');
+        oversized_comment.resize(MAX_REGIONS_FILE_LINE_BYTES + 1, b'x');
+        oversized_comment.push(b'\n');
+        let error = parse_regions_file(&mut Cursor::new(oversized_comment), &path).unwrap_err();
+        assert_eq!(error.kind(), CallErrorKind::Input);
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "calling regions file {} line 1 exceeds {MAX_REGIONS_FILE_LINE_BYTES} decoded bytes",
+                path.display()
+            )
+        );
     }
 }

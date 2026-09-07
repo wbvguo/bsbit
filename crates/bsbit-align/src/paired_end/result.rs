@@ -96,7 +96,7 @@ impl PairedAlignmentResult {
         self.retained_query_intervals.clone()
     }
 
-    /// Returns the final calibrated pair mapping quality.
+    /// Returns the final evidence-derived pair mapping quality.
     #[must_use]
     pub const fn mapping_quality(&self) -> u8 {
         self.mapping_quality

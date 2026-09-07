@@ -265,6 +265,27 @@ impl AlignmentRecordLimits {
     pub const fn max_header_bytes(self) -> u64 {
         self.max_header_bytes
     }
+
+    /// Sets the maximum number of reference-dictionary entries.
+    #[must_use]
+    pub const fn with_max_header_references(mut self, value: u64) -> Self {
+        self.max_header_references = value;
+        self
+    }
+
+    /// Sets the maximum aggregate reference-name bytes in the header.
+    #[must_use]
+    pub const fn with_max_header_name_bytes(mut self, value: u64) -> Self {
+        self.max_header_name_bytes = value;
+        self
+    }
+
+    /// Sets the maximum encoded SAM header bytes.
+    #[must_use]
+    pub const fn with_max_header_bytes(mut self, value: u64) -> Self {
+        self.max_header_bytes = value;
+        self
+    }
 }
 
 impl Default for AlignmentRecordLimits {

@@ -5,8 +5,8 @@
 
 use core::ops::Range;
 
-pub(crate) const CANONICAL: [u8; 4] = [b'A', b'C', b'G', b'T'];
-pub(crate) const REFERENCE_ALPHABET: [u8; 5] = [b'A', b'C', b'G', b'T', b'N'];
+pub(crate) const CANONICAL: [u8; 4] = *b"ACGT";
+pub(crate) const REFERENCE_ALPHABET: [u8; 5] = *b"ACGTN";
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) enum OracleStrand {

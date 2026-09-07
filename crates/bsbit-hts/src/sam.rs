@@ -9,6 +9,7 @@ use bsbit_io::{PublicationError, PublishedFile, StagedFile};
 
 use bsbit_core::bisulfite::AlignmentOrientation;
 use bsbit_core::cigar::CoreCigar;
+use bsbit_core::reference::ReferenceSequenceMd5;
 
 use crate::alignment_record::{
     AlignmentAuxiliaryMode, AlignmentCigarOp, AlignmentCigarRun, AlignmentRecord,
@@ -18,122 +19,103 @@ use crate::alignment_record::{
     validate_reference_length, validate_reference_name,
 };
 
+const HEADER_PREFIX: &[u8] = b"@HD\tVN:1.6\tSO:";
+const HEADER_METADATA_PREFIX: &[u8] = b"\tbs:read-layout=";
+const HEADER_PROFILE_PREFIX: &[u8] = b";library-profile=";
 const PROGRAM_PREFIX: &[u8] = b"@PG\tID:bsbit\tPN:bsbit\tVN:";
 const PROGRAM_VERSION: &[u8] = env!("CARGO_PKG_VERSION").as_bytes();
-const PROGRAM_DESCRIPTION_PREFIX: &[u8] = b"\tDS:reference-semantic-sha256=";
-const PROGRAM_MODE_PREFIX: &[u8] = b";alignment-mode=";
 
-/// Alignment contract recorded in the canonical bsbit `@PG` header line.
+/// Alignment mode recorded as informational bsbit file-level metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BsbitAlignmentMode {
-    /// Caller-compatible directional single-end alignment.
-    CallerCompatibleDirectionalSingle,
-    /// Caller-compatible directional paired-end alignment.
-    CallerCompatibleDirectionalPaired,
-    /// Caller-compatible non-directional paired-end alignment.
-    CallerCompatibleNondirectionalPaired,
+    /// Directional single-end alignment.
+    DirectionalSingleEnd,
+    /// Non-directional single-end alignment.
+    NonDirectionalSingleEnd,
+    /// Directional paired-end alignment.
+    DirectionalPairedEnd,
+    /// Non-directional paired-end alignment.
+    NonDirectionalPairedEnd,
 }
 
 impl BsbitAlignmentMode {
-    const fn header_value(self) -> &'static [u8] {
+    const fn read_layout_header_value(self) -> &'static [u8] {
         match self {
-            Self::CallerCompatibleDirectionalSingle => b"caller-compatible-directional-single",
-            Self::CallerCompatibleDirectionalPaired => b"caller-compatible-directional-paired",
-            Self::CallerCompatibleNondirectionalPaired => {
-                b"caller-compatible-nondirectional-paired"
-            }
+            Self::DirectionalSingleEnd | Self::NonDirectionalSingleEnd => b"single-end",
+            Self::DirectionalPairedEnd | Self::NonDirectionalPairedEnd => b"paired-end",
         }
     }
 
-    fn from_header_value(value: &[u8]) -> Option<Self> {
-        match value {
-            b"caller-compatible-directional-single" => {
-                Some(Self::CallerCompatibleDirectionalSingle)
-            }
-            b"caller-compatible-directional-paired" => {
-                Some(Self::CallerCompatibleDirectionalPaired)
-            }
-            b"caller-compatible-nondirectional-paired" => {
-                Some(Self::CallerCompatibleNondirectionalPaired)
-            }
+    const fn library_profile_header_value(self) -> &'static [u8] {
+        match self {
+            Self::DirectionalSingleEnd | Self::DirectionalPairedEnd => b"directional",
+            Self::NonDirectionalSingleEnd | Self::NonDirectionalPairedEnd => b"non-directional",
+        }
+    }
+
+    fn from_header_values(read_layout: &[u8], library_profile: &[u8]) -> Option<Self> {
+        match (read_layout, library_profile) {
+            (b"single-end", b"directional") => Some(Self::DirectionalSingleEnd),
+            (b"single-end", b"non-directional") => Some(Self::NonDirectionalSingleEnd),
+            (b"paired-end", b"directional") => Some(Self::DirectionalPairedEnd),
+            (b"paired-end", b"non-directional") => Some(Self::NonDirectionalPairedEnd),
             _ => None,
         }
     }
-
-    /// Returns whether the mapping-quality and auxiliary-tag contract is
-    /// suitable for the bsbit caller after coordinate sorting and indexing.
-    #[must_use]
-    pub const fn is_caller_compatible(self) -> bool {
-        matches!(
-            self,
-            Self::CallerCompatibleDirectionalSingle
-                | Self::CallerCompatibleDirectionalPaired
-                | Self::CallerCompatibleNondirectionalPaired
-        )
-    }
 }
 
-/// Exact provenance embedded in and recovered from a bsbit `@PG` record.
+/// Exact bsbit file-level metadata embedded in and recovered from `@HD`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BsbitProgramProvenance {
-    reference_semantic_digest: [u8; 32],
+pub struct BsbitHeaderMetadata {
     alignment_mode: BsbitAlignmentMode,
 }
 
-impl BsbitProgramProvenance {
-    /// Constructs provenance for one verified reference and alignment mode.
+impl BsbitHeaderMetadata {
+    /// Constructs informational metadata for one alignment mode.
     #[must_use]
-    pub const fn new(
-        reference_semantic_digest: [u8; 32],
-        alignment_mode: BsbitAlignmentMode,
-    ) -> Self {
-        Self {
-            reference_semantic_digest,
-            alignment_mode,
-        }
+    pub const fn new(alignment_mode: BsbitAlignmentMode) -> Self {
+        Self { alignment_mode }
     }
 
-    /// Returns the exact semantic reference digest.
-    #[must_use]
-    pub const fn reference_semantic_digest(self) -> [u8; 32] {
-        self.reference_semantic_digest
-    }
-
-    /// Returns the declared alignment contract.
+    /// Returns the informational alignment mode.
     #[must_use]
     pub const fn alignment_mode(self) -> BsbitAlignmentMode {
         self.alignment_mode
     }
 }
 
-/// Malformed or ambiguous bsbit provenance in a SAM/BAM header.
+/// Malformed or ambiguous bsbit metadata in a SAM/BAM header.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BsbitProgramProvenanceError {
-    /// More than one matching bsbit program record was present.
-    DuplicateProgramRecord,
-    /// The matching program record omitted its structured description.
-    MissingDescription,
-    /// The structured description did not match the versioned grammar.
-    MalformedDescription,
+pub enum BsbitHeaderMetadataError {
+    /// More than one `@HD` record was present.
+    DuplicateHeaderRecord,
+    /// The `@HD` record repeated the local bsbit field.
+    DuplicateMetadataField,
+    /// The local bsbit field omitted required metadata.
+    MissingMetadataField,
+    /// The local bsbit field did not match the supported grammar.
+    MalformedMetadata,
 }
 
-impl fmt::Display for BsbitProgramProvenanceError {
+impl fmt::Display for BsbitHeaderMetadataError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::DuplicateProgramRecord => "BAM header repeats `@PG ID:bsbit PN:bsbit`",
-            Self::MissingDescription => "bsbit @PG record lacks reference/alignment provenance",
-            Self::MalformedDescription => "bsbit @PG provenance is malformed or unsupported",
+            Self::DuplicateHeaderRecord => "BAM header repeats the `@HD` record",
+            Self::DuplicateMetadataField => "BAM `@HD` record repeats the local `bs` field",
+            Self::MissingMetadataField => "BAM `@HD bs` field lacks required bsbit metadata",
+            Self::MalformedMetadata => "BAM `@HD bs` metadata is malformed or unsupported",
         })
     }
 }
 
-impl std::error::Error for BsbitProgramProvenanceError {}
+impl std::error::Error for BsbitHeaderMetadataError {}
 
 /// One validated reference-dictionary entry for a SAM header.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SamHeaderReference {
     name: Box<[u8]>,
     length: u32,
+    md5: Option<ReferenceSequenceMd5>,
 }
 
 impl SamHeaderReference {
@@ -149,7 +131,15 @@ impl SamHeaderReference {
             name: allocate_bytes_unbounded(name, AlignmentRecordAllocation::ReferenceName)?,
             length: u32::try_from(length)
                 .map_err(|_| AlignmentRecordError::ReferenceLengthOutOfRange { ordinal, length })?,
+            md5: None,
         })
+    }
+
+    /// Returns a copy with the standard SAM reference-sequence checksum.
+    #[must_use]
+    pub const fn with_md5(mut self, md5: ReferenceSequenceMd5) -> Self {
+        self.md5 = Some(md5);
+        self
     }
 
     /// Returns the exact SAM reference name.
@@ -162,6 +152,12 @@ impl SamHeaderReference {
     pub const fn length(&self) -> u32 {
         self.length
     }
+
+    /// Returns the standard SAM reference-sequence checksum, when configured.
+    #[must_use]
+    pub const fn md5(&self) -> Option<ReferenceSequenceMd5> {
+        self.md5
+    }
 }
 
 /// Immutable canonical SAM header metadata.
@@ -169,7 +165,7 @@ impl SamHeaderReference {
 pub struct SamHeader {
     references: Vec<SamHeaderReference>,
     sort_order: SamSortOrder,
-    bsbit_provenance: Option<BsbitProgramProvenance>,
+    bsbit_metadata: Option<BsbitHeaderMetadata>,
 }
 
 /// Declared alignment ordering for the canonical SAM/BAM header.
@@ -185,11 +181,11 @@ pub enum SamSortOrder {
 }
 
 impl SamSortOrder {
-    const fn header_prefix(self) -> &'static [u8] {
+    const fn header_value(self) -> &'static [u8] {
         match self {
-            Self::Unsorted => b"@HD\tVN:1.6\tSO:unsorted\n",
-            Self::Coordinate => b"@HD\tVN:1.6\tSO:coordinate\n",
-            Self::QueryName => b"@HD\tVN:1.6\tSO:queryname\n",
+            Self::Unsorted => b"unsorted",
+            Self::Coordinate => b"coordinate",
+            Self::QueryName => b"queryname",
         }
     }
 }
@@ -227,7 +223,7 @@ impl SamHeader {
         let header = Self {
             references,
             sort_order: SamSortOrder::Unsorted,
-            bsbit_provenance: None,
+            bsbit_metadata: None,
         };
         let length = header_text_length(&header)?;
         check_limit(
@@ -257,18 +253,18 @@ impl SamHeader {
         self.sort_order
     }
 
-    /// Returns a copy with exact reference and alignment provenance in `@PG`.
+    /// Returns a copy with informational alignment-mode metadata in `@HD`.
     ///
     /// # Errors
     ///
     /// Returns a header-size failure when the configured limit cannot retain
-    /// the fixed structured provenance.
-    pub fn with_bsbit_provenance(
+    /// the fixed structured metadata.
+    pub fn with_bsbit_metadata(
         mut self,
-        provenance: BsbitProgramProvenance,
+        metadata: BsbitHeaderMetadata,
         limits: AlignmentRecordLimits,
     ) -> Result<Self, AlignmentRecordError> {
-        self.bsbit_provenance = Some(provenance);
+        self.bsbit_metadata = Some(metadata);
         check_limit(
             header_text_length(&self)?,
             limits.max_header_bytes(),
@@ -277,10 +273,10 @@ impl SamHeader {
         Ok(self)
     }
 
-    /// Returns the structured bsbit program provenance, when configured.
+    /// Returns the structured bsbit file-level metadata, when configured.
     #[must_use]
-    pub const fn bsbit_provenance(&self) -> Option<BsbitProgramProvenance> {
-        self.bsbit_provenance
+    pub const fn bsbit_metadata(&self) -> Option<BsbitHeaderMetadata> {
+        self.bsbit_metadata
     }
 }
 
@@ -668,22 +664,28 @@ pub fn sam_header_bytes(
             allocation: AlignmentRecordAllocation::SamText,
             requested: length,
         })?;
-    output.extend_from_slice(header.sort_order.header_prefix());
+    output.extend_from_slice(HEADER_PREFIX);
+    output.extend_from_slice(header.sort_order.header_value());
+    if let Some(metadata) = header.bsbit_metadata {
+        output.extend_from_slice(HEADER_METADATA_PREFIX);
+        output.extend_from_slice(metadata.alignment_mode.read_layout_header_value());
+        output.extend_from_slice(HEADER_PROFILE_PREFIX);
+        output.extend_from_slice(metadata.alignment_mode.library_profile_header_value());
+    }
+    output.push(b'\n');
     for reference in &header.references {
         output.extend_from_slice(b"@SQ\tSN:");
         output.extend_from_slice(&reference.name);
         output.extend_from_slice(b"\tLN:");
         append_u64(&mut output, u64::from(reference.length));
+        if let Some(md5) = reference.md5 {
+            output.extend_from_slice(b"\tM5:");
+            append_hex(&mut output, md5.as_bytes());
+        }
         output.push(b'\n');
     }
     output.extend_from_slice(PROGRAM_PREFIX);
     output.extend_from_slice(PROGRAM_VERSION);
-    if let Some(provenance) = header.bsbit_provenance {
-        output.extend_from_slice(PROGRAM_DESCRIPTION_PREFIX);
-        append_hex(&mut output, &provenance.reference_semantic_digest);
-        output.extend_from_slice(PROGRAM_MODE_PREFIX);
-        output.extend_from_slice(provenance.alignment_mode.header_value());
-    }
     output.push(b'\n');
     debug_assert_eq!(output.len(), capacity);
     Ok(output)
@@ -844,22 +846,30 @@ fn render_cigar(cigar: &CoreCigar, output: &mut Vec<u8>) {
 }
 
 fn header_text_length(header: &SamHeader) -> Result<u64, AlignmentRecordError> {
-    let mut length = storage_len(header.sort_order.header_prefix().len());
+    let mut length = storage_len(HEADER_PREFIX.len());
+    length = add_length(length, storage_len(header.sort_order.header_value().len()))?;
+    if let Some(metadata) = header.bsbit_metadata {
+        length = add_length(length, storage_len(HEADER_METADATA_PREFIX.len()))?;
+        length = add_length(
+            length,
+            storage_len(metadata.alignment_mode.read_layout_header_value().len()),
+        )?;
+        length = add_length(length, storage_len(HEADER_PROFILE_PREFIX.len()))?;
+        length = add_length(
+            length,
+            storage_len(metadata.alignment_mode.library_profile_header_value().len()),
+        )?;
+    }
+    length = add_length(length, 1)?;
     for reference in &header.references {
         length = add_length(length, 7 + storage_len(reference.name.len()))?;
-        length = add_length(length, 4 + decimal_digits(u64::from(reference.length)) + 1)?;
+        length = add_length(
+            length,
+            4 + decimal_digits(u64::from(reference.length)) + reference.md5.map_or(0, |_| 36) + 1,
+        )?;
     }
     length = add_length(length, storage_len(PROGRAM_PREFIX.len()))?;
     length = add_length(length, storage_len(PROGRAM_VERSION.len()))?;
-    if let Some(provenance) = header.bsbit_provenance {
-        length = add_length(length, storage_len(PROGRAM_DESCRIPTION_PREFIX.len()))?;
-        length = add_length(length, 64)?;
-        length = add_length(length, storage_len(PROGRAM_MODE_PREFIX.len()))?;
-        length = add_length(
-            length,
-            storage_len(provenance.alignment_mode.header_value().len()),
-        )?;
-    }
     length = add_length(length, 1)?;
     Ok(length)
 }
@@ -872,63 +882,67 @@ fn append_hex(output: &mut Vec<u8>, bytes: &[u8]) {
     }
 }
 
-pub(crate) fn parse_bsbit_program_provenance(
-    text: &[u8],
-) -> Result<Option<BsbitProgramProvenance>, BsbitProgramProvenanceError> {
-    let mut provenance = None;
+fn bsbit_header_metadata_value(text: &[u8]) -> Result<Option<&[u8]>, BsbitHeaderMetadataError> {
+    let mut header_seen = false;
+    let mut metadata = None;
     for line in text.split(|byte| *byte == b'\n') {
         let mut fields = line.split(|byte| *byte == b'\t');
-        if fields.next() != Some(b"@PG".as_slice()) {
+        if fields.next() != Some(b"@HD".as_slice()) {
             continue;
         }
-        let fields = fields.collect::<Vec<_>>();
-        let is_bsbit = fields.iter().any(|field| *field == b"ID:bsbit")
-            && fields.iter().any(|field| *field == b"PN:bsbit");
-        if !is_bsbit {
-            continue;
+        if header_seen {
+            return Err(BsbitHeaderMetadataError::DuplicateHeaderRecord);
         }
-        if provenance.is_some() {
-            return Err(BsbitProgramProvenanceError::DuplicateProgramRecord);
+        header_seen = true;
+        for field in fields {
+            if let Some(value) = field.strip_prefix(b"bs:")
+                && metadata.replace(value).is_some()
+            {
+                return Err(BsbitHeaderMetadataError::DuplicateMetadataField);
+            }
         }
-        let description = fields
-            .iter()
-            .find_map(|field| field.strip_prefix(b"DS:"))
-            .ok_or(BsbitProgramProvenanceError::MissingDescription)?;
-        provenance = Some(parse_program_description(description)?);
     }
-    Ok(provenance)
+    Ok(metadata)
 }
 
-fn parse_program_description(
-    description: &[u8],
-) -> Result<BsbitProgramProvenance, BsbitProgramProvenanceError> {
-    let digest_text = description
-        .strip_prefix(b"reference-semantic-sha256=")
-        .ok_or(BsbitProgramProvenanceError::MalformedDescription)?;
-    let delimiter = b";alignment-mode=";
-    let delimiter_offset = digest_text
-        .windows(delimiter.len())
-        .position(|window| window == delimiter)
-        .ok_or(BsbitProgramProvenanceError::MalformedDescription)?;
-    let (digest_text, mode_text) = digest_text.split_at(delimiter_offset);
-    let mode_text = &mode_text[delimiter.len()..];
-    if digest_text.len() != 64 {
-        return Err(BsbitProgramProvenanceError::MalformedDescription);
+pub(crate) fn parse_bsbit_header_metadata(
+    text: &[u8],
+) -> Result<Option<BsbitHeaderMetadata>, BsbitHeaderMetadataError> {
+    let Some(metadata) = bsbit_header_metadata_value(text)? else {
+        return Ok(None);
+    };
+    let layout_and_profile = metadata
+        .strip_prefix(b"read-layout=")
+        .ok_or(BsbitHeaderMetadataError::MalformedMetadata)?;
+    let profile_delimiter = b";library-profile=";
+    let profile_offset = layout_and_profile
+        .windows(profile_delimiter.len())
+        .position(|window| window == profile_delimiter)
+        .ok_or(BsbitHeaderMetadataError::MissingMetadataField)?;
+    let (read_layout, library_profile) = layout_and_profile.split_at(profile_offset);
+    let library_profile = &library_profile[profile_delimiter.len()..];
+    let alignment_mode = BsbitAlignmentMode::from_header_values(read_layout, library_profile)
+        .ok_or(BsbitHeaderMetadataError::MalformedMetadata)?;
+    Ok(Some(BsbitHeaderMetadata::new(alignment_mode)))
+}
+
+pub(crate) fn parse_reference_sequence_md5(digest_text: &[u8]) -> Option<ReferenceSequenceMd5> {
+    let mut digest = [0_u8; 16];
+    let (digest_pairs, remainder) = digest_text.as_chunks::<2>();
+    if digest_pairs.len() != digest.len() || !remainder.is_empty() {
+        return None;
     }
-    let mut digest = [0_u8; 32];
-    for (target, pair) in digest.iter_mut().zip(digest_text.chunks_exact(2)) {
+    for (target, pair) in digest.iter_mut().zip(digest_pairs) {
         *target = (hex_digit(pair[0])? << 4) | hex_digit(pair[1])?;
     }
-    let alignment_mode = BsbitAlignmentMode::from_header_value(mode_text)
-        .ok_or(BsbitProgramProvenanceError::MalformedDescription)?;
-    Ok(BsbitProgramProvenance::new(digest, alignment_mode))
+    Some(ReferenceSequenceMd5::from_bytes(digest))
 }
 
-fn hex_digit(byte: u8) -> Result<u8, BsbitProgramProvenanceError> {
+fn hex_digit(byte: u8) -> Option<u8> {
     match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        _ => Err(BsbitProgramProvenanceError::MalformedDescription),
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
     }
 }
 
@@ -1057,7 +1071,7 @@ impl std::error::Error for SamFileError {
 }
 
 /// Successful create-only SAM publication details.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct SamFilePublication {
     published: PublishedFile,
     records_written: u64,
@@ -1376,55 +1390,63 @@ mod tests {
     }
 
     #[test]
-    fn structured_bsbit_provenance_is_exact_unique_and_fail_closed() {
+    fn structured_bsbit_header_metadata_is_exact_and_separate_from_program_provenance() {
         let limits = AlignmentRecordLimits::default();
-        let expected = BsbitProgramProvenance::new(
-            [0xab; 32],
-            BsbitAlignmentMode::CallerCompatibleNondirectionalPaired,
-        );
+        let expected = BsbitHeaderMetadata::new(BsbitAlignmentMode::NonDirectionalPairedEnd);
         let header = SamHeader::new(
-            vec![SamHeaderReference::new(0, b"chr1", 7).expect("reference")],
+            vec![
+                SamHeaderReference::new(0, b"chr1", 7)
+                    .expect("reference")
+                    .with_md5(ReferenceSequenceMd5::from_ascii(b"ACGTACG")),
+            ],
             limits,
         )
         .expect("header")
-        .with_bsbit_provenance(expected, limits)
-        .expect("provenance header");
+        .with_bsbit_metadata(expected, limits)
+        .expect("metadata header");
         let bytes = sam_header_bytes(&header, limits).expect("SAM header bytes");
+        assert!(bytes.starts_with(
+            b"@HD\tVN:1.6\tSO:unsorted\tbs:read-layout=paired-end;library-profile=non-directional\n@SQ\tSN:chr1\tLN:7\tM5:e89800527ff0d7ac3defac516dfcb648\n"
+        ));
         assert!(
-            bytes.windows(64).any(|window| window
-                == b"abababababababababababababababababababababababababababababababab")
+            bytes
+                .windows(b"@PG\tID:bsbit\tPN:bsbit\tVN:".len())
+                .any(|window| window == b"@PG\tID:bsbit\tPN:bsbit\tVN:")
         );
         assert_eq!(
-            parse_bsbit_program_provenance(&bytes).expect("generated provenance parses"),
+            parse_bsbit_header_metadata(&bytes).expect("generated metadata parses"),
             Some(expected)
         );
 
+        let unknown_mode = b"@HD\tVN:1.6\tSO:coordinate\tbs:read-layout=unknown;library-profile=unknown\n@PG\tID:other\tPN:other\n";
         assert_eq!(
-            parse_bsbit_program_provenance(b"@PG\tID:bsbit\tPN:bsbit\n"),
-            Err(BsbitProgramProvenanceError::MissingDescription)
+            parse_bsbit_header_metadata(unknown_mode),
+            Err(BsbitHeaderMetadataError::MalformedMetadata)
         );
+
         let mut duplicate = bytes.clone();
-        duplicate.extend_from_slice(
-            b"@PG\tID:bsbit\tPN:bsbit\tDS:reference-semantic-sha256=abababababababababababababababababababababababababababababababab;alignment-mode=caller-compatible-directional-single\n",
-        );
+        duplicate.extend_from_slice(b"@HD\tVN:1.6\tSO:coordinate\n");
         assert_eq!(
-            parse_bsbit_program_provenance(&duplicate),
-            Err(BsbitProgramProvenanceError::DuplicateProgramRecord)
+            parse_bsbit_header_metadata(&duplicate),
+            Err(BsbitHeaderMetadataError::DuplicateHeaderRecord)
         );
     }
 
     #[test]
-    fn every_alignment_mode_round_trips_and_is_caller_compatible() {
+    fn every_alignment_mode_round_trips_through_independent_header_fields() {
         for mode in [
-            BsbitAlignmentMode::CallerCompatibleDirectionalSingle,
-            BsbitAlignmentMode::CallerCompatibleDirectionalPaired,
-            BsbitAlignmentMode::CallerCompatibleNondirectionalPaired,
+            BsbitAlignmentMode::DirectionalSingleEnd,
+            BsbitAlignmentMode::NonDirectionalSingleEnd,
+            BsbitAlignmentMode::DirectionalPairedEnd,
+            BsbitAlignmentMode::NonDirectionalPairedEnd,
         ] {
             assert_eq!(
-                BsbitAlignmentMode::from_header_value(mode.header_value()),
+                BsbitAlignmentMode::from_header_values(
+                    mode.read_layout_header_value(),
+                    mode.library_profile_header_value(),
+                ),
                 Some(mode)
             );
-            assert!(mode.is_caller_compatible());
         }
     }
 }

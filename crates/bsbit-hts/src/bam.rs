@@ -8,6 +8,7 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use bsbit_core::cigar::CoreCigarOp;
+use bsbit_core::reference::ReferenceSequenceMd5;
 use bsbit_io::{CompletedFile, FileIdentity, PublicationError, PublishedFile, StagedFile};
 
 use crate::alignment_record::{
@@ -543,7 +544,12 @@ impl<'a> ByteCursor<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BamRecordDecodeWorkspace, IndexedBamRecord};
+    use bsbit_core::reference::ReferenceSequenceMd5;
+
+    use super::{
+        BamRecordDecodeWorkspace, BamReferenceMd5Error, IndexedBamHeader, IndexedBamRecord,
+        IndexedBamReference,
+    };
 
     fn synthetic_record(auxiliary: Vec<u8>) -> IndexedBamRecord {
         IndexedBamRecord {
@@ -633,6 +639,38 @@ mod tests {
                 .contains("not type Z")
         );
     }
+
+    #[test]
+    fn reference_md5s_follow_sq_order_and_validate_the_standard_field() {
+        let reference = IndexedBamReference {
+            name: b"chr1".to_vec(),
+            length: 8,
+        };
+        let header = IndexedBamHeader {
+            text: b"@HD\tVN:1.6\n@SQ\tSN:chr1\tLN:8\tM5:cc0af3a4fedb18378b4b57b98068e69f\n"
+                .to_vec(),
+            references: vec![reference.clone()],
+        };
+        assert_eq!(
+            header.reference_md5s().unwrap(),
+            vec![Some(ReferenceSequenceMd5::from_ascii(b"ACGTACGT"))]
+        );
+
+        let missing = IndexedBamHeader {
+            text: b"@SQ\tSN:chr1\tLN:8\n".to_vec(),
+            references: vec![reference.clone()],
+        };
+        assert_eq!(missing.reference_md5s().unwrap(), vec![None]);
+
+        let malformed = IndexedBamHeader {
+            text: b"@SQ\tSN:chr1\tLN:8\tM5:CC0AF3A4FEDB18378B4B57B98068E69F\n".to_vec(),
+            references: vec![reference],
+        };
+        assert_eq!(
+            malformed.reference_md5s(),
+            Err(BamReferenceMd5Error::MalformedChecksum { ordinal: 0 })
+        );
+    }
 }
 
 /// Builds a create-only BAI at an explicit path for a coordinate-sorted BAM.
@@ -717,6 +755,84 @@ pub struct IndexedBamHeader {
     pub(crate) references: Vec<IndexedBamReference>,
 }
 
+/// A malformed or inconsistent `@SQ M5` reference checksum declaration.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BamReferenceMd5Error {
+    /// Space for the parsed checksum dictionary could not be reserved.
+    AllocationFailed {
+        /// Number of reference entries requested.
+        requested: u64,
+    },
+    /// The textual `@SQ` list differs in length from the BAM dictionary.
+    ReferenceCountMismatch {
+        /// Number of BAM dictionary entries.
+        expected: u64,
+        /// Number of textual `@SQ` records.
+        observed: u64,
+    },
+    /// One `@SQ` record omitted its mandatory sequence name.
+    MissingSequenceName {
+        /// Zero-based `@SQ` ordinal.
+        ordinal: u64,
+    },
+    /// One `@SQ` record repeated the sequence-name field.
+    DuplicateSequenceName {
+        /// Zero-based `@SQ` ordinal.
+        ordinal: u64,
+    },
+    /// The textual sequence name differs from the BAM dictionary.
+    ReferenceNameMismatch {
+        /// Zero-based `@SQ` ordinal.
+        ordinal: u64,
+    },
+    /// One `@SQ` record repeated its checksum field.
+    DuplicateChecksum {
+        /// Zero-based `@SQ` ordinal.
+        ordinal: u64,
+    },
+    /// One checksum was not 32 lowercase hexadecimal characters.
+    MalformedChecksum {
+        /// Zero-based `@SQ` ordinal.
+        ordinal: u64,
+    },
+}
+
+impl fmt::Display for BamReferenceMd5Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::AllocationFailed { requested } => {
+                write!(
+                    formatter,
+                    "could not reserve {requested} BAM reference checksums"
+                )
+            }
+            Self::ReferenceCountMismatch { expected, observed } => write!(
+                formatter,
+                "BAM dictionary contains {expected} references but header text contains {observed} @SQ records"
+            ),
+            Self::MissingSequenceName { ordinal } => {
+                write!(formatter, "BAM @SQ record {ordinal} lacks SN")
+            }
+            Self::DuplicateSequenceName { ordinal } => {
+                write!(formatter, "BAM @SQ record {ordinal} repeats SN")
+            }
+            Self::ReferenceNameMismatch { ordinal } => write!(
+                formatter,
+                "BAM @SQ record {ordinal} name differs from the binary reference dictionary"
+            ),
+            Self::DuplicateChecksum { ordinal } => {
+                write!(formatter, "BAM @SQ record {ordinal} repeats M5")
+            }
+            Self::MalformedChecksum { ordinal } => write!(
+                formatter,
+                "BAM @SQ record {ordinal} M5 is not 32 lowercase hexadecimal characters"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BamReferenceMd5Error {}
+
 impl IndexedBamHeader {
     /// Returns the SAM header text.
     #[must_use]
@@ -728,6 +844,65 @@ impl IndexedBamHeader {
     #[must_use]
     pub fn references(&self) -> &[IndexedBamReference] {
         &self.references
+    }
+
+    /// Returns the standard `M5` checksum for each `@SQ` record in reference-id
+    /// order. Missing checksums are represented by `None`.
+    ///
+    /// # Errors
+    ///
+    /// Rejects inconsistent textual and binary dictionaries, duplicate fields,
+    /// malformed checksums, and allocation failure.
+    pub fn reference_md5s(
+        &self,
+    ) -> Result<Vec<Option<ReferenceSequenceMd5>>, BamReferenceMd5Error> {
+        let requested = u64::try_from(self.references.len()).unwrap_or(u64::MAX);
+        let mut md5s = Vec::new();
+        md5s.try_reserve_exact(self.references.len())
+            .map_err(|_| BamReferenceMd5Error::AllocationFailed { requested })?;
+        for line in self.text.split(|byte| *byte == b'\n') {
+            let mut fields = line.split(|byte| *byte == b'\t');
+            if fields.next() != Some(b"@SQ".as_slice()) {
+                continue;
+            }
+            let ordinal = u64::try_from(md5s.len()).unwrap_or(u64::MAX);
+            let Some(expected) = self.references.get(md5s.len()) else {
+                return Err(BamReferenceMd5Error::ReferenceCountMismatch {
+                    expected: requested,
+                    observed: ordinal.saturating_add(1),
+                });
+            };
+            let mut name = None;
+            let mut md5 = None;
+            for field in fields {
+                if let Some(value) = field.strip_prefix(b"SN:")
+                    && name.replace(value).is_some()
+                {
+                    return Err(BamReferenceMd5Error::DuplicateSequenceName { ordinal });
+                }
+                if let Some(value) = field.strip_prefix(b"M5:") {
+                    if md5.is_some() {
+                        return Err(BamReferenceMd5Error::DuplicateChecksum { ordinal });
+                    }
+                    md5 = Some(
+                        crate::sam::parse_reference_sequence_md5(value)
+                            .ok_or(BamReferenceMd5Error::MalformedChecksum { ordinal })?,
+                    );
+                }
+            }
+            let name = name.ok_or(BamReferenceMd5Error::MissingSequenceName { ordinal })?;
+            if name != expected.name() {
+                return Err(BamReferenceMd5Error::ReferenceNameMismatch { ordinal });
+            }
+            md5s.push(md5);
+        }
+        if md5s.len() != self.references.len() {
+            return Err(BamReferenceMd5Error::ReferenceCountMismatch {
+                expected: requested,
+                observed: u64::try_from(md5s.len()).unwrap_or(u64::MAX),
+            });
+        }
+        Ok(md5s)
     }
 
     /// Iterates over every `SM` value declared by an `@RG` record.
@@ -777,16 +952,15 @@ impl IndexedBamHeader {
         })
     }
 
-    /// Returns the exact structured provenance from the unique bsbit `@PG`
-    /// record.
+    /// Returns the exact structured bsbit metadata from the `@HD` record.
     ///
     /// # Errors
     ///
     /// Rejects duplicate records and missing or malformed structured fields.
-    pub fn bsbit_program_provenance(
+    pub fn bsbit_header_metadata(
         &self,
-    ) -> Result<Option<crate::BsbitProgramProvenance>, crate::BsbitProgramProvenanceError> {
-        crate::sam::parse_bsbit_program_provenance(&self.text)
+    ) -> Result<Option<crate::BsbitHeaderMetadata>, crate::BsbitHeaderMetadataError> {
+        crate::sam::parse_bsbit_header_metadata(&self.text)
     }
 }
 
@@ -959,7 +1133,7 @@ fn copy_slice_into<T: Copy>(destination: &mut Vec<T>, source: &[T]) {
     destination.extend_from_slice(source);
 }
 
-/// A thread-confined BAM reader with reusable BAI/CSI region queries.
+/// A thread-confined BAM reader with reusable indexed region queries.
 pub struct IndexedBamReader {
     path: PathBuf,
     header: IndexedBamHeader,
@@ -968,7 +1142,7 @@ pub struct IndexedBamReader {
 }
 
 impl IndexedBamReader {
-    /// Opens a local BAM and its adjacent `.bai` or `.csi` index.
+    /// Opens a local BAM and its adjacent index.
     ///
     /// # Errors
     ///
@@ -1140,10 +1314,11 @@ impl IndexedBamReader {
     }
 }
 
-/// A terminal-on-error owner of one exclusive native BAM staging file.
+/// A terminal-on-error owner of one native BAM output.
 pub struct BamStagingWriter {
     path: PathBuf,
     staged: Option<StagedFile>,
+    direct_anchor: Option<File>,
     native: Option<NativeBamWriter>,
     direct_cigar: Vec<u32>,
     records_written: u64,
@@ -1185,6 +1360,7 @@ impl BamStagingWriter {
             Ok(native) => Ok(Self {
                 path,
                 staged: Some(staged),
+                direct_anchor: None,
                 native: Some(native),
                 direct_cigar: Vec::new(),
                 records_written: 0,
@@ -1196,6 +1372,133 @@ impl BamStagingWriter {
                 Err(primary)
             }
         }
+    }
+
+    fn open_direct(
+        path: PathBuf,
+        anchor: File,
+        header_bytes: &[u8],
+        compression_threads: u32,
+        compression_level: Option<u8>,
+    ) -> Result<Self, HtsError> {
+        let descriptor_path = CString::new(format!("/proc/self/fd/{}", anchor.as_raw_fd()))
+            .map_err(|source| nul_error(&path, source))?;
+        let native = match compression_level {
+            Some(level) => NativeBamWriter::open_with_threads_and_compression_level(
+                &descriptor_path,
+                header_bytes,
+                compression_threads,
+                level,
+            ),
+            None => NativeBamWriter::open_with_threads(
+                &descriptor_path,
+                header_bytes,
+                compression_threads,
+            ),
+        };
+        match native {
+            Ok(native) => Ok(Self {
+                path,
+                staged: None,
+                direct_anchor: Some(anchor),
+                native: Some(native),
+                direct_cigar: Vec::new(),
+                records_written: 0,
+                terminal: false,
+            }),
+            Err(source) => Err(native_error(HtsOperation::OpenBam, &path, None, source)),
+        }
+    }
+
+    /// Starts a direct BAM writer from an already opened and truncated final
+    /// output descriptor.
+    ///
+    /// This lets command orchestration check output access before expensive
+    /// input work without reopening the path later. The descriptor must still
+    /// identify `path` when this method is called.
+    ///
+    /// # Errors
+    ///
+    /// Returns path, identity, header-encoding, compression, or native-open
+    /// failures.
+    pub fn create_direct_from_file(
+        path: impl AsRef<Path>,
+        anchor: File,
+        header: &SamHeader,
+        limits: AlignmentRecordLimits,
+        compression_threads: u32,
+        compression_level: Option<u8>,
+    ) -> Result<Self, HtsError> {
+        let path = absolute_path(path.as_ref(), HtsOperation::ValidatePath)?;
+        let metadata = anchor
+            .metadata()
+            .map_err(|source| io_error(HtsOperation::OpenBam, &path, None, source))?;
+        if !metadata.is_file()
+            || !FileIdentity::from_metadata(&metadata)
+                .matches_path(&path)
+                .map_err(|source| io_error(HtsOperation::OpenBam, &path, None, source))?
+        {
+            return Err(io_error(
+                HtsOperation::OpenBam,
+                &path,
+                None,
+                io::Error::other("direct BAM descriptor no longer identifies its output path"),
+            ));
+        }
+        let header_bytes = sam_header_bytes(header, limits)
+            .map_err(|source| encode_error(HtsOperation::EncodeHeader, &path, None, source))?;
+        Self::open_direct(
+            path,
+            anchor,
+            &header_bytes,
+            compression_threads,
+            compression_level,
+        )
+    }
+
+    /// Opens and truncates the final BAM path, then writes through it directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns path, file-type, permission, header-encoding, or native-open
+    /// failures. Once the path is opened, later failures leave its current
+    /// partial contents in place.
+    pub fn create_direct_with_threads(
+        path: impl AsRef<Path>,
+        header: &SamHeader,
+        limits: AlignmentRecordLimits,
+        compression_threads: u32,
+    ) -> Result<Self, HtsError> {
+        let path = absolute_path(path.as_ref(), HtsOperation::ValidatePath)?;
+        let anchor = bsbit_io::open_direct_output(&path)
+            .map_err(|source| io_error(HtsOperation::OpenBam, &path, None, source))?;
+        Self::create_direct_from_file(path, anchor, header, limits, compression_threads, None)
+    }
+
+    /// Opens and truncates the final BAM path with an explicit compression
+    /// level, then writes through it directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::create_direct_with_threads`].
+    pub fn create_direct_with_threads_and_compression_level(
+        path: impl AsRef<Path>,
+        header: &SamHeader,
+        limits: AlignmentRecordLimits,
+        compression_threads: u32,
+        compression_level: u8,
+    ) -> Result<Self, HtsError> {
+        let path = absolute_path(path.as_ref(), HtsOperation::ValidatePath)?;
+        let anchor = bsbit_io::open_direct_output(&path)
+            .map_err(|source| io_error(HtsOperation::OpenBam, &path, None, source))?;
+        Self::create_direct_from_file(
+            path,
+            anchor,
+            header,
+            limits,
+            compression_threads,
+            Some(compression_level),
+        )
     }
 
     /// Reserves an absent staging path and writes the canonical alignment header.
@@ -1218,8 +1521,8 @@ impl BamStagingWriter {
 
     /// Reserves a staging path and enables private `HTSlib` BGZF workers.
     ///
-    /// `compression_threads == 0` preserves synchronous compression. The
-    /// native shim rejects values above 64.
+    /// `compression_threads == 0` preserves synchronous compression. Positive
+    /// values must fit the native signed `int` worker domain.
     ///
     /// # Errors
     ///
@@ -1699,6 +2002,57 @@ impl BamStagingWriter {
         })
     }
 
+    /// Finalizes a BAM opened by a `create_direct_*` constructor.
+    ///
+    /// # Errors
+    ///
+    /// Returns terminal, native-finalization, or synchronization failures.
+    /// The final path is retained with whatever bytes were written.
+    pub fn finish_direct(mut self) -> Result<u64, HtsError> {
+        if self.terminal || self.staged.is_some() {
+            self.native.take();
+            self.cleanup_owned();
+            return Err(simple_error(
+                HtsOperation::FinishBam,
+                &self.path,
+                None,
+                HtsErrorKind::Terminal,
+            ));
+        }
+        let Some(mut native) = self.native.take() else {
+            self.cleanup_owned();
+            return Err(simple_error(
+                HtsOperation::FinishBam,
+                &self.path,
+                None,
+                HtsErrorKind::Terminal,
+            ));
+        };
+        if let Err(source) = native.finish() {
+            drop(native);
+            self.cleanup_owned();
+            return Err(native_error(
+                HtsOperation::FinishBam,
+                &self.path,
+                None,
+                source,
+            ));
+        }
+        drop(native);
+        let anchor = self.direct_anchor.take().ok_or_else(|| {
+            simple_error(
+                HtsOperation::FinishBam,
+                &self.path,
+                None,
+                HtsErrorKind::Terminal,
+            )
+        })?;
+        anchor
+            .sync_all()
+            .map_err(|source| io_error(HtsOperation::SyncOutput, &self.path, None, source))?;
+        Ok(self.records_written)
+    }
+
     /// Aborts the writer and removes only its private staging path.
     ///
     /// # Errors
@@ -1711,9 +2065,11 @@ impl BamStagingWriter {
 
     fn cleanup_owned(&mut self) {
         self.staged.take();
+        self.direct_anchor.take();
     }
 
     fn remove_owned(&mut self) -> Result<(), HtsError> {
+        self.direct_anchor.take();
         match self.staged.take() {
             Some(staged) => staged.abort().map_err(map_bam_publication_error),
             None => Ok(()),
@@ -1792,8 +2148,8 @@ impl CompletedBam {
     }
 }
 
-/// Successful create-only BAM publication details.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Successful BAM publication details and rollback authority.
+#[derive(Debug, Eq, PartialEq)]
 pub struct BamPublication {
     published: PublishedFile,
     records_written: u64,

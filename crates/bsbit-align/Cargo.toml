@@ -11,6 +11,7 @@ autobenches = false
 
 [dependencies]
 bsbit-core = { path = "../bsbit-core" }
+bsbit-cpu = { path = "../bsbit-cpu" }
 bsbit-index = { path = "../bsbit-index", default-features = false, features = ["combined-index"] }
 
 [lints.rust]
@@ -21,3 +22,7 @@ unsafe_op_in_unsafe_fn = "deny"
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[[bench]]
+name = "simd_bench"
+harness = false

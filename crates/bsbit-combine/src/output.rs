@@ -1,5 +1,6 @@
-//! Matrix output planning, encoding, and create-only publication.
+//! Matrix output planning, encoding, and replaceable publication.
 
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -65,27 +66,82 @@ pub(crate) fn output_specs(options: &Options) -> Result<Vec<OutputSpec>, Combine
 }
 
 fn matrix_variant_path(base: &Path, kind: MatrixKind) -> Result<PathBuf, CombineError> {
-    let file_name = base
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            CombineError::configuration(
-                "combine: --matrix both requires an output filename representable as UTF-8",
-            )
-        })?;
-    let lowercase = file_name.to_ascii_lowercase();
-    let suffix_length = [".bed.gz", ".bed.bgz", ".bed", ".gz", ".bgz"]
-        .into_iter()
-        .find(|suffix| lowercase.ends_with(suffix))
-        .map_or(0, str::len);
-    let stem_length = file_name.len() - suffix_length;
-    if stem_length == 0 {
-        return Err(CombineError::configuration(
-            "combine: --matrix both output filename must contain a stem",
-        ));
+    let file_name = base.file_name().ok_or_else(|| {
+        CombineError::configuration("combine: --matrix both output path must contain a filename")
+    })?;
+    if file_name.to_str().is_some_and(|name| {
+        [".bed.gz", ".bed.bgz", ".bed", ".gz", ".bgz"]
+            .iter()
+            .any(|suffix| name.eq_ignore_ascii_case(suffix))
+    }) {
+        return Err(missing_matrix_stem());
     }
-    let (stem, suffix) = file_name.split_at(stem_length);
-    Ok(base.with_file_name(format!("{stem}.{}{suffix}", kind.name())))
+
+    let file_path = Path::new(file_name);
+    let extension = file_path.extension();
+    let name = if extension.is_some_and(|value| ascii_extension_is(value, "gz"))
+        || extension.is_some_and(|value| ascii_extension_is(value, "bgz"))
+    {
+        let compressed_stem = file_path.file_stem().ok_or_else(missing_matrix_stem)?;
+        let compressed_stem_path = Path::new(compressed_stem);
+        if let Some(bed) = compressed_stem_path
+            .extension()
+            .filter(|value| ascii_extension_is(value, "bed"))
+        {
+            let stem = compressed_stem_path
+                .file_stem()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(missing_matrix_stem)?;
+            derived_matrix_name(
+                stem,
+                kind,
+                &[bed, extension.expect("compressed extension was checked")],
+            )
+        } else {
+            derived_matrix_name(
+                compressed_stem,
+                kind,
+                &[extension.expect("compressed extension was checked")],
+            )
+        }
+    } else if let Some(bed) = extension.filter(|value| ascii_extension_is(value, "bed")) {
+        let stem = file_path
+            .file_stem()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(missing_matrix_stem)?;
+        derived_matrix_name(stem, kind, &[bed])
+    } else {
+        derived_matrix_name(file_name, kind, &[])
+    }?;
+    Ok(base.with_file_name(name))
+}
+
+fn ascii_extension_is(extension: &OsStr, expected: &str) -> bool {
+    extension
+        .to_str()
+        .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+}
+
+fn derived_matrix_name(
+    stem: &OsStr,
+    kind: MatrixKind,
+    suffixes: &[&OsStr],
+) -> Result<OsString, CombineError> {
+    if stem.is_empty() {
+        return Err(missing_matrix_stem());
+    }
+    let mut name = stem.to_os_string();
+    name.push(".");
+    name.push(kind.name());
+    for suffix in suffixes {
+        name.push(".");
+        name.push(suffix);
+    }
+    Ok(name)
+}
+
+fn missing_matrix_stem() -> CombineError {
+    CombineError::configuration("combine: --matrix both output filename must contain a stem")
 }
 
 pub(crate) fn create_outputs(
@@ -109,14 +165,14 @@ fn create_output(options: &Options, path: &Path) -> Result<TextStagingWriter, Co
     } else {
         TextOutputCompression::Plain
     };
-    let compression_threads = u32::from(options.compress && options.threads > 1);
-    TextStagingWriter::create_sibling(path, compression, compression_threads).map_err(|error| {
-        CombineError::with_source(
-            CombineErrorKind::Output,
-            format!("combine: create output staging for {}", path.display()),
-            error,
-        )
-    })
+    TextStagingWriter::create_sibling_replace(path, compression, options.compression_threads)
+        .map_err(|error| {
+            CombineError::with_source(
+                CombineErrorKind::Output,
+                format!("combine: create output staging for {}", path.display()),
+                error,
+            )
+        })
 }
 
 pub(crate) fn output_error(path: &Path, error: io::Error) -> CombineError {
@@ -158,7 +214,7 @@ pub(crate) fn publish_outputs(
     let mut publications = Vec::<TextPublication>::with_capacity(outputs.len());
     for output in outputs {
         let path = output.spec.path;
-        match output.output.publish_create_new() {
+        match output.output.publish_replace() {
             Ok(publication) => publications.push(publication),
             Err(error) => {
                 for publication in publications.into_iter().rev() {
@@ -215,6 +271,7 @@ pub(crate) fn write_header(
         proportion / 1_000_000_000,
         proportion % 1_000_000_000
     )?;
+    writeln!(writer, "##bsbit_cg_only={}", options.parameters.cg_only)?;
     writer.write_all(b"#chrom\tstart\tend\tmodification\tscore\tstrand")?;
     for input in &options.inputs {
         match matrix_kind {

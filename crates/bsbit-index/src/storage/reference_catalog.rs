@@ -6,10 +6,8 @@
 //! private sibling files and is bound to this catalog by the semantic digest.
 
 use core::fmt;
-use core::ptr::NonNull;
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
-use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::thread;
 
@@ -18,7 +16,7 @@ use bsbit_core::reference::{
     ReferenceSemanticDigest, ReferenceSemanticDigestBuildError, ReferenceSemanticDigestBuilder,
 };
 use bsbit_core::sequence::NormalizedSequence;
-use bsbit_io::{PublicationError, PublishedFile, StagedFile};
+use bsbit_io::ReadOnlyMapping as FileMapping;
 use sha2::{Digest, Sha256};
 
 use crate::reference::{
@@ -82,7 +80,7 @@ impl ReferenceCatalogSummary {
     }
 }
 
-/// A compact-catalog encoding, validation, or publication failure.
+/// A compact-catalog encoding or validation failure.
 #[derive(Debug)]
 pub enum ReferenceCatalogError {
     /// A file operation failed.
@@ -91,8 +89,6 @@ pub enum ReferenceCatalogError {
     Catalog(ReferenceBuildError),
     /// Semantic digest construction failed.
     Semantic(ReferenceSemanticDigestBuildError),
-    /// Create-only staging or publication failed.
-    Publication(PublicationError),
     /// A fixed field, offset, or packed-base invariant was invalid.
     Structure(&'static str),
     /// One contig payload checksum disagreed.
@@ -122,9 +118,6 @@ impl fmt::Display for ReferenceCatalogError {
                     "reference catalog semantic digest failed: {source}"
                 )
             }
-            Self::Publication(source) => {
-                write!(formatter, "reference catalog publication failed: {source}")
-            }
             Self::Structure(message) => {
                 write!(formatter, "reference catalog structure: {message}")
             }
@@ -149,7 +142,6 @@ impl std::error::Error for ReferenceCatalogError {
             Self::Io(source) => Some(source),
             Self::Catalog(source) => Some(source),
             Self::Semantic(source) => Some(source),
-            Self::Publication(source) => Some(source),
             Self::Structure(_)
             | Self::ContigIntegrity { .. }
             | Self::ReferenceDigestMismatch { .. }
@@ -161,48 +153,6 @@ impl std::error::Error for ReferenceCatalogError {
 impl From<io::Error> for ReferenceCatalogError {
     fn from(source: io::Error) -> Self {
         Self::Io(source)
-    }
-}
-
-impl From<PublicationError> for ReferenceCatalogError {
-    fn from(source: PublicationError) -> Self {
-        Self::Publication(source)
-    }
-}
-
-/// Successful create-only publication details.
-#[derive(Debug)]
-pub struct ReferenceCatalogPublication {
-    summary: ReferenceCatalogSummary,
-    published: PublishedFile,
-}
-
-impl ReferenceCatalogPublication {
-    /// Returns the encoded catalog summary.
-    #[must_use]
-    pub const fn summary(&self) -> ReferenceCatalogSummary {
-        self.summary
-    }
-
-    /// Returns the private staging path used by the publication.
-    #[must_use]
-    pub fn staging_path(&self) -> &Path {
-        self.published.staging_path()
-    }
-
-    /// Returns a post-publication cleanup warning.
-    #[must_use]
-    pub const fn cleanup_error(&self) -> Option<io::ErrorKind> {
-        self.published.cleanup_warning()
-    }
-
-    /// Retracts the published catalog while it still names this file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an identity-safe publication rollback failure.
-    pub fn rollback(self) -> Result<(), PublicationError> {
-        self.published.rollback()
     }
 }
 
@@ -221,7 +171,7 @@ struct CatalogEntry {
 /// # Errors
 ///
 /// Returns semantic, checked-arithmetic, or output failures.
-pub fn write_reference_catalog<W: Write>(
+fn write_reference_catalog<W: Write>(
     contigs: &[ContigInput],
     writer: &mut W,
 ) -> Result<ReferenceCatalogSummary, ReferenceCatalogError> {
@@ -350,28 +300,24 @@ fn build_catalog_layout(contigs: &[ContigInput]) -> Result<CatalogLayout, Refere
     })
 }
 
-/// Publishes one compact catalog without replacing an existing target.
+/// Writes one compact catalog directly to an already opened final output.
 ///
 /// # Errors
 ///
-/// Returns encoding, staging, synchronization, or create-only publication
-/// failures.
-pub fn publish_reference_catalog_create_new(
+/// Returns encoding, writing, flushing, or synchronization failures. The
+/// caller-visible file retains any bytes written before an error.
+pub fn write_reference_catalog_direct(
     contigs: &[ContigInput],
-    target: &Path,
-    staging: &Path,
-) -> Result<ReferenceCatalogPublication, ReferenceCatalogError> {
-    let mut staged = StagedFile::create_new(staging)?;
-    let file = staged.take_file()?;
+    file: File,
+) -> Result<ReferenceCatalogSummary, ReferenceCatalogError> {
     let mut writer = BufWriter::new(file);
     let summary = write_reference_catalog(contigs, &mut writer)?;
     writer.flush()?;
     let file = writer
         .into_inner()
         .map_err(|error| ReferenceCatalogError::Io(error.into_error()))?;
-    let completed = staged.complete(file)?;
-    let published = completed.publish_create_new_at(target)?;
-    Ok(ReferenceCatalogPublication { summary, published })
+    file.sync_all()?;
+    Ok(summary)
 }
 
 /// A fully validated and decoded compact catalog.
@@ -879,15 +825,7 @@ fn slice_u64(bytes: &[u8], offset: usize) -> u64 {
 }
 
 #[derive(Debug)]
-struct ReadOnlyCatalogMapping {
-    pointer: NonNull<u8>,
-    length: usize,
-}
-
-// SAFETY: the mapping is immutable for its complete lifetime.
-unsafe impl Send for ReadOnlyCatalogMapping {}
-// SAFETY: every shared read is bounded against the immutable mapping length.
-unsafe impl Sync for ReadOnlyCatalogMapping {}
+struct ReadOnlyCatalogMapping(FileMapping);
 
 impl ReadOnlyCatalogMapping {
     fn map(file: &File) -> Result<Self, ReferenceCatalogError> {
@@ -896,37 +834,11 @@ impl ReadOnlyCatalogMapping {
         if length == 0 {
             return Err(ReferenceCatalogError::Structure("catalog file is empty"));
         }
-        // SAFETY: the descriptor remains live for this call, its exact length
-        // came from metadata, and MAP_PRIVATE requests no writable alias.
-        let mapped = unsafe {
-            libc::mmap(
-                core::ptr::null_mut(),
-                length,
-                libc::PROT_READ,
-                libc::MAP_PRIVATE,
-                file.as_raw_fd(),
-                0,
-            )
-        };
-        if mapped == libc::MAP_FAILED {
-            return Err(io::Error::last_os_error().into());
-        }
-        let pointer = NonNull::new(mapped.cast::<u8>())
-            .ok_or(ReferenceCatalogError::Structure("mmap returned null"))?;
-        Ok(Self { pointer, length })
+        FileMapping::map(file).map(Self).map_err(Into::into)
     }
 
     fn as_slice(&self) -> &[u8] {
-        // SAFETY: the pointer and nonzero length come from the live immutable
-        // mapping, which outlives the returned shared slice.
-        unsafe { core::slice::from_raw_parts(self.pointer.as_ptr(), self.length) }
-    }
-}
-
-impl Drop for ReadOnlyCatalogMapping {
-    fn drop(&mut self) {
-        // SAFETY: this releases exactly the pointer/length returned by mmap.
-        let _ = unsafe { libc::munmap(self.pointer.as_ptr().cast(), self.length) };
+        self.0.as_slice()
     }
 }
 

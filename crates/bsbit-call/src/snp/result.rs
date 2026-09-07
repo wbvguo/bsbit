@@ -4,71 +4,69 @@ use super::Parameters;
 use crate::CallError;
 use crate::evidence::{BaseCode, EvidenceObservation, EvidenceStrand};
 
-pub(super) type Base = BaseCode;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct Genotype {
-    pub(super) left: Base,
-    pub(super) right: Base,
+    pub(super) left: BaseCode,
+    pub(super) right: BaseCode,
 }
 
 impl Genotype {
-    pub(super) const fn contains(self, base: Base) -> bool {
+    pub(super) const fn contains(self, base: BaseCode) -> bool {
         self.left as u8 == base as u8 || self.right as u8 == base as u8
     }
 
     pub(super) const fn is_conversion_sensitive_on(self, strand: EvidenceStrand) -> bool {
         match strand {
-            EvidenceStrand::Top => self.contains(Base::C),
-            EvidenceStrand::Bottom => self.contains(Base::G),
+            EvidenceStrand::Top => self.contains(BaseCode::C),
+            EvidenceStrand::Bottom => self.contains(BaseCode::G),
         }
     }
 
     pub(super) const fn is_conversion_sensitive(self) -> bool {
-        self.contains(Base::C) || self.contains(Base::G)
+        self.contains(BaseCode::C) || self.contains(BaseCode::G)
     }
 }
 
 pub(super) const GENOTYPES: [Genotype; 10] = [
     Genotype {
-        left: Base::A,
-        right: Base::A,
+        left: BaseCode::A,
+        right: BaseCode::A,
     },
     Genotype {
-        left: Base::A,
-        right: Base::C,
+        left: BaseCode::A,
+        right: BaseCode::C,
     },
     Genotype {
-        left: Base::A,
-        right: Base::G,
+        left: BaseCode::A,
+        right: BaseCode::G,
     },
     Genotype {
-        left: Base::A,
-        right: Base::T,
+        left: BaseCode::A,
+        right: BaseCode::T,
     },
     Genotype {
-        left: Base::C,
-        right: Base::C,
+        left: BaseCode::C,
+        right: BaseCode::C,
     },
     Genotype {
-        left: Base::C,
-        right: Base::G,
+        left: BaseCode::C,
+        right: BaseCode::G,
     },
     Genotype {
-        left: Base::C,
-        right: Base::T,
+        left: BaseCode::C,
+        right: BaseCode::T,
     },
     Genotype {
-        left: Base::G,
-        right: Base::G,
+        left: BaseCode::G,
+        right: BaseCode::G,
     },
     Genotype {
-        left: Base::G,
-        right: Base::T,
+        left: BaseCode::G,
+        right: BaseCode::T,
     },
     Genotype {
-        left: Base::T,
-        right: Base::T,
+        left: BaseCode::T,
+        right: BaseCode::T,
     },
 ];
 
@@ -77,6 +75,7 @@ pub(super) const GENOTYPES: [Genotype; 10] = [
 pub(crate) struct SnpConfig {
     pub(crate) minimum_base_quality: u8,
     pub(crate) minimum_mapping_quality: u8,
+    pub(crate) ignore_orphans: bool,
     pub(crate) minimum_depth: u32,
     pub(crate) minimum_alternate_count: u32,
     pub(crate) minimum_alternate_fraction_parts_per_billion: u32,
@@ -101,6 +100,7 @@ impl From<Parameters> for SnpConfig {
         Self {
             minimum_base_quality: parameters.minimum_base_quality,
             minimum_mapping_quality: parameters.minimum_mapping_quality,
+            ignore_orphans: parameters.ignore_orphans,
             minimum_depth: parameters.minimum_depth,
             minimum_alternate_count: parameters.minimum_alternate_count,
             minimum_alternate_fraction_parts_per_billion: parameters
@@ -125,7 +125,7 @@ pub(super) const FILTER_LOW_ALLELE_QUALITY: u8 = 1 << 2;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct VariantCall {
     pub(crate) position: u32,
-    pub(super) reference: Base,
+    pub(super) reference: BaseCode,
     pub(super) genotype: Genotype,
     pub(crate) depth: u32,
     pub(crate) genotype_quality: u8,
@@ -138,12 +138,12 @@ pub(crate) struct VariantCall {
 }
 
 impl VariantCall {
-    pub(super) fn alternates(&self) -> ([Base; 2], usize) {
+    pub(super) fn alternates(&self) -> ([BaseCode; 2], usize) {
         alternate_alleles(self.reference, self.genotype)
     }
 
-    pub(super) fn genotype_indices(&self, alternates: &[Base]) -> (usize, usize) {
-        let allele_index = |base: Base| {
+    pub(super) fn genotype_indices(&self, alternates: &[BaseCode]) -> (usize, usize) {
+        let allele_index = |base: BaseCode| {
             if base == self.reference {
                 0
             } else {
@@ -162,7 +162,7 @@ impl VariantCall {
     }
 }
 
-pub(super) fn alternate_alleles(reference: Base, genotype: Genotype) -> ([Base; 2], usize) {
+pub(super) fn alternate_alleles(reference: BaseCode, genotype: Genotype) -> ([BaseCode; 2], usize) {
     let mut alternates = [reference; 2];
     let mut count = 0;
     for allele in [genotype.left, genotype.right] {
@@ -178,15 +178,18 @@ pub(super) fn alternate_alleles(reference: Base, genotype: Genotype) -> ([Base; 
 }
 
 pub(super) fn has_exact_alternate_set(
-    reference: Base,
+    reference: BaseCode,
     genotype: Genotype,
-    expected: &[Base],
+    expected: &[BaseCode],
 ) -> bool {
     let (alternates, count) = alternate_alleles(reference, genotype);
     alternates[..count] == *expected
 }
 
-pub(super) fn selected_alleles(reference: Base, alternates: &[Base]) -> ([Base; 3], usize) {
+pub(super) fn selected_alleles(
+    reference: BaseCode,
+    alternates: &[BaseCode],
+) -> ([BaseCode; 3], usize) {
     let mut alleles = [reference; 3];
     for (index, alternate) in alternates.iter().copied().enumerate() {
         alleles[index + 1] = alternate;
@@ -194,7 +197,7 @@ pub(super) fn selected_alleles(reference: Base, alternates: &[Base]) -> ([Base; 
     (alleles, alternates.len() + 1)
 }
 
-pub(super) fn genotype_index(left: Base, right: Base) -> usize {
+pub(super) fn genotype_index(left: BaseCode, right: BaseCode) -> usize {
     let genotype = if left <= right {
         Genotype { left, right }
     } else {
@@ -209,37 +212,37 @@ pub(super) fn genotype_index(left: Base, right: Base) -> usize {
         .expect("canonical base pair has one diploid genotype")
 }
 
-pub(super) fn total_allele_depth(strand_counts: [[u32; 4]; 2], allele: Base) -> u32 {
+pub(super) fn total_allele_depth(strand_counts: [[u32; 4]; 2], allele: BaseCode) -> u32 {
     strand_counts[0][allele.index()].saturating_add(strand_counts[1][allele.index()])
 }
 
 pub(super) fn informative_allele_depth(
     strand_counts: [[u32; 4]; 2],
-    allele: Base,
-    alleles: &[Base],
+    allele: BaseCode,
+    alleles: &[BaseCode],
 ) -> u32 {
     let top = strand_counts[0][allele.index()];
     let bottom = strand_counts[1][allele.index()];
-    if allele == Base::T && alleles.contains(&Base::C) {
+    if allele == BaseCode::T && alleles.contains(&BaseCode::C) {
         bottom
-    } else if allele == Base::A && alleles.contains(&Base::G) {
+    } else if allele == BaseCode::A && alleles.contains(&BaseCode::G) {
         top
     } else {
         top.saturating_add(bottom)
     }
 }
 
-pub(super) fn has_conversion_confounded_pair(alleles: &[Base]) -> bool {
-    (alleles.contains(&Base::C) && alleles.contains(&Base::T))
-        || (alleles.contains(&Base::G) && alleles.contains(&Base::A))
+pub(super) fn has_conversion_confounded_pair(alleles: &[BaseCode]) -> bool {
+    (alleles.contains(&BaseCode::C) && alleles.contains(&BaseCode::T))
+        || (alleles.contains(&BaseCode::G) && alleles.contains(&BaseCode::A))
 }
 
 pub(super) fn filtered_observation(
     observation: EvidenceObservation,
     config: SnpConfig,
-) -> Option<(Base, Base, u8, u8)> {
-    let reference = Base::from_ascii(observation.reference_base)?;
-    let observed = Base::from_ascii(observation.query_base?)?;
+) -> Option<(BaseCode, BaseCode, u8, u8)> {
+    let reference = BaseCode::from_ascii(observation.reference_base)?;
+    let observed = BaseCode::from_ascii(observation.query_base?)?;
     let base_quality = observation.base_quality?;
     let mapping_quality =
         (observation.mapping_quality != u8::MAX).then_some(observation.mapping_quality)?;

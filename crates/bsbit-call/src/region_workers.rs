@@ -18,7 +18,7 @@ use crate::meth::Parameters as MethParameters;
 use crate::meth::aggregation::{
     DenseMethRegion, accumulate_meth_fragment, meth_dense_bytes_per_block,
 };
-use crate::reference_context::CallReferenceReader;
+use crate::reference_context::{CallReferenceReader, CallReferenceSource};
 use crate::region::CallRegion;
 use crate::snp::candidate::{CandidateRegion, CandidateSite, snp_region_bytes_per_block};
 use crate::snp::likelihood::{LikelihoodRegion, likelihood_site_bytes};
@@ -83,19 +83,22 @@ impl IndexedCallMode {
                 parameters.minimum_base_quality,
                 parameters.minimum_mapping_quality,
                 true,
+                parameters.ignore_orphans,
             ),
             Self::Snp(config) => EvidenceFilter::new(
                 config.minimum_base_quality,
                 config.minimum_mapping_quality,
                 false,
+                config.ignore_orphans,
             ),
             Self::Joint(config) => EvidenceFilter::new(
                 config.minimum_base_quality,
                 config.minimum_mapping_quality,
                 true,
+                config.ignore_orphans,
             ),
             #[cfg(test)]
-            Self::Panic => EvidenceFilter::new(0, 0, true),
+            Self::Panic => EvidenceFilter::new(0, 0, true, false),
         }
     }
 }
@@ -152,13 +155,14 @@ fn run_indexed_region_workers(
     worker_count: usize,
 ) -> Result<Vec<(SiteKey, SiteCounts)>, CallError> {
     let mut sites = Vec::new();
+    let reference = CallReferenceSource::prepare(reference_path, references)?;
     stream_indexed_region_workers_mode(
         path,
         references,
         regions,
         worker_count,
         IndexedCallMode::Meth(MethParameters::default()),
-        reference_path,
+        &reference,
         |region| {
             let meth = region
                 .meth
@@ -180,13 +184,14 @@ fn collect_indexed_region_workers_mode(
     mode: IndexedCallMode,
 ) -> Result<CollectedRegionAggregation, CallError> {
     let mut aggregation = CollectedRegionAggregation::default();
+    let reference = CallReferenceSource::prepare(reference_path, references)?;
     stream_indexed_region_workers_mode(
         path,
         references,
         regions,
         worker_count,
         mode,
-        reference_path,
+        &reference,
         |mut region| {
             if let Some(meth) = region.meth.take() {
                 aggregation.meth_sites.extend(meth.into_sites()?);
@@ -204,7 +209,7 @@ pub(super) fn stream_indexed_region_workers_mode(
     regions: &[CallRegion],
     worker_count: usize,
     mode: IndexedCallMode,
-    reference_path: &Path,
+    reference: &CallReferenceSource,
     mut consume: impl FnMut(RegionAggregation) -> Result<(), CallError>,
 ) -> Result<(), CallError> {
     if regions.is_empty() {
@@ -228,7 +233,7 @@ pub(super) fn stream_indexed_region_workers_mode(
                 path,
                 references,
                 mode,
-                reference_path,
+                reference,
                 likelihood_batch_sites,
             };
             scope.spawn(move || {
@@ -257,7 +262,7 @@ struct IndexedRegionWorkerPlan<'a> {
     path: &'a Path,
     references: &'a [BamReference],
     mode: IndexedCallMode,
-    reference_path: &'a Path,
+    reference: &'a CallReferenceSource,
     likelihood_batch_sites: usize,
 }
 
@@ -287,7 +292,7 @@ fn indexed_region_worker_body(
         path,
         references,
         mode,
-        reference_path,
+        reference,
         likelihood_batch_sites,
     } = plan;
     let mut reader = match IndexedBamReader::open(path) {
@@ -304,14 +309,12 @@ fn indexed_region_worker_body(
             return;
         }
     };
-    let mut reference_reader = match CallReferenceReader::open(reference_path, references) {
+    let mut reference_reader = match reference.open() {
         Ok(reader) => reader,
         Err(error) => {
             let _ = result_sender.send(RegionWorkerMessage::Ready {
                 worker,
-                result: Err(
-                    error.with_context(format!("worker {worker}: open indexed reference FASTA"))
-                ),
+                result: Err(error.with_context(format!("worker {worker}: open reference FASTA"))),
             });
             return;
         }
@@ -561,6 +564,9 @@ fn aggregate_indexed_region_mode(
         IndexedCallMode::Joint(config) => Some(MethParameters {
             minimum_base_quality: config.minimum_base_quality,
             minimum_mapping_quality: config.minimum_mapping_quality,
+            minimum_depth: config.minimum_depth,
+            cg_only: false,
+            ignore_orphans: config.ignore_orphans,
         }),
         IndexedCallMode::Snp(_) => None,
         #[cfg(test)]
@@ -685,6 +691,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use bsbit_core::bisulfite::BisulfiteStrand;
+    use bsbit_core::reference::ReferenceSequenceMd5;
     use bsbit_hts::{
         AlignmentAuxiliaryMode, AlignmentCigarOp, AlignmentCigarRun, AlignmentRecordLimits,
         BamStagingWriter, BorrowedAlignmentRecord, DecodedReader, SamHeader, SamHeaderReference,
@@ -753,29 +760,22 @@ mod tests {
         let limits = AlignmentRecordLimits::default();
         let reference_length =
             u64::try_from(INDEXED_FIXTURE_REFERENCE.len()).expect("fixture length fits u64");
-        let mut digest = bsbit_core::reference::ReferenceSemanticDigestBuilder::new(1);
-        digest
-            .push_ascii_contig(b"chr1", INDEXED_FIXTURE_REFERENCE)
-            .expect("fixture semantic digest input");
         let header = SamHeader::new(
             vec![
                 SamHeaderReference::new(0, b"chr1", reference_length)
-                    .expect("fixture dictionary entry"),
+                    .expect("fixture dictionary entry")
+                    .with_md5(ReferenceSequenceMd5::from_ascii(INDEXED_FIXTURE_REFERENCE)),
             ],
             limits,
         )
         .expect("fixture header builds")
-        .with_bsbit_provenance(
-            bsbit_hts::BsbitProgramProvenance::new(
-                digest
-                    .finish()
-                    .expect("fixture semantic digest")
-                    .into_bytes(),
-                bsbit_hts::BsbitAlignmentMode::CallerCompatibleDirectionalPaired,
+        .with_bsbit_metadata(
+            bsbit_hts::BsbitHeaderMetadata::new(
+                bsbit_hts::BsbitAlignmentMode::DirectionalPairedEnd,
             ),
             limits,
         )
-        .expect("fixture provenance fits")
+        .expect("fixture metadata fits")
         .with_sort_order(SamSortOrder::Coordinate);
         let staging = directory.join("fixture.bam.tmp");
         let bam = directory.join("fixture.bam");
@@ -828,6 +828,7 @@ mod tests {
                 name: b"chr1".to_vec(),
                 length: u32::try_from(INDEXED_FIXTURE_REFERENCE.len())
                     .expect("fixture length fits u32"),
+                md5: ReferenceSequenceMd5::from_ascii(INDEXED_FIXTURE_REFERENCE),
             }],
         }
     }
@@ -867,6 +868,80 @@ mod tests {
             bed,
             b"chr1\t2\t3\tm,CHG,0\t2\t+\t2\t3\t255,0,0\t2\t50.00\t1\t1\t0\t2\t0\t3\t0\n"
         );
+    }
+
+    #[test]
+    fn methylation_rendering_applies_depth_and_cg_only_filters() {
+        let references = vec![BamReference {
+            name: b"chr1".to_vec(),
+            length: 100,
+            md5: ReferenceSequenceMd5::from_bytes([0; 16]),
+        }];
+        let mut region = DenseMethRegion::new(0, 0, 100).unwrap();
+        for (position, context, calls) in [
+            (
+                2,
+                CytosineContext {
+                    class: ContextClass::Chg,
+                    second: b'A',
+                },
+                [
+                    CallKind::Methylated,
+                    CallKind::Methylated,
+                    CallKind::Unmethylated,
+                ],
+            ),
+            (
+                4,
+                CytosineContext {
+                    class: ContextClass::Cg,
+                    second: b'G',
+                },
+                [
+                    CallKind::Methylated,
+                    CallKind::Unmethylated,
+                    CallKind::Deleted,
+                ],
+            ),
+            (
+                6,
+                CytosineContext {
+                    class: ContextClass::Cg,
+                    second: b'G',
+                },
+                [
+                    CallKind::Methylated,
+                    CallKind::Methylated,
+                    CallKind::Unmethylated,
+                ],
+            ),
+        ] {
+            let key = SiteKey {
+                reference: 0,
+                position,
+                strand: EvidenceStrand::Top,
+            };
+            for call in calls {
+                region.add_observation(key, Some(context), call).unwrap();
+            }
+        }
+
+        let mut output = Vec::new();
+        render_meth_region(
+            &mut output,
+            MethylationOutputFormat::Cgmap,
+            MethParameters {
+                minimum_depth: 3,
+                cg_only: true,
+                ..MethParameters::default()
+            },
+            &references,
+            &region,
+            &mut UnresolvedContextSummary::default(),
+        )
+        .unwrap();
+
+        assert_eq!(output, b"chr1\tC\t7\tCG\tCG\t0.666667\t2\t3\n");
     }
 
     #[test]
@@ -1087,6 +1162,7 @@ mod tests {
             .map(|reference| BamReference {
                 name: reference.name().to_vec(),
                 length: u32::try_from(reference.length()).unwrap(),
+                md5: ReferenceSequenceMd5::from_bytes([0; 16]),
             })
             .collect::<Vec<_>>();
         reader.close().unwrap();
@@ -1144,6 +1220,9 @@ mod tests {
             IndexedCallMode::Meth(MethParameters {
                 minimum_base_quality: config.minimum_base_quality,
                 minimum_mapping_quality: config.minimum_mapping_quality,
+                minimum_depth: config.minimum_depth,
+                cg_only: false,
+                ignore_orphans: config.ignore_orphans,
             }),
         )
         .unwrap();
@@ -1175,6 +1254,7 @@ mod tests {
         let references = vec![BamReference {
             name: b"chr1".to_vec(),
             length: 100,
+            md5: ReferenceSequenceMd5::from_bytes([0; 16]),
         }];
         let key = SiteKey {
             reference: 0,
@@ -1202,6 +1282,10 @@ mod tests {
         render_meth_region(
             &mut writer,
             MethylationOutputFormat::Cgmap,
+            MethParameters {
+                minimum_depth: 1,
+                ..MethParameters::default()
+            },
             &references,
             &region,
             &mut UnresolvedContextSummary::default(),
@@ -1229,6 +1313,7 @@ mod tests {
         let references = vec![BamReference {
             name: b"chr1".to_vec(),
             length: 100,
+            md5: ReferenceSequenceMd5::from_bytes([0; 16]),
         }];
         let mut writer =
             TextStagingWriter::create_sibling(&output, TextOutputCompression::Bgzf, 1).unwrap();

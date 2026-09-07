@@ -1,0 +1,37 @@
+[package]
+name = "bsbit-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+bsbit-hts = { path = "../../crates/bsbit-hts" }
+libfuzzer-sys = "=0.4.13"
+
+[workspace]
+members = ["."]
+resolver = "3"
+
+[[bin]]
+name = "fasta"
+path = "fuzz_targets/fasta.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fastq"
+path = "fuzz_targets/fastq.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "paired_fastq"
+path = "fuzz_targets/paired_fastq.rs"
+test = false
+doc = false
+bench = false

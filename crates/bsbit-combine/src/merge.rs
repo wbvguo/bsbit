@@ -19,7 +19,7 @@ use crate::output::{
     MatrixOutput, OutputSpec, create_outputs, finish_outputs, output_error, output_specs,
     publish_outputs, write_header, write_matrix_row,
 };
-use crate::request::{Input, MAX_THREADS, Options};
+use crate::request::{Input, Options};
 use crate::result::{CombineError, CombineErrorKind, CombineReport};
 use crate::site::{Counts, SiteKey};
 
@@ -29,7 +29,7 @@ const PROPORTION_SCALE: u64 = 1_000_000_000;
 ///
 /// Inputs are decoded by content, so ordinary text, gzip, and BGZF are
 /// accepted regardless of filename suffix. The output is staged beside its
-/// absent destination(s), finalized, synchronized, and published create-only.
+/// destination, finalized, synchronized, and atomically replaced.
 ///
 /// # Errors
 ///
@@ -56,10 +56,20 @@ fn validate_options(options: &Options) -> Result<Vec<OutputSpec>, CombineError> 
             "combine: at least one methylation input is required",
         ));
     }
-    if !(1..=MAX_THREADS).contains(&options.threads) {
-        return Err(CombineError::configuration(format!(
-            "combine: thread count must be within 1..={MAX_THREADS}"
-        )));
+    if options.threads == 0 || u32::try_from(options.threads).is_err() {
+        return Err(CombineError::configuration(
+            "combine: thread count must be positive and fit the supported u32 worker domain",
+        ));
+    }
+    if i32::try_from(options.compression_threads).is_err() {
+        return Err(CombineError::configuration(
+            "combine: compression thread count must fit the native nonnegative signed 32-bit worker domain",
+        ));
+    }
+    if !options.compress && options.compression_threads != 0 {
+        return Err(CombineError::configuration(
+            "combine: compression thread count must be zero for uncompressed output",
+        ));
     }
     if u64::from(
         options
@@ -323,7 +333,8 @@ fn coordinate_groups(
             .iter()
             .filter(|(_, counts)| sample_is_valid(*counts, options.parameters.minimum_count))
             .count();
-        if valid_samples >= required_samples {
+        let context_is_selected = !options.parameters.cg_only || modification == b"m,CG,0";
+        if context_is_selected && valid_samples >= required_samples {
             for output in outputs.iter_mut() {
                 write_matrix_row(
                     &mut output.writer,
